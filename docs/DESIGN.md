@@ -110,7 +110,8 @@ Decision log (smaller choices that are easy to reverse):
 |---|---|---|---|
 | Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; about 90% raion since Nov 2025 | Main alert history |
 | [alerts.in.ua API](https://devs.alerts.in.ua/) history | Rolling one month, about 2026-09-12 → now | oblast / raion / hromada | Fill the gap and cover the latest period. Snapshot it before the window moves on. |
-| Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Cross-check reference |
+| Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Not used for labels: its meaning drifted (see below) |
+| Telegram `@UkraineAlarmSignal` (eTryvoga, 84k subscribers; the source behind the volunteer CSV) | 2022-02-25 → now, live | City/oblast until 2024; raion-level alerts from 2025; yellow/red levels from Sept 2026 | Candidate label source after 2026-09-07 (Q19) |
 | Telegram `@kpszsu` (Air Force), `@deraketaua` (volunteer monitoring) | 2022 → now | Text mentioning oblasts, raions and cities | Threat-post features |
 
 Known facts that shape the design:
@@ -158,6 +159,31 @@ Known facts that shape the design:
   - The share of volunteer alerts with no end message rose from about 5% before to 7–10% after the switch. This fits "no all-clear between levels".
 - **alerts.in.ua describes levels:** its API docs give an `alert_level` (red or yellow) on active alerts. Whether its history endpoint carries the level too will be checked in the first snapshot.
 
+### The volunteer CSV and its source channel `@UkraineAlarmSignal`
+
+- **The CSV's format never changed:** its columns are `region, started_at, finished_at, naive`, as in 2022.
+- **Its meaning changed several times.** Its parser ([source](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset/blob/main/processors/volunteer_etryvoga_processor.py)) was last changed in June 2024. It reads the channel by keyword:
+  - **Region:** the first oblast keyword found anywhere in the message.
+  - **Start:** any of "тривога", "загроза", "небезпека", "в укриття"…
+  - **End:** "відбій"…
+  - The output is oblast-level only.
+- **Meanwhile, the channel's content changed:**
+  - **2024:** city-level warnings start ("🛸 Загроза застосування БПЛА", "💣 Загроза застосування КАБів", "💥 Загроза обстрілу").
+  - **2025:** raion-level alerts start.
+  - **September 2026:** yellow/red levels and messages listing several raions.
+- **What that does to the CSV:**
+  - City drone, guided-bomb and shelling warnings are counted as oblast air raid alerts. This explains Volyn: official data has 81 alerts and 41 h under alert, volunteer data has 355 alerts and 405 h.
+  - A message listing raions in several oblasts is credited to one oblast only.
+  - One raion's all-clear ends the whole oblast's alert.
+  - A yellow→red change counts as a new start, which overwrites the start time.
+- **Conclusion:** the CSV's format is stable, but its meaning is not, so it is not used for labels.
+- **The channel itself mirrors the official raion alerts.** Check window: 2026-09-06 12:00–18:00 UTC.
+  - Every official raion-level start (88/88) and end (102/102) also appears in the channel, within 3 minutes. The median delay is 17 s for starts and 25 s for ends.
+  - This holds after normalising apostrophes (ʼ/’/') and one renamed raion (Красноградський → Берестинський).
+  - The channel has extra starts that aren't in the official data (32 of 124). In the examples checked, these are messages listing several raions and level changes.
+  - The channel also carries its own city-level warnings (🛸 drones, 💣 guided bombs, 💥 shelling, ⚠️ "ЗМІ повідомляють про вибухи"). These are not air raid alerts.
+  - It already posted "Червоний рівень тривоги" for Dnipropetrovsk raions on 2026-09-06. At the same time, `@air_alert_ua` still posted plain "Повітряна тривога".
+
 ### Message types in `@air_alert_ua`
 
 Sample: 2,000 messages from 100 web-preview pages spread evenly over the message IDs, 2022-03-14 → 2026-09-07. Shares are approximate. The proposed handling is part of Q15/Q17.
@@ -193,6 +219,17 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - If they match, the raion main spec goes ahead. If not, see Q3.
 - **Q3. Fallback if Q2 fails.**
   - Options: an oblast-level main spec built from one consistent source, or a shorter, alerts.in.ua-only raion period.
+- **Q19. Which source covers the period after 2026-09-07?** (See "The volunteer CSV and its source channel" in section 5.)
+  - **Proposal:** parse `@UkraineAlarmSignal` ourselves, with the same type-aware rules as ADR-0005.
+    - Air raid alerts only: "Повітряна тривога", the yellow/red levels, and "Відбій тривоги".
+    - Its 🛸/💣/💥/⚠️ warnings are dropped from the labels.
+  - **Why:**
+    - It is live and raion-level, and it covers the 2026-09-07 → 09-12 gap.
+    - It carries the levels (Q18).
+    - It gives the overlap with the official record that alerts.in.ua cannot (ADR-0003).
+  - **Before accepting it:** confirm the 6-hour check over the whole overlap month (August 2026 → 2026-09-07), using a Telethon download of both channels.
+  - **alerts.in.ua:** becomes an independent cross-check for the latest period, which turns Q2 into a three-way check.
+  - **Open sub-question:** use the channel only after 2026-09-07, or for the whole raion era (2025 →), so that one source covers training and test.
 - **Q4. Keeping the latest period current.**
   - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
 - **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
