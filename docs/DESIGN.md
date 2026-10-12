@@ -85,7 +85,8 @@ Hard-to-reverse decisions (ADRs):
 | [0002](adr/0002-one-main-spec.md) | Code accepts any forecast spec; one main spec is analysed in depth | accepted |
 | [0003](adr/0003-one-alert-source-per-spec.md) | One alert definition per spec, from training through test | accepted |
 | [0004](adr/0004-telegram-via-api.md) | Telegram posts are downloaded through the official API (Telethon) | accepted |
-| [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | accepted |
+| [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | superseded by 0006 (parsing rules still apply) |
+| [0006](adr/0006-labels-from-volunteer-channel.md) | Alert labels come from `@UkraineAlarmSignal` from 2023; the official channel is the validation reference | accepted |
 
 Decision log (smaller choices that are easy to reverse):
 
@@ -108,10 +109,10 @@ Decision log (smaller choices that are easy to reverse):
 
 | Source | Coverage | Location level | Use |
 |---|---|---|---|
-| Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; 92% raion since Nov 2025 | Main alert history |
-| [alerts.in.ua API](https://devs.alerts.in.ua/) history | Rolling one month, about 2026-09-12 → now | oblast / raion / hromada | Fill the gap and cover the latest period. Snapshot it before the window moves on. |
+| Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; 92% raion since Nov 2025 | Validation reference up to 2026-09-07 (ADR-0006) |
+| [alerts.in.ua API](https://devs.alerts.in.ua/) history | Rolling one month, about 2026-09-12 → now | oblast / raion / hromada | Independent cross-check for the latest month |
 | Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Not used for labels: its meaning drifted (see below) |
-| Telegram `@UkraineAlarmSignal` (eTryvoga, 84k subscribers; the source behind the volunteer CSV) | 2022-02-25 → now, live | City/oblast until 2024; raion-level alerts from 2025; yellow/red levels from Sept 2026 | Candidate label source after 2026-09-07 (Q19) |
+| Telegram `@UkraineAlarmSignal` (eTryvoga, 84k subscribers; the source behind the volunteer CSV) | 2022-02-25 → now, live | City/oblast until 2024; raion-level alerts from 2025; yellow/red levels from Sept 2026 | **Label source from 2023-01-01** (ADR-0006) |
 | Telegram `@kpszsu` (Air Force), `@deraketaua` (volunteer monitoring) | 2022 → now | Text mentioning oblasts, raions and cities | Threat-post features |
 
 Known facts that shape the design:
@@ -211,16 +212,20 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 
 ### Data
 
-- **Q1. Does an oblast-level alerts.in.ua history request return raion-level alerts?**
+- **Q1. Does an oblast-level alerts.in.ua history request return raion-level alerts?** *Answered 2026-10-12: yes.*
+  - A request for Dnipropetrovsk oblast returned 2,304 alerts at raion, city and hromada level, so 27 requests cover the country.
+  - Each alert has `alert_type` (`air_raid`, `artillery_shelling`) and `alert_level` (`red`, `yellow`).
+  - The history reaches back to about 2026-09-11.
+  - Caveats: alerts from August are also `red`, so `red` may simply be the default. City and hromada alerts duplicate each other (e.g. "м. Кривий Ріг" and "Криворізька територіальна громада", 204 each).
   - Why it matters: if it doesn't, we need about 125 raion requests (about 1 h) instead of 27 (about 14 min).
   - How we'll decide: inspect the first snapshot.
-- **Q2. Is alerts.in.ua consistent with the official record?** No overlap period exists, so we check indirectly:
+- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006). No overlap period exists, so we check indirectly:
   - **(a)** compare agreement(alerts.in.ua, volunteer) after 2026-09-12 with agreement(official, volunteer) before 2026-09-07, per oblast;
   - **(b)** compare distributions across the boundary: alerts per raion per day, durations, and the mix of location levels.
   - If they match, the raion main spec goes ahead. If not, see Q3.
-- **Q3. Fallback if Q2 fails.**
+- **Q3. Fallback if Q2 fails.** *No longer needed: the label source is `@UkraineAlarmSignal` (ADR-0006).*
   - Options: an oblast-level main spec built from one consistent source, or a shorter, alerts.in.ua-only raion period.
-- **Q19. Which source do the labels come from?** (See "The volunteer CSV and its source channel" in section 5.)
+- **Q19. Which source do the labels come from?** *Decided 2026-10-12: `@UkraineAlarmSignal` from 2023-01-01* ([ADR-0006](adr/0006-labels-from-volunteer-channel.md)). (See "The volunteer CSV and its source channel" in section 5.)
   - **Channel history:**
     - Created 2022-02-25 at 16:11 UTC; its first alert was "Тривога в Києві" at 16:36. That is 18 days before the official record starts.
     - Formats:

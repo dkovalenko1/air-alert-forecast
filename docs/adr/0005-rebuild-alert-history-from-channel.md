@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0006 (its parsing rules still apply to both channels)
 ---
 
 # The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV
