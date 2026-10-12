@@ -77,6 +77,22 @@ sources ─► raw layer ─► canonical tables ─► spec builder ─► mode
 - **Ablation:** compare with and without Telegram features on the same period.
 - **Reporting:** report every spec that was run, not only the best.
 
+### Validation experiments (protocol fixed 2026-10-13, before any of them ran)
+
+All three run on the validation period only (2026-08-17 → 2026-09-13), with the same weekly walk-forward as the final test. The test period is not loaded.
+
+| Experiment | Variants | Models |
+|---|---|---|
+| **E1. Training start (Q9)** | 2023-01-01, **2025-08-01** (default), 2025-11-01 (Kyiv time) | logistic regression, LightGBM (default settings) |
+| **E2. One shared model or one per unit (Q13)** | **shared** (default), one model per unit | logistic regression, LightGBM; training start from E1 |
+| **E3. LightGBM settings** | **default** (300 trees, learning rate 0.05, 63 leaves, ≥100 rows per leaf); small trees (15 leaves); large trees (255 leaves, ≥200 rows per leaf); early stopping (up to 3,000 trees, number chosen on the last 14 days of the training rows); slow early stopping (learning rate 0.02, up to 5,000 trees); no unit identity (raion and oblast left out) | LightGBM; training start from E1, shared or per unit from E2 |
+
+- **Selection rule:** the winner is the variant with the lowest Brier score averaged over the six horizons, on all validation rows and all units.
+  - If it beats the default by less than 0.0005, the default is kept, because it is simpler.
+  - Model choices are made per model: logistic regression and LightGBM each get their own winner in E1 and E2.
+- **Reporting:** every variant's metrics are reported (`reports/validation/experiments/`), not only the winner's: Brier, log loss, ROC-AUC, PR-AUC per horizon, for all rows and for units calm at t.
+- **Order:** E1 → E2 → E3, each using the earlier winners.
+
 ## 4. Decisions
 
 Hard-to-reverse decisions (ADRs):
@@ -375,7 +391,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   | Test | Mon 2026-09-14 → Sun 2026-10-11 | Four full weeks, used once for the reported score. Entirely under the yellow/red system. |
 
   - **Weekly retraining inside validation and test:** each week is forecast by a model trained on everything before that week starts. Forecasts are made every hour, for every horizon.
-  - **Training-start experiment on validation:** 2025-08-01 vs 2025-11-01 (fully raion-level) vs 2023-01-01 (oblast-wide alerts spread to all raions). The winner is used for the test period.
+  - **Training-start experiment on validation:** 2025-08-01 vs 2025-11-01 (fully raion-level) vs 2023-01-01 (oblast-wide alerts spread to all raions). The winner is used for the test period. Protocol: experiment E1 (section 3).
   - **Label cutoff:** a training row is only used if t + h ≤ the training cutoff (section 3).
 - **Q10. Which horizons to train.** *Decided 2026-10-12: six horizons, 1, 2, 3, 6, 12 and 24 h.* All 24 would take about 1.5–5 h per backtest for the raion spec; six take about 25–75 min.
 
@@ -401,7 +417,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Edited posts: if a post was edited at or after t, use the original or drop it?
   - From which date the Telegram model is trained, based on a plot of posts per month.
   - Exclude LLM-based extraction? A model trained on data from the test period could leak.
-- **Q13. One shared model or one per unit:** decided by an experiment on the validation period. Default: shared.
+- **Q13. One shared model or one per unit:** decided by an experiment on the validation period. Default: shared. Protocol: experiment E2 (section 3).
 
 ### Product
 
