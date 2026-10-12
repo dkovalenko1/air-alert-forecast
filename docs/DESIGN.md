@@ -85,6 +85,7 @@ Hard-to-reverse decisions (ADRs):
 | [0002](adr/0002-one-main-spec.md) | Code accepts any forecast spec; one main spec is analysed in depth | accepted |
 | [0003](adr/0003-one-alert-source-per-spec.md) | One alert definition per spec, from training through test | accepted |
 | [0004](adr/0004-telegram-via-api.md) | Telegram posts are downloaded through the official API (Telethon) | accepted |
+| [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | accepted |
 
 Decision log (smaller choices that are easy to reverse):
 
@@ -132,6 +133,30 @@ Known facts that shape the design:
      - Only 0.12% of all rows have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.
 - **Scope of these checks:** they cover the latest ~20 messages per search on the channel's public web preview (early September 2026), plus row-level matches for Nikopol, Kharkiv and Zaporizhzhia. We know the mechanisms exist; we have not measured how many rows they affect across the full history.
 - **alerts.in.ua types its alerts:** its `alert_type` field takes one of five values: `air_raid`, `artillery_shelling`, `urban_fights`, `chemical`, `nuclear` (per its Python client). There is no type for in-alert escalations or kamikaze-drone attacks.
+
+### Yellow and red alert levels (September 2026)
+
+- **What changed:** air threats now have two levels.
+  - **Yellow:** "Дронова небезпека" (drone danger, e.g. 1–2 Shaheds). Businesses and transport may keep working.
+  - **Red:** massed-drone, missile or missile-drone threat, including ballistic missiles. People must go to shelter.
+- **No all-clear between levels:** a new message replaces the previous one, and "Відбій" (green) means no threat at all.
+- **Dates:**
+  - Announced 2026-09-02.
+  - Cabinet resolution №1092 in force from 2026-09-04.
+  - Kyiv switched on 2026-09-06 at 06:00 Kyiv time, in all districts except Pechersk, and only partly in Holosiivskyi and Svyatoshynskyi.
+  - Where differentiation is technically impossible, the ordinary siren is still used.
+  - The General Staff, Air Force and government reassign threats to levels weekly.
+  - Sources: [Ukrinform](https://www.ukrinform.net/rubric-society/4160207-ukraine-to-introduce-yellow-and-red-air-threat-levels-zelensky.html), [LB.ua](https://lb.ua/society/2026/09/06/764092_kiievi_vidsogodni_diyatime.html), [Ukrainska Pravda](https://www.pravda.com.ua/news/2026/09/02/8051557/).
+- **The channel never published levels.** Searches of `@air_alert_ua` find no "Дронова небезпека" or other level messages. Its message format has only one kind of alert.
+- **Kyiv dropped out of the channel just before Kyiv switched.**
+  - The last Kyiv message is "Відбій тривоги" at 2026-09-05 23:44 UTC, about 3 h before the switch.
+  - Volunteer data still shows Kyiv alerts on 2026-09-06 and 2026-09-07.
+  - The channel then went silent everywhere at 2026-09-07 06:09 UTC.
+  - **Likely, not confirmed:** the switch to levels is why the channel stopped. No official statement has been found.
+- **Alert volume didn't jump, but missing all-clears rose.**
+  - Volunteer data shows no jump in weekly alert counts or alert-hours around the switch: about 900–1,180 alerts and 450–560 alert-hours per week, August–October 2026.
+  - The share of volunteer alerts with no end message rose from about 5% before to 7–10% after the switch. This fits "no all-clear between levels".
+- **alerts.in.ua describes levels:** its API docs give an `alert_level` (red or yellow) on active alerts. Whether its history endpoint carries the level too will be checked in the first snapshot.
 
 ### Message types in `@air_alert_ua`
 
@@ -181,7 +206,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
     - It relies on a sample showing that raion-level messages are air raid alerts only.
     - It keeps the overwritten start times wherever escalation messages occurred.
   - Either way, alerts.in.ua is filtered to `alert_type = air_raid`, so training and test share one definition (ADR-0003).
-  - Proposal: (a).
+  - *Decided 2026-10-12: (a)* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)).
 
 ### Target
 
@@ -201,10 +226,20 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
   - Depends on Q15, which determines which hromada zones carry real air raid alerts.
-- **Q17. Parsing rules if Q15 = (a).** (See "Message types" in section 5.)
-  - **Repeated start for a location that is already on alert:** keep the original start. Proposal: yes. This is exactly what fixes the overwrite problem.
-  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Proposal: close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. The alternative is an invented end, like the old parser's start + 1 h.
-  - **Escalation with no open alert:** e.g. "Загроза керованих авіабомб" arrives when no "Повітряна тривога" is open for that location. Proposal: open an implied air raid alert and flag it, then count how often this happens.
+- **Q18. What counts as an air raid alert under the yellow/red system?** (See "Yellow and red alert levels" in section 5.)
+  - **The problem:** every training alert comes from the old single-level system. The whole test period, about 2026-09-14 → 2026-10-11, falls under the new one. The definition changes exactly at the train/test boundary.
+  - **Proposal: target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. Store the level as an attribute.
+  - **Red-only as the target:** not possible. There is no red-level history to train on.
+  - **Level as a feature:** not now, because it doesn't exist before September 2026 (same rule as escalations in Q17).
+  - **Checks:**
+    - Does alerts.in.ua history carry `alert_level`?
+    - Where and when did each region switch? Rollout is regional, and Kyiv switched on 2026-09-06.
+    - Do alert counts and durations per raion jump at the switch? Extends Q2.
+  - **Reporting:** the switch is reported as a limitation. Test results may also be shown per week, to see whether weekly retraining adapts to the new system.
+- **Q17. Parsing rules.** *Decided 2026-10-12: all three proposals accepted* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)). (See "Message types" in section 5.)
+  - **Repeated start for a location that is already on alert:** keep the original start. This is exactly what fixes the overwrite problem.
+  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. No end time is invented (the old parser used start + 1 h).
+  - **Escalation with no open alert:** e.g. "Загроза керованих авіабомб" arrives when no "Повітряна тривога" is open for that location. Open an implied air raid alert, flag it, and count how often this happens.
   - **Non-target types as features:** only types that also exist in the test period can be features. After 2026-09-07 the only alert source is alerts.in.ua. It has artillery shelling and urban fighting, but no escalations or kamikaze-drone attacks. So escalations can be used for exploratory analysis and the write-up, but not as model inputs. Telegram threat posts (`@kpszsu`, `@deraketaua`) cover that information in both periods.
 
 ### Evaluation
