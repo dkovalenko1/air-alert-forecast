@@ -1,0 +1,15018 @@
+# AI conversation
+
+Full record of the conversation with Claude (Claude Code) while building this project, exported from the session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool result is included in order. Not included: the model's internal reasoning and hidden harness context. API tokens are redacted, and very long tool outputs are shortened (marked where it happens).
+
+---
+
+## User (2026-10-12 14:10:12 UTC)
+
+I'm doing a Stage 2 selection task for KSE; here is the email I got with the task explanation:
+
+"Mini pet project in Python solving a real-world defense problem: Time Series Analysis of air raid alerts in Ukraine. 
+Data and evaluation. Work with the most recent data available, and evaluate your solution on the latest period. Make sure there is no data leakage: nothing your model is trained on or uses as an input may come from after the time at which the forecast is made.
+Optional: text and media data. You are encouraged, but not required, to go beyond the alert history and use text or media data, for example news, official statements or public Telegram channels. The same rule applies: use only content that was published before the time at which the forecast is made."
+
+Let's start by understanding what we are building. Explain the final result: what is it, what should it look like, and what it should be able to do? Are we building an ML model?
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect repo contents and first commit
+
+```
+git show --stat HEAD && ls -la && find . -path ./.git -prune -o -type f -print | head -50
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+commit 176c5fee89a2914b37ae03e6eb1bc872ece4a973
+Author: David Kovalenko <dkovalenko1@kse.org.ua>
+Date:   Mon Oct 12 16:59:09 2026 +0300
+
+    first commit
+
+ README.md | 1 +
+ 1 file changed, 1 insertion(+)
+total 8
+drwxr-xr-x@  4 david  staff  128 Oct 12 16:59 .
+drwxr-xr-x@  8 david  staff  256 Oct 12 16:58 ..
+drwxr-xr-x@ 13 david  staff  416 Oct 12 17:10 .git
+-rw-r--r--@  1 david  staff   21 Oct 12 16:59 README.md
+./README.md
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check existing memory files
+
+```
+ls -la /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/ && cat /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/MEMORY.md 2>/dev/null
+```
+
+</details>
+
+<details><summary>Tool result (error)</summary>
+
+```
+Exit code 1
+total 0
+drwxr-xr-x@ 2 david  staff   64 Oct 12 17:10 .
+drwxr-xr-x@ 4 david  staff  128 Oct 12 17:10 ..
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md`
+
+```
+---
+name: kse-stage2-task
+description: This repo is the user's KSE Stage 2 selection task — air raid alert time-series forecasting for Ukraine; graders' hard requirements
+metadata:
+  type: project
+---
+
+This repo (started 2026-10-12) is a mini pet project for a KSE (Kyiv School of Economics) Stage 2 selection task: time series analysis / forecasting of air raid alerts in Ukraine, in Python.
+
+Hard requirements from the task email:
+- Use the most recent data available; evaluate on the latest period.
+- No data leakage: nothing the model trains on or uses as input may come from after the forecast time.
+- Optional (encouraged): text/media data (news, official statements, public Telegram channels), same rule — only content published before forecast time.
+
+**Why:** It is graded by selectors, so problem framing, leakage-safe evaluation, beating baselines and a clear write-up matter more than model sophistication.
+**How to apply:** Treat every feature, split and data source through the "known at forecast time t?" lens; keep scope to a mini project.
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/MEMORY.md`
+
+```
+- [KSE Stage 2 task](kse-stage2-task.md) — what this repo is for and the graders' no-leakage / latest-period rules
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/MEMORY.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+### Assistant (2026-10-12 14:11:17 UTC)
+
+The repo is empty apart from the README, so this is all about framing. I also saved a short note about the task and its rules so future sessions keep that context.
+
+## What we're building, in one sentence
+
+We're building a **forecasting system**. At a chosen moment *t* it takes everything known up to *t* (past alerts and possibly Telegram posts) and estimates how likely an air raid alert is in each region over the next hours. It then gets an honest score on the most recent weeks, which it has never seen.
+
+## Is it an ML model?
+
+Yes, but the model is only one part. The task tests three things, roughly in this order:
+
+1. **Framing:** what exactly you predict, for which regions, how far ahead and at what time step. The email leaves this open on purpose.
+2. **Evaluation without leakage:** this is the one rule they spelled out, so expect them to check it closely.
+3. **The model:** a fairly standard one is enough if the first two are done well.
+
+The model also has to beat simple **baselines**, or it adds nothing. Alerts follow strong patterns: some regions are almost always on alert, certain hours are riskier, and an alert that is on now is probably still on in an hour. Rules like "same as now" or "how often this region had an alert at this hour over the last 4 weeks" are surprisingly hard to beat. The project needs to show by how much the model does beat them, and at which forecast horizons.
+
+My recommendation is a gradient-boosted tree model (LightGBM) on hand-made time-series features. That means things like hour of day, day of week, the region's recent alert history, whether an alert is on right now, and the state of neighbouring regions. Deep learning is probably not worth it at this size.
+
+## A concrete version of the task
+
+> **At each hour t, for each oblast, predict the probability that an alert is active during each of the next 1–24 hours.**
+
+That makes it a probabilistic classification problem, scored with:
+- **Brier score / log loss:** how good the probabilities are.
+- **ROC-AUC / PR-AUC:** how well it ranks risky hours above safe ones.
+- **Calibration plot:** whether "70%" really comes true about 70% of the time.
+
+## What the final result looks like
+
+A GitHub repo containing:
+
+**1. A data pipeline** that downloads the latest alert history and cleans it. Likely sources are the GitHub dataset `Vadimkin/ukrainian-air-raid-sirens-dataset` and the APIs of alerts.in.ua and ukrainealarm.com; I still need to check which is the most current and complete. Cleaning covers time zones, merging overlapping alerts, and alerts that became more local over time (oblast → raion → hromada). It also has to handle regions that are always on alert, such as occupied Luhansk, which should probably be left out.
+
+**2. Exploratory analysis**, a notebook or report with charts: alerts by hour and weekday, the trend over time, per-region differences, and which regions tend to alert together.
+
+**3. A training and backtest script.** It uses walk-forward evaluation: train on everything before a cutoff, forecast the next period, move the cutoff forward and repeat. The test period would be the latest weeks, say September 1 to October 11, 2026. It outputs a comparison table like this:
+
+```
+Test period: 2026-09-01 → 2026-10-11    Brier ↓   ROC-AUC ↑
+Persistence ("same as now")               …          …
+Historical rate (region × hour)           …          …
+LightGBM                                  …          …
+LightGBM + Telegram features (optional)   …          …
+```
+
+**4. A prediction command** you can run at any moment:
+
+```
+$ python -m forecast predict --at "2026-10-12 18:00"
+Forecast issued 2026-10-12 18:00 Kyiv time, using data up to 17:59
+Oblast          +1h   +3h   +6h   +12h  +24h
+Kharkivska      0.83  0.66  0.58  0.49  0.55
+Kyiv city       0.11  0.19  0.27  0.34  0.21
+...
+```
+
+It could also draw a heatmap or map of Ukraine.
+
+**5. A README write-up:** the problem, data, method, results, where the model fails and why, and an explicit section on how leakage is prevented.
+
+## Leakage traps to design around
+
+Graders will look for these:
+
+- **No random train/test split.** Splits must follow time order.
+- **An alert still in progress at *t*:** you know it started and that it's still on, but not when it ends. Its duration so far must be `t − start`, never the full duration from the dataset. This is the most likely place to slip up.
+- **Rolling features** such as "alerts in the last 7 days" must stop strictly before *t*.
+- **Tuning settings on the test period counts as leakage.** Use a separate validation period before the test period.
+- **Text data:** use each message's publication time, watch out for later edits, and add a small safety buffer.
+
+## The optional Telegram part
+
+Monitoring channels post things like "MiG-31K took off" or "Shahed drones heading toward X". That is a strong real-time signal, especially 1–3 hours ahead, because it can arrive before the official alert. It's the most interesting extension and the biggest scope risk, since it means scraping, Ukrainian/Russian keyword matching and timestamp alignment. I'd add it as a final layer only after the core pipeline works and is evaluated.
+
+## Decisions before we write code
+
+1. **Target and horizon:** my recommendation is the oblast × hour × 1–24h version above. The simpler alternative is predicting alert-hours per region per day.
+2. **Telegram scope:** in or out for the first version? I'd say out for now and planned for later.
+3. **Constraints I don't know about:** a deadline, submission format (repo link? report?), or a page limit. These affect how much polish to aim for.
+
+If you're happy with the recommendations, the next step is checking which data source is the freshest and most complete as of today.
+
+---
+
+## User (2026-10-12 14:27:03 UTC)
+
+1. Target and horizon: Please explain the options. What is this question about?
+2. Telegram scope: I would definitely like to add this. Why should we keep it, or not, until the core model/pipeline is working?
+3. Constraints: We should submit a GitHub repo link and attach a full text export of the conversation history with AI.
+4. Why do you recommend LightGBM? Tell me more about this, and whether it is the best fit here and why?
+
+<details><summary>Tool call: Bash</summary>
+
+Check where session transcripts are stored
+
+```
+ls -la /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/ && ls /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/*/ 2>/dev/null | head
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+total 416
+drwxr-xr-x@  4 david  staff     128 Oct 12 17:10 .
+drwxr-xr-x@ 13 david  staff     416 Oct 12 17:10 ..
+-rw-------@  1 david  staff  197010 Oct 12 17:27 c791d226-99bf-4d5c-b170-7216b394d86f.jsonl
+drwxr-xr-x@  4 david  staff     128 Oct 12 17:10 memory
+MEMORY.md
+kse-stage2-task.md
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md",
+  "old_string": "**Why:** It is graded",
+  "new_string": "Submission: a GitHub repo link plus a full text export of the user's conversation history with AI. So the chat log is itself graded: explain reasoning, keep the user driving decisions, and never let secrets (Telegram api_id/api_hash, tokens) appear in chat; use env vars / request_secret. Session transcripts live as JSONL in ~/.claude/projects/-Users-david-proj-air-alert-forecast/.\n\nUser wants Telegram/text features included (decided 2026-10-12), built after the core pipeline + baselines exist so their contribution can be measured.\n\n**Why:** It is graded"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/MEMORY.md`
+
+```
+- [KSE Stage 2 task](kse-stage2-task.md) — what this repo is for, no-leakage rules, submission = repo + full AI chat export, Telegram in scope
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/MEMORY.md has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+### Assistant (2026-10-12 14:29:13 UTC)
+
+## 1. Target and horizon
+
+This question is about what the model actually outputs each time it runs. That depends on four choices:
+
+| Choice | Options |
+|---|---|
+| **Where:** the geographic unit | whole country · oblast (~25) · raion or hromada (hundreds) |
+| **What:** the quantity predicted | alert *active* · alert *starts* · *minutes* under alert · *time until* the next start or the current end |
+| **Time step** | 10–30 min · 1 hour · 1 day |
+| **How far ahead** | next hour · 1–6 h · next 24 h · several days |
+
+The four options for "what" are really different problems:
+
+- **A. Active:** "Probability that Kharkiv oblast is under alert at any point between 19:00 and 20:00." It's easy to define and useful. The catch is that if an alert is on at 18:00, it's probably still on at 19:00. A model can score well just by copying the current state.
+- **B. Onset:** "Probability that a *new* alert starts between 19:00 and 20:00." This is the hard and interesting question, because predicting onsets means predicting attacks. Onsets are rarer, so the data is imbalanced.
+- **C. Amount:** "Kyiv tomorrow: about 3 hours under alert." This is a regression problem. It's good for day-level planning but says nothing about *when*.
+- **D. Time-to-event:** "When will the current alert end?" or "When will the next one start?" This is very practical (when can I leave the shelter?), but it needs survival analysis, a separate set of methods.
+
+The horizon matters too. Short horizons are more accurate, and that's where Telegram helps most, since launches and drone movements are posted minutes to hours before alerts. Day-ahead forecasts depend mostly on calendar patterns and recent intensity.
+
+For place, oblasts are the practical choice. The whole country is too coarse: occupied Luhansk alone keeps "some alert somewhere" on all the time. Hromadas give too many small units with sparse data.
+
+**Recommendation:** oblast × 1-hour steps × target A, for horizons of 1–24 h. In evaluation, I'd score two groups separately:
+- regions **already on alert** at forecast time *t*;
+- regions **calm** at *t*. Here, predicting "active" effectively means predicting an onset (B).
+
+This blocks the "just copy the current state" shortcut and shows where Telegram adds value, without building a second model.
+
+## 2. Telegram: why build it after the core
+
+It's in scope. The question is only the build order. Four reasons:
+
+1. **You need a baseline to measure against.** Telegram's value is the score with it minus the score without it. Without the working pipeline, baselines and backtest, you can't show it helped, and graders will want that comparison.
+2. **It plugs into the same pipeline.** Telegram features join the same hourly grid under the same "only before *t*" rule. That grid gets built once, in the core.
+3. **It's the riskiest part.** Risks include:
+   - **Access:** API access needs your own Telegram account and an api_id/api_hash from my.telegram.org. Only you can set this up.
+   - **Downloading:** rate limits when pulling years of history.
+   - **Channel choice:** the official Air Force channel and monitoring channels report threats. Channels that just repost "alert in X oblast" repeat our target and add nothing.
+   - **Parsing:** messy Ukrainian/Russian text, with place names in different grammatical forms (Харків / Харкова / Харківщина).
+
+   If any of this stalls, you still have a complete, evaluated submission.
+4. **Text has its own leakage traps:**
+   - **Edits:** downloading today gives you each message's *latest edited version*. If a post was later edited to add "update: hit at 20:15", using it is leakage. Telegram records an edit date per message (`edit_date`), so we can exclude edits made after *t*.
+   - **Deleted messages** simply aren't there.
+   - **LLM parsing:** if an LLM extracts information from the posts, its training data may cover the test period. Keyword or rule-based extraction avoids that question.
+
+"Later" means later in the build order, not later in time. Once your API credentials exist, the slow history download can run in the background while we build the core.
+
+## 3. Submission constraints
+
+The chat log itself gets graded, so the graders will see how you reason, not just the code. Questions like "why?" and "is it the best fit?" are exactly what should appear in it, and the decisions should visibly be yours.
+
+**Export:** this session is saved automatically as a JSONL file in `~/.claude/projects/-Users-david-proj-air-alert-forecast/`. The file keeps the complete history, even if the conversation is later condensed to save context. Every session or thread gets its own file, as does any helper agent I start. At the end, I can write a small script that merges all of them, in chronological order, into one readable text/Markdown file.
+
+**Secrets:** never paste your Telegram api_hash, phone number, login code or any API token into the chat, because it would end up in the export you submit. I'll set up a git-ignored `.env` file for them.
+
+## 4. Why LightGBM
+
+**What it is:** a decision tree is a flowchart of yes/no questions ending in a prediction. For example: "Is it 01:00–05:00? Is the region Kharkiv? Were there more than 3 alerts in the last 24 h?" One tree is weak. **Gradient boosting** trains hundreds of small trees one after another, each correcting the errors of the ones before, and adds up their outputs. LightGBM is Microsoft's fast implementation; XGBoost and CatBoost are near-equivalents.
+
+**Why it fits:**
+- **The data is a table:** after our framing, there's one row per (oblast, forecast time, horizon) with feature columns. Boosted trees are the standard strong choice for table data of this size. Most top solutions in the M5 forecasting competition used LightGBM.
+- **It finds interactions automatically:** night hours may matter more in some regions, and "neighbour on alert" matters a lot from Kyiv oblast to Kyiv city.
+- **The data size suits it:** about 40,500 hours since Feb 2022 × ~25 oblasts ≈ 1M rows per horizon. That trains in seconds to minutes on a laptop, so retraining many times during the backtest is cheap.
+- **Little preprocessing:** it handles missing values natively (e.g. before a channel existed) and needs no feature scaling.
+- **Probabilities and explanations:** it outputs probabilities, and feature importance / SHAP give the write-up statements like "drone mentions were the #2 feature at 1–3 h."
+- **Easy to audit for leakage:** every input is a column we build ourselves, so "was this known at *t*?" is easy to check.
+
+**Weaknesses:**
+- **It doesn't understand time on its own.** Lags, rolling counts and calendar features all have to be built by hand. That's work, but it's also where domain thinking shows.
+- **It can't go beyond what it has seen.** If attack intensity reaches levels it never saw in training, its predictions stay within the old range. Changes in tactics or in the alert system hurt it. We counter this by training on recent data, weighting recent periods more, and retraining often.
+- **Multi-horizon needs a design choice:** one model per horizon, or the horizon as a feature.
+- **Probabilities can be miscalibrated:** we check the calibration plot and correct on the validation period if needed.
+
+**Alternatives:**
+
+| Model | Verdict |
+|---|---|
+| Logistic regression | **Include as a baseline.** Simple and interpretable, but it misses interactions unless you build them by hand. |
+| ARIMA / SARIMA, ETS, Prophet | **Poor fit.** Built for one continuous series; ours is binary, 25 linked series, with outside features. |
+| Hawkes processes / survival models | **Elegant but costly.** They model "events trigger more events" directly, but rich features are harder to add. More of a research project. |
+| LSTM, TCN, Temporal Fusion Transformer | **Possible, not first.** They need more data, are slower and harder to explain, and rarely beat boosted trees at this data size. |
+| Chronos, TimesFM (time-series foundation models) | **Optional extra baseline.** They forecast without training on our data, but are built for continuous values, not on/off series. |
+| XGBoost / CatBoost | **About the same.** Pick one; LightGBM is the fastest. |
+
+**Is it the best fit?** Nobody can say in advance. It's the best *starting point* for this data shape, size, time budget and need to explain results. The backtest decides. We'll report baselines, then logistic regression, then LightGBM, then LightGBM with Telegram. If LightGBM barely beats the historical-rate baseline, that's an honest finding worth writing up.
+
+**Next:** confirm the target recommendation, and set up your Telegram API credentials whenever you're ready, entering them into `.env` and never pasting them here. Meanwhile, I'll check which alert data source is freshest and most complete.
+
+---
+
+## User (2026-10-12 14:52:22 UTC)
+
+1. Target and horizon: A few questions: Can we use all four of the problems, horizons, oblast/raion split, and step as parameters for the code? All of them make sense, and it would be great to be able to choose what to ask the model (or several models, if we need more than one to do so). Can you explain what horizon is in this context?
+2. Telegram: Ok i see the reasons. So we need to pull years of data; how long could it take? Is there a ready-made dataset? What sources should we use? Go and look for the options online if needed.
+3. Submission constraints: Ok, great.
+4. Why LightGBM: I like the explanation and the flow from baseline to LightGBM with Telegram. Let's stick to that and see what we get in the results.
+
+<details><summary>Tool call: ToolSearch</summary>
+
+```
+{
+  "query": "select:WebSearch,WebFetch",
+  "max_results": 2
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+[tool loaded: WebSearch]
+[tool loaded: WebFetch]
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "Telegram dataset Ukraine air raid alerts messages Air Force channel kpszsu dataset",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "Ukrainian Telegram channels war dataset 2022-2025 Hugging Face Kaggle messages",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "Vadimkin ukrainian-air-raid-sirens-dataset github",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "Telethon iter_messages rate limit FloodWaitError messages per request download channel history speed",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "Vadimkin ukrainian-air-raid-sirens-dataset github"
+
+Links: [{"title":"Predictive Analytics of Air Alerts in the Russian-Ukrainian War","url":"https://arxiv.org/pdf/2411.14625"},{"title":"After a year of war, air raid sirens have sounded more than 15,000 times in Ukraine by El País","url":"https://www.informationisbeautifulawards.com/showcase/6047-after-a-year-of-war-air-raid-sirens-have-sounded-more-than-15-000-times-in-ukraine"},{"title":"Ukraine Siren Alerts","url":"https://en.wikipedia.org/wiki/Ukraine_Siren_Alerts"},{"title":"gpo.zugaina.org","url":"https://gpo.zugaina.org/AJAX/Ebuild/56420741"},{"title":"Large-scale audio dataset for emergency vehicle sirens and road noises","url":"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC9532391/"},{"title":"Linked Data on Geo-annotated Events and Use Cases for the Resilience of Ukraine","url":"https://arxiv.org/pdf/2501.14762"},{"title":"kyivpost.com","url":"https://kyivpost.com/post/18257"},{"title":"ukrainians launch a website showing air raid alerts in ukraine","url":"https://en.ain.ua/2022/03/30/ukrainians-launch-a-website-showing-air-raid-alerts-in-ukraine"},{"title":"File:Sirens 2023","url":"https://zhwiki.oracleblog.org/zh-mo/File:Sirens-2023.pdf"}]
+
+The search didn't return the GitHub repository page itself, but two results point to it and describe its origin.
+
+- **Repository reference:** A 2024 arXiv paper on air alert prediction cites the dataset as "Air Raid Datasets" by Vadym Klymenko, and gives the URL as github.com/Vadimkin/ukrainian-air-raid-sirens-dataset (Vadym Klymenko. Air Raid Datasets. URL: https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset.)
+- **Data origin:** An El País data visualization project says the alarm data was collated by Ukrainian developer Vadym Klymenko and came from alerts sent by the єТривога app to users based on their location (The data used in this article had been collated by Ukrainian developer Vadym Klymenko and came from alarms sent by the єТривога app to users across Ukraine based on their location.)
+- **Other alert trackers:** Air-alarms.in.ua is a separate site that has collected alert data since the first day of the full-scale invasion (the dedicated website, Air.alarms.in.ua, has been collecting data since the first day of Russia's full-scale invasion.)
+
+I couldn't confirm the repository's current contents, license, or file format from these results. Opening the GitHub URL directly would be the next step.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "Telegram dataset Ukraine air raid alerts messages Air Force channel kpszsu dataset"
+
+Links: [{"title":"Telegram as a Battlefield: Kremlin-Related Communications During the Russia-Ukraine Conflict","url":"https://ojs.aaai.org/index.php/ICWSM/article/view/35939"},{"title":"kyivpost.com","url":"https://kyivpost.com/post/14817"},{"title":"Ukrainian Air Force Addresses Rumors of Telegram ‘Ban’ on Reporting Incoming Missiles","url":"https://www.kyivpost.com/amp/post/14817"},{"title":"arxiv.org","url":"https://arxiv.org/abs/2501.01884?context=cs"},{"title":"Telegram as a Battlefield:","url":"https://arxiv.org/html/2501.01884v3"},{"title":"Spilnota Detector Media","url":"https://disinfo.detector.media/en/post/how-ukrainian-telegram-channels-speculate-on-the-subject-of-air-raid-alert"},{"title":"fu.kyivpost.com","url":"https://fu.kyivpost.com/post/14817"},{"title":"The Ukrainian Social Media Channels Tracking Russian Missiles","url":"https://english.aawsat.com/node/5307591"},{"title":"You are here","url":"https://www.produsage.snurb.info/node/3215"}]
+
+I didn't find a public dataset of the Ukrainian Air Force channel (kpszsu) or of Telegram air-raid alert messages. The results point to related material:
+
+- **Kremlin-related Telegram dataset (arXiv 2501.01884, AAAI ICWSM 2025):** Researchers released posts from 404 pro-Kremlin and 114 anti-Kremlin channels, covering a year before and a year after the invasion. The anti-Kremlin side includes air raid warnings and bomb shelter maps, so it may contain some alert-related posts. The dataset comprises 404 pro-Kremlin channels with 4,109,645 posts and 114 anti-Kremlin channels with 1,117,768 posts. It is not an official air-alert feed.
+- **Unofficial alert channels:** Volunteer Telegram channels are a major source of real-time missile and drone tracking. In 2024, Air Force spokesman Yuri Ignat warned that some of these channels could face criminal liability for publishing live movement data (Kyiv Post). Those channels are a plausible place to look for alert-message data, but I found no dataset built from them.
+- **Research context:** A 2024 AoIR presentation discussed how Telegram air-raid channels inform local residents, but it didn't mention a released dataset.
+
+To find an official alert archive, you would likely need to contact the Air Force directly or check academic data repositories. I can run one more search if you want to try a different angle, such as Zenodo or GitHub for "Ukraine air alert" datasets.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "Ukrainian Telegram channels war dataset 2022-2025 Hugging Face Kaggle messages"
+
+Links: [{"title":"arxiv.org","url":"https://arxiv.org/abs/2501.01884?context=cs"},{"title":"arxiv.org","url":"https://arxiv.org/abs/2510.11746v1"},{"title":"Published August 25, 2025 | Version v1","url":"https://zenodo.org/records/16949193"},{"title":"arxiv.org","url":"https://arxiv.org/abs/2306.05370v1"},{"title":"Telegram as a Battlefield:","url":"https://arxiv.org/html/2501.01884v3"},{"title":"Climate event dataset based on Ukrainian online information space","url":"https://ena.lpnu.ua/items/f20c3232-e67a-4f99-8502-80b05e9474f8/full"},{"title":"papers.academic-conferences.org","url":"https://papers.academic-conferences.org/index.php/iccws/article/download/1985/1937/7595"},{"title":"Telegram as a Battlefield: Kremlin-Related Communications During the Russia-Ukraine Conflict","url":"https://ojs.aaai.org/index.php/ICWSM/article/view/35939"},{"title":"2024.unlp 1.5","url":"https://aclanthology.org/2024.unlp-1.5.pdf"},{"title":"Taras Ustyianovych","url":"https://aclanthology.org/people/taras-ustyianovych/unverified/"}]
+
+The search didn't turn up any Hugging Face or Kaggle listings for these datasets, so the availability of these datasets on those platforms is unconfirmed. Three candidates came up:
+
+- **Bawa et al. (arXiv 2501.01884 / ICWSM 2025):** Covers posts from pro-Kremlin and anti-Kremlin Telegram channels. The collection spans roughly a year before and a year after the invasion, which fits your date range only partly. It has 404 pro-Kremlin channels with 4,109,645 posts and 114 anti-Kremlin channels with 1,117,768 posts.
+- **Russian and Ukrainian War-related Telegram Channels (Zenodo, University of Helsinki, August 2025):** A channel-level dataset. Its channels.csv holds metadata for 66,260 Telegram channels, and a second file covers clustering results for 3,074 channels. The listing doesn't say which years the posts cover.
+- **TRWU (ACL Anthology, 2024):** An annotated collection of Telegram news about the Russian war in Ukraine gathered starting from January 1, 2022. Its annotations cover sentiment, stance, and metadata. It's the closest match for a Ukrainian-focused, annotated dataset, though its end date isn't in the snippet.
+
+Next step: check the Zenodo, arXiv, and ACL pages for download links and end dates, and search Hugging Face and Kaggle directly for mirrors.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "Telethon iter_messages rate limit FloodWaitError messages per request download channel history speed"
+
+Links: [{"title":"error handling","url":"https://tessl.io/registry/tessl/pypi-telethon/1.41.0/files/docs/error-handling.md"},{"title":"error handling","url":"https://tessl.io/registry/tessl/pypi-telethon/files/docs/error-handling.md"},{"title":"How to use Telethon - 10 common examples","url":"https://snyk.io/advisor/python/Telethon/example"},{"title":"cdn.jsdelivr.net","url":"https://cdn.jsdelivr.net/npm/telegram@2.26.22/client/messages.d.ts"},{"title":"glama.ai","url":"https://glama.ai/mcp/servers/r20vnq5pan"},{"title":"docs.telethon.dev","url":"https://docs.telethon.dev/en/stable/quick-references/faq.html"},{"title":"developers.llamaindex.ai","url":"https://developers.llamaindex.ai/python/framework-api-reference/readers/telegram/"},{"title":"docs.telethon.dev","url":"https://docs.telethon.dev/en/stable/modules/client.html"},{"title":"RPC Errors","url":"https://telethon.readthedocs.io/en/stable/concepts/errors.html"}]
+
+The search turned up the relevant mechanics, but no benchmark for messages per request or download speed.
+
+- **Flood handling:** Telethon's `FloodWaitError` carries a `seconds` value. The official FAQ shows catching it and sleeping for that long before retrying. The `e.seconds` attribute gives how long to wait before making the request again.
+- **Automatic sleeping:** The client sleeps through short waits on its own. Its `flood_sleep_threshold` defaults to 60 seconds, and the client retries requests on flood errors below that threshold. Longer waits raise an exception. For example, a 17-second wait with a 20-second threshold gets slept automatically, while a 21-second wait raises.
+- **History-specific pacing:** The `iter_messages` pacing knob is in the separate JavaScript `telegram` package, not Telethon. Its `waitTime` option sets the delay between history requests to avoid flood errors. It defaults to 1 second, and only applies when the number of messages is higher than 3000. I didn't find an equivalent parameter in Telethon's docs.
+- **Parallelism:** Telethon's FAQ says parallel transfers don't speed things up, since the limiting factor in the long run is FloodWaitError, and parallel downloads or uploads only make them occur sooner.
+- **No published limits:** The docs say nobody knows the exact limits for all requests since they depend on a lot of factors. So there's no official messages-per-request or throughput figure to quote.
+- **Third-party throttling:** A third-party MCP server's docs describe its own read-bucket caps, such as a 600-per-minute read cap and a 250 ms minimum gap between reads from the same chat. These are that project's defaults, not Telegram's published limits.
+
+Practical takeaway: Telethon's `iter_messages` already batches history requests (up to 100 per call, per my own knowledge, not confirmed by these results). The main speed lever is pacing, so catch `FloodWaitError`, sleep for `e.seconds`, and resume.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset",
+  "prompt": "Describe this dataset: what files exist (names), what columns, data sources (official vs volunteer), level of granularity (oblast, raion, hromada), date range, how often it is updated, license, and the date of the latest commit/update if visible. Quote the README key parts."
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://arxiv.org/abs/2411.14625",
+  "prompt": "Summarize this paper: authors, what they predict (target, horizon, spatial granularity), data sources used (alerts, Telegram, ISW, weather, etc.), models used, evaluation method, and main results."
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://t.me/s/kpszsu",
+  "prompt": "What is this channel? Show the 5 most recent message texts with their timestamps, and describe what kind of information the posts contain (drone directions, missile launches, oblast names?). Is there an 'edited' marker on messages? Note the message ID format in links."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Summary of arXiv:2411.14625, "Predictive Analytics of Air Alerts in the Russian-Ukrainian War"**
+
+- **Authors:** Demian Pavlyshenko and Bohdan Pavlyshenko. Submitted November 21, 2024, under cs.LG, with cross-listings in cs.AI and cs.CY.
+- **Goal:** Exploratory data analysis and predictive modeling of air alerts in Ukraine after the February 24, 2022 invasion.
+- **Prediction target, horizon, and spatial granularity:** The abstract says the model predicts whether an alert will occur in a given region within a specified time period. It does not state the exact horizon, and "regions" is not defined further on this page.
+- **Data sources:** The page does not name them. It refers only to an alert dataset with a time feature (days since the dataset's start). It does not mention Telegram, ISW, or weather data.
+- **Models:** Not specified on this page.
+- **Evaluation method:** Not specified on this page.
+- **Main results (from the abstract):**
+  - Alerts in neighboring regions are correlated and show geospatial patterns, which makes prediction feasible.
+  - A region's alert status depends heavily on the features of adjacent regions.
+  - Seasonal features (hour of day, day of week, month) are important predictors.
+  - Some regions depend strongly on the time feature, which suggests the alert patterns change over the course of the war.
+
+For the model details, evaluation metrics, and data sources, the full PDF or HTML version of the paper would be needed.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Dataset: Ukrainian air raid sirens (Vadimkin/ukrainian-air-raid-sirens-dataset)**
+
+The README says the repository "contains datasets with information about the air raid sirens in Ukraine by each region." The page does not show the actual data, so the columns, granularity, and date range can't be confirmed from it.
+
+- **Files and folders:** `datasets/` (the generated CSV files, per the README), `processors/`, `example/`, `.github/workflows/`, `process.py`, `config.py.EXAMPLE`, `requirements.txt`, `pyproject.toml`, `.gitignore`, `LICENSE`, and `README.md`. The README points to `datasets/README.md` for more detail, but that file's contents aren't shown.
+- **Columns:** Not visible on this page.
+- **Granularity (oblast, raion, hromada):** Not stated. The README mentions only "by each region."
+- **Date range:** Not visible.
+- **Data sources:** Two types. The README says, "There are two sources of alerts: official and unofficial (collected by volunteers from eTryvoga channel)." The official source is not named on this page.
+- **Update frequency:** "Datasets updated daily." The README also gives manual regeneration steps, which run `process.py` and need a Telegram app ID and hash.
+- **License:** MIT, listed under Resources and as the `LICENSE` file.
+- **Latest commit/update date:** Not visible. The page shows 1,664 commits on `main`, but no commit date.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Channel:** "Повітряні Сили ЗС України / Air Force of the Armed Forces of Ukraine" (t.me/kpszsu), the official Telegram channel of Ukraine's Air Force, with 909K subscribers.
+
+**Five most recent messages** (the page shows no date, only times):
+
+1. **14:46**, ID 85590: "Реактивний БпЛА через зону відчуження Чорнобильської АЕС курсом на Житомирщину." (A jet-powered drone through the Chornobyl exclusion zone toward Zhytomyr oblast.)
+2. **14:46**, ID 85589: "Група реактивних БпЛА через Полтавщину в напрямку Черкащини (Золотоноша)." (A group of jet-powered drones through Poltava oblast toward Cherkasy oblast, Zolotonosha.)
+3. **14:44**, ID 85588: "БпЛА на Харків з півночі." (Drones toward Kharkiv from the north.)
+4. **14:38**, ID 85587: "Реактивний БпЛА курсом на Павлоград." (A jet-powered drone toward Pavlohrad.)
+5. **14:37**, ID 85586: "Курсом на Бучу/Ірпінь." (Heading toward Bucha/Irpin.)
+
+**Content:** The posts are short real-time alerts about drone (UAV) movements. They give the drone type (mostly jet-powered, "реактивний БпЛА"), the direction of travel, and the locations passed, usually by oblast or city (Kyiv, Chernihiv, Poltava, Cherkasy, Zhytomyr, Kharkiv, Dnipro-area cities). Some posts include emojis as icons. The page shows no missile launches, only drone tracking.
+
+**Edited marker:** None is visible in the captured content.
+
+**Message ID format:** Links follow the pattern t.me/kpszsu/<number>, where "kpszsu" is the channel username and the number is a sequential post ID (for example, 85571 to 85590 in this snapshot). The web preview also paginates with a parameter like `?before=85571`.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read alert dataset README, latest commits, and file list
+
+```
+curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/datasets/README.md | head -80; echo ----; curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/commits?per_page=3" | python3 -c "import sys,json; [print(c['commit']['committer']['date'], c['commit']['message'][:80]) for c in json.load(sys.stdin)]"; echo ----; curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/contents/datasets" | python3 -c "import sys,json; [print(f['name'], f['size']) for f in json.load(sys.stdin)]"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+## 🚨 About Datasets
+
+There are two sources of alerts: official
+and unofficial (collected by volunteers from [eTryvoga](https://app.etryvoga.com) channel).
+
+Both datasets will be updated daily. All times are in UTC.
+
+### Official dataset
+
+You may see `official_data_en.csv` (🇬🇧) and `official_data_uk.csv` (🇺🇦) files.
+They're identical but in different language.
+
+Official dataset contains information from 15th of March 2022 – it's the first day when siren record occurs.
+Since December, 2025th there is mostly air raid alerts on raion (district) level ([see post in the media](https://texty.org.ua/fragments/116501/v-ukrayini-zaprovadzhuyetsya-novyj-pidxid-do-oholoshennya-povitryanyx-tryvoh-svyrydenko/)), before sirens were applied to the whole oblast (region). You may find them on [wikipedia](https://en.wikipedia.org/wiki/Raions_of_Ukraine).
+On some .geojson files they're Subnational Administrative Boundaries (Admin 2: 139 Raion (District))
+
+### Volunteer datasets
+
+Data by volunteers are stored in `volunteer_data_uk.csv` (🇺🇦) and `volunteer_data_en.csv` (🇬🇧).
+
+It contains more data (starts from 25th of February – second day of war!) and only on oblast (region) level.
+
+If there are no messages about the end of the sirens,
+you may see them with `naive=True` and `finished_at = started_at + 30 minutes`.
+
+Thanks to [eTryvoga](https://app.etryvoga.com) channel for this data.
+
+## 🤔 Good to Know
+
+There are two permanent sirens:
+
+1. In **Luhansk region** from April 4 at 04:45 PM (UTC+00) or April 4 at 07:45 PM (local time)
+2. In **Crimea** from December 10 at 10:22 PM (UTC+00) or December 11 at 12:22 AM (local time)
+
+They are not listed in datasets, so you may want to process them manually.
+----
+2026-10-12T05:05:17Z Add new data
+2026-10-11T04:50:14Z Add new data
+2026-10-10T05:01:45Z Add new data
+----
+README.md 1739
+official_data_en.csv 31025633
+official_data_uk.csv 41302286
+volunteer_data_en.csv 8921292
+volunteer_data_uk.csv 11106223
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Download official alert CSV to scratch dir and peek
+
+```
+mkdir -p /tmp/aaf_peek && cd /tmp/aaf_peek && curl -sL -o official_data_en.csv https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/datasets/official_data_en.csv && wc -l official_data_en.csv && head -5 official_data_en.csv && echo ... && tail -5 official_data_en.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+  299276 official_data_en.csv
+oblast,raion,hromada,level,started_at,finished_at,source
+Vinnytska oblast,,,oblast,2022-03-15 16:10:34+00:00,2022-03-15 16:50:07+00:00,official
+Zhytomyrska oblast,,,oblast,2022-03-15 16:11:25+00:00,2022-03-15 16:54:23+00:00,official
+Cherkaska oblast,Umanskyi raion,Umanska terytorialna hromada,hromada,2022-03-15 16:11:50+00:00,2022-03-15 16:54:47+00:00,official
+Mykolaivska oblast,Pervomaiskyi raion,m. Pervomaisk ta Pervomaiska terytorialna hromada,hromada,2022-03-15 16:14:46+00:00,2022-03-15 16:57:08+00:00,official
+...
+Dnipropetrovska oblast,Kamianskyi raion,,raion,2026-09-07 04:32:52+00:00,2026-09-07 05:20:20+00:00,official
+Dnipropetrovska oblast,Kryvorizkyi raion,,raion,2026-09-07 04:32:58+00:00,2026-09-07 05:37:53+00:00,official
+Poltavska oblast,Poltavskyi raion,,raion,2026-09-07 04:38:21+00:00,2026-09-07 04:56:59+00:00,official
+Sumska oblast,Konotopskyi raion,,raion,2026-09-07 05:12:16+00:00,2026-09-07 05:38:04+00:00,official
+Dnipropetrovska oblast,Kamianskyi raion,,raion,2026-09-07 05:28:22+00:00,2026-09-07 05:38:32+00:00,official
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 14:53:25 UTC)
+
+Checking the alert data now: it updates daily, but the last rows end on 2026-09-07, so I'm confirming whether the file is really current.
+
+<details><summary>Tool call: Bash</summary>
+
+Summarize alert data freshness and granularity by month
+
+```
+cd /tmp/aaf_peek && python3 -I -c "
+import csv, collections
+rows=list(csv.DictReader(open('official_data_en.csv')))
+print('rows',len(rows))
+print('max started', max(r['started_at'] for r in rows))
+c=collections.Counter((r['started_at'][:7], r['level']) for r in rows)
+months=sorted({k[0] for k in c})
+for m in months[-16:]+months[:2]: print(m, {l:c[(m,l)] for l in ('oblast','raion','hromada') if c[(m,l)]})
+print('oblasts', len({r['oblast'] for r in rows}), 'raions', len({(r['oblast'],r['raion']) for r in rows if r['raion']}), 'hromadas', len({r['hromada'] for r in rows if r['hromada']}))
+print('empty finished', sum(1 for r in rows if not r['finished_at']))
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+rows 299275
+max started 2026-09-07 05:28:22+00:00
+2025-06 {'oblast': 2926, 'raion': 680, 'hromada': 1268}
+2025-07 {'oblast': 3532, 'raion': 1192, 'hromada': 1386}
+2025-08 {'oblast': 2234, 'raion': 4874, 'hromada': 1262}
+2025-09 {'oblast': 1410, 'raion': 6936, 'hromada': 1144}
+2025-10 {'oblast': 1430, 'raion': 6992, 'hromada': 1382}
+2025-11 {'oblast': 328, 'raion': 14514, 'hromada': 1398}
+2025-12 {'oblast': 48, 'raion': 14584, 'hromada': 1372}
+2026-01 {'oblast': 113, 'raion': 14028, 'hromada': 1240}
+2026-02 {'oblast': 41, 'raion': 7341, 'hromada': 540}
+2026-03 {'oblast': 39, 'raion': 8949, 'hromada': 800}
+2026-04 {'oblast': 35, 'raion': 7883, 'hromada': 691}
+2026-05 {'oblast': 58, 'raion': 9362, 'hromada': 645}
+2026-06 {'oblast': 46, 'raion': 9296, 'hromada': 664}
+2026-07 {'oblast': 59, 'raion': 10377, 'hromada': 637}
+2026-08 {'oblast': 90, 'raion': 9982, 'hromada': 564}
+2026-09 {'oblast': 22, 'raion': 1827, 'hromada': 88}
+2022-03 {'oblast': 1992, 'raion': 508, 'hromada': 812}
+2022-04 {'oblast': 3502, 'raion': 632, 'hromada': 778}
+oblasts 25 raions 118 hromadas 133
+empty finished 0
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check volunteer data freshness and official file history
+
+```
+cd /tmp/aaf_peek && curl -sL -o volunteer_data_en.csv https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/datasets/volunteer_data_en.csv && head -3 volunteer_data_en.csv && python3 -I -c "
+import csv
+rows=list(csv.DictReader(open('volunteer_data_en.csv')))
+print('rows',len(rows),'max started',max(r['started_at'] for r in rows))
+" && curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/commits?path=datasets/official_data_en.csv&per_page=3" | python3 -c "import sys,json; [print('official file commit', c['commit']['committer']['date']) for c in json.load(sys.stdin)]"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+region,started_at,finished_at,naive
+Kyiv City,2022-02-25 16:36:22+00:00,2022-02-25 17:06:22+00:00,True
+Cherkaska oblast,2022-02-25 18:36:21+00:00,2022-02-25 19:32:11+00:00,False
+rows 116174 max started 2026-10-12 04:49:48+00:00
+official file commit 2026-09-08T03:44:23Z
+official file commit 2026-09-07T03:39:36Z
+official file commit 2026-09-06T03:40:10Z
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 14:53:45 UTC)
+
+The official alert file stopped updating on 2026-09-08, while the volunteer file is current to this morning. Next I'm checking the alerts.in.ua API as a way to fill that gap.
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://devs.alerts.in.ua/",
+  "prompt": "Describe the API: how to get a token, what endpoints exist (especially history: month_ago or similar), what granularity (oblast/raion/hromada), rate limits, terms of use (non-commercial? attribution?). Quote endpoint paths and rate limit numbers exactly."
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "Telegram Desktop export channel history JSON public channel",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "air raid alert prediction Ukraine telegram ISW reports machine learning github project",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "air raid alert prediction Ukraine telegram ISW reports machine learning github project"
+
+Links: [{"title":"web3.arxiv.org","url":"https://web3.arxiv.org/pdf/2411.14625"},{"title":"Predictive Analytics of Air Alerts in the Russian-Ukrainian War","url":"https://arxiv.org/html/2411.14625v1"},{"title":"air raid threat reporter","url":"https://github.com/ALERTua/air_raid_threat_reporter"},{"title":"Yevhenii Opria","url":"https://ua.linkedin.com/in/yevhenii-opria"},{"title":"[Literature Review] Predictive Analytics of Air Alerts in the Russian-Ukrainian War","url":"https://themoonlight.io/review/predictive-analytics-of-air-alerts-in-the-russian-ukrainian-war"},{"title":"arxiv.org","url":"https://arxiv.org/abs/2411.14625v1"},{"title":"Air Raid Alert Monitor","url":"https://freelancehunt.com/en/showcase/work/monitor-alarmu-powietrznego/2007108.html"},{"title":"Computer Science > Machine Learning","url":"https://web3.arxiv.org/abs/2411.14625?context=cs"},{"title":"cs.LGcs.AI25 Nov 2024","url":"https://chatpaper.com/paper/84496"}]
+
+The search didn't turn up any ISW-specific material, so nothing here ties air alert prediction to ISW reports.
+
+- **Academic work:** A 2024 arXiv paper by Demian and Bohdan Pavlyshenko studies predictive analytics for air alerts. It finds that alert status in one region depends heavily on neighboring regions, and that time-of-day, weekday, and month features help predict alerts. The prediction target is a binary outcome indicating whether an air alert will commence within the next five minutes. Its early approach was a Telegram channel that loaded messages from other Telegram channels, analyzed them with NLP methods, and used experimental heuristics to predict when an alert was about to start.
+
+- **GitHub project:** The ALERTua "air raid threat reporter" repo uses Ollama, a local LLM, to evaluate each message from Telegram air raid threat channels and decide whether it reports an actual threat to a city. Matching messages are forwarded to a Telegram chat.
+
+- **Alert monitoring:** A Dnipro-focused project on GitHub (alerts-in-ua) tracks alert status through the Alerts in UA API and sends Telegram notifications when alerts start or end. It is a monitoring tool, not a forecasting model.
+
+- **Production system (unverified):** A LinkedIn profile describes a LightGBM system forecasting alert probabilities 24 hours ahead across all 25 regions, built from scraped Telegram messages. This is a self-reported claim, and I found no public repo for it.
+
+I didn't find a specific GitHub project that combines ISW reports with Telegram alert prediction. Searching the GitHub repos directly for "ISW" or "alerts-in-ua" forecasting would be the next step.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "Telegram Desktop export channel history JSON public channel"
+
+Links: [{"title":"export chat history file telegram desktop","url":"https://winaero.com/export-chat-history-file-telegram-desktop/?amp"},{"title":"# Telegram Channel Scraper (No Login) (`scrapemint/telegram-channel-scraper`) Actor","url":"https://apify.com/scrapemint/telegram-channel-scraper.md"},{"title":"how to export telegram chat history","url":"https://blog.invitemember.com/how-to-export-telegram-chat-history/"},{"title":"How to use tg_json_parser","url":"https://therussiaprogram.org/page102861106.html"},{"title":"Download Telegram History: The Ultimate Guide","url":"https://digitalocean.wpcompress.com/blog/download-telegram-history-the-ultimate"},{"title":"# Telegram Channel Scraper (`devilscrapes/telegram-channel-scraper`) Actor","url":"https://apify.com/devilscrapes/telegram-channel-scraper.md"},{"title":"wiki.archiveteam.org","url":"https://wiki.archiveteam.org/index.php/Telegram"},{"title":"archiveteam.org","url":"https://ArchiveTeam.org/index.php/Telegram"},{"title":"How to download telegram chat history","url":"https://rfgcreative.com/misc/how-to-download-telegram-chat-history.html"},{"title":"feat: Telegram channel/group export","url":"https://forge.lthn.ai/Snider/Borg/commit/d8bbda85b56cadc8e80ab555eba903781daa53f8"}]
+
+The search turned up several ways to get a public channel's history as JSON.
+
+- **Telegram Desktop (official route):** Open the channel, click the three-dot menu, choose "Export chat history," and pick JSON instead of HTML. Telegram exports can be saved in two common formats: HTML, for a readable local page, and JSON, for machine-readable data. One source says the Desktop app's official Telegram Desktop app exports as HTML or JSON.
+- **Full-account export:** Settings > Advanced > Export Telegram Data also offers a JSON option. One guide lists Public Channels and Groups as selectable, letting you choose which public channels and groups to include in the export.
+- **Third-party scrapers:** One Apify actor says it can export the message history of any public Telegram channel as clean JSON. No API key, no bot token, no phone number, no login. Another paid actor reads the public web preview at `t.me/s/{channel}`, which covers only what that page exposes. Its listing is a paid tool, so check its terms before relying on it.
+- **Parsing the output:** A GitHub commit adds an importer that parses Telegram Desktop JSON exports. A `tg_json_parser` page describes a module that reads these files, but its clone URL is a placeholder, so I could not verify that it exists.
+
+Caveat: the sources don't clearly state whether a regular subscriber can export a public channel through Desktop, or whether a channel admin is needed. The Desktop route is the most reliable starting point, and I'd confirm that behavior in the current app before relying on it.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+# alerts.in.ua API Summary
+
+**Getting a token:** Submit the request form at alerts.in.ua/api-request, and the project sends you a personal token. Treat it as a secret, since all activity under it is tied to your project.
+
+**Authentication:** Pass the token either as a query parameter (`?token=<YOUR_APP_TOKEN>`) or in an `Authorization: Bearer <YOUR_APP_TOKEN>` header.
+
+## Endpoints
+
+- **`/v1/alerts/active.json`**: Lists regions with active air raid alerts or other threats. Each alert includes `location_type` (oblast, raion, city, hromada, or unknown), `alert_level` (red or yellow), and an optional `threats` array.
+- **`/v1/iot/active_air_raid_alerts_by_oblast.json`**: Returns a compact status string with one character per oblast (A, P, or N). Designed for IoT devices.
+- **`/v1/iot/active_air_raid_alerts/{uid}.json`**: Returns the status for one oblast, raion, or city by UID.
+- **`/v1/iot/active_air_raid_alerts.json`**: Returns one status character per UID for all oblasts, raions, and hromadas. Position in the string corresponds to the UID.
+- **`/v1/regions/{uid}/alerts/{period}.json`**: Returns alert history for a region. The only documented period is `month_ago`, meaning one month back from the current date.
+
+## Granularity
+
+- Alerts can be at oblast, raion, city, or hromada level.
+- The Location UID table covers oblasts and certain cities (UIDs 3–31). The page links to a separate full spreadsheet of raions and cities.
+- The history endpoint accepts an oblast, raion, or hromada UID.
+
+## Rate Limits
+
+- Soft limit: "8-10 запитів в хвилину з однієї IP адреси" (8–10 requests per minute from one IP address).
+- Hard limit: "12 запитів в хвилину з однієї IP адреси" (12 requests per minute from one IP address).
+- Exceeding the limit returns `429 Too many requests`. Systematic violations can get the IP and token blocked, and abnormal daily volume can block the token.
+- The history endpoint has its own limit of 2 requests per minute and is not recommended for real-time use.
+- The page's overview mentions limits "в секунду" (per second), but the specific figures are given per minute. Follow the per-minute numbers.
+- To reduce load, use the `If-Modified-Since` header with `Last-Modified` for caching.
+
+## Usage Terms
+
+- **Public services:** Proxy requests through your own server. Don't hardcode the token in client-side code such as mobile apps or web pages. Physical devices are exempt.
+- **Disclaimer:** The page says not to use the API for critical infrastructure. Use is at your own discretion and risk, the service disclaims liability, and updates may be delayed.
+- **Project status:** The service is run by volunteers, and the page asks for support.
+- **Not specified:** The page doesn't state whether commercial use is allowed or what attribution is required. It says that using the API means accepting the "Правила" (Rules), but doesn't include them. Check those rules directly before relying on either.
+
+## Error Codes
+
+200 (OK), 304 (not modified), 401 (invalid, revoked, or expired token), 403 (IP blocked or region restricted), and 429 (rate limit exceeded).
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://arxiv.org/html/2411.14625v1",
+  "prompt": "Extract: data sources used (alerts dataset name/source, Telegram channels used if any), exact prediction target and horizon, features, model(s) used (e.g., LightGBM?), train/test split method (time-based?), evaluation metrics and results numbers, and any mention of data leakage or limitations."
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://t.me/s/air_alert_ua",
+  "prompt": "What is this channel (name, subscribers)? Show the 8 most recent message texts with times and IDs. Do messages mention raion/hromada-level alerts, threat types (ballistic, drones), alert start and end ('відбій')?"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "популярні моніторингові телеграм канали шахеди ракети моніторинг повітряних цілей список",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "популярні моніторингові телеграм канали шахеди ракети моніторинг повітряних цілей список"
+
+Links: [{"title":"Карта тривог телеграм: повний гід по каналах, мапах та сповіщеннях","url":"https://netfreedom.org.ua/?p=3953"},{"title":"Карта тривог телеграм: повний гід по каналах, мапах та сповіщеннях","url":"https://netfreedom.org.ua/karta-tryvog-telegram-povnyj-gid-po-kanalah-mapah-ta-spovishhennyah/"},{"title":"Де ракета в Телеграм: повний гід з моніторингу повітряних загроз у 2026 році","url":"https://netfreedom.org.ua/de-raketa-v-telehram-povnyi-hid-z-monitorynhu-povitrianykh-zahroz-u-2026-rotsi/"},{"title":"Де ракета в Телеграм: повний гід з моніторингу повітряних загроз у 2026 році","url":"https://netfreedom.org.ua/?p=22582"},{"title":"Где ракета в Telegram: полный гид по мониторингу воздушных угроз в 2026 году","url":"https://netfreedom.org.ua/ru/de-raketa-v-telehram-povnyi-hid-z-monitorynhu-povitrianykh-zahroz-u-2026-rotsi/"},{"title":"Повітряні сили почали інформувати про загрози ракетних атак","url":"https://thepage.ua/ua/news/povitryani-sili-zsu-pochali-informuvati-pro-zagrozi-raketnih-atak/amp"},{"title":"texty.org.ua","url":"https://texty.org.ua/tag/telehram/?page=1"},{"title":"povitryani sili zsu pochali informuvati pro zagrozi raketnih atak","url":"https://thepage.ua/ua/news/povitryani-sili-zsu-pochali-informuvati-pro-zagrozi-raketnih-atak"},{"title":"Українська правда","url":"https://mezha.ua/tag/shahed?page=3"}]
+
+Результати пошуку дають лише загальний огляд, повного списку каналів немає.
+
+- **@deraketaua ("Де ракета")**: один із найпомітніших каналів. За даними одного гіда, станом на липень 2026 року на нього підписано понад 153 тисячі людей. Гід описує його роботу як кілька шарів: автоматичні джерела (радарні дані, звуки, спостереження), місцеві кореспонденти та звірка з офіційними тривогами і повідомленнями Повітряних сил ЗСУ. Канал зазвичай дає короткий пост після пуску й орієнтовний час підльоту до великих міст. Більше 153 тисяч підписників у @deraketaua по стану на липень 2026. Механізм роботи описано в гіді про моніторинг повітряних загроз.
+- **Карта тривог у Телеграмі**: гід від netfreedom.org.ua описує, що такі ресурси поєднують офіційні канали, OSINT-моніторинг і інтерактивні мапи, які оновлюються кожні секунди. Конкретних назв каналів у фрагменті немає.
+- **Офіційні джерела**: автори гайдів рекомендують тримати в обраному офіційний канал Повітряних сил і застосунок «Повітряна тривога» (офіційний канал Воздушных сил и приложение «Воздушная тревога»). Речник Повітряних сил Юрій Ігнат також наголошував, що інформацію про повітряні тривоги краще брати з офіційних каналів і застосунку.
+
+Важливе застереження: за повідомленням The Page, канали регіональних голів і неверифіковані моніторингові джерела (деякі з них пов’язують з представниками влади) робили це швидше за представників ЗСУ. Тобто швидкість неофіційних каналів не гарантує точності, тому варто звіряти їх з офіційними джерелами.
+
+Якщо потрібен саме перелік каналів з рейтингом, варто окремо пошукати оглядові статті з назвами та даними про аудиторію.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Data sources**
+- Alert history from Vadym Klymenko's Air Raid Datasets (GitHub, ref. [1]), covering Mar 25, 2022 to Nov 6, 2024 at 1-minute granularity.
+- Telegram: not used in this study. The authors mention an earlier Telegram forecasting channel, but the analysis relies on the historical dataset.
+
+**Prediction target and horizon**
+- Binary target: whether an alert will occur "within next 5 minutes" in a region. An ongoing alert counts as positive, and a non-alert counts as 0 if it starts or ends beyond 5 minutes.
+- A 15-minute horizon is reported in the appendix as a secondary experiment.
+- One separate model per region: Lvivska, Vinnytska, Kyivska, and Kharkivska oblasts.
+
+**Features**
+- Binary alert indicators for each oblast, plus lagged values.
+- A cumulative alert-duration feature per region (0 when no alert, current duration during an alert).
+- Seasonality features: hour, day of week, and month.
+- `ndays`: days since the start of the dataset.
+- Neighboring-region features were the most important.
+
+**Model**
+- scikit-learn RandomForestClassifier with 500 estimators ("500 iterations") and random_state=15. No LightGBM or other models are mentioned.
+
+**Train/test split**
+- Time-based: data before 2024-07-01 for training, data on or after that date for testing.
+
+**Evaluation metrics and results**
+- Reported metrics: accuracy, classification report, confusion matrix, ROC curve, and AUC.
+- The text gives no numeric accuracy or AUC values. These appear only in figures, which were not included in the extracted content.
+
+**Data leakage**
+- The paper does not discuss data leakage.
+
+**Limitations**
+- Luhansk has only short historical data and was excluded from modeling.
+- The authors note alert patterns change over time, which the `ndays` feature is meant to capture.
+- Figure reuse: the Kharkivska figures (20–21) reuse the Kyivska image files, and Figure 30 is captioned as feature importance but appears to be an ROC plot. These errors may affect the reported Kharkivska results.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Channel:** Повітряна Тривога (@air_alert_ua), an official channel that reports air raid alerts across Ukraine. It has **234K subscribers**.
+
+**8 most recent messages** (IDs 338373–338380, in order of ID):
+
+| ID | Time (text / page) | Content |
+|---|---|---|
+| 338373 | 08:55 / 05:55 | Drone-strike threat warning for the city and hromada of Zaporizhzhia. Residents are told to take shelter. |
+| 338374 | 08:57 / 05:57 | Air raid alert in Sumy raion. |
+| 338375 | 08:59 / 05:59 | Air raid alert in Kryvyi Rih raion. |
+| 338376 | 08:59 / 05:59 | Air raid alert in Kamianske raion. |
+| 338377 | 09:01 / 06:01 | Renewed drone-strike threat warning for Zaporizhzhia city and hromada, with a heightened danger notice. |
+| 338378 | 09:08 / 06:08 | Air raid alert in Izium raion. |
+| 338379 | 09:08 / 06:08 | Air raid alert in Lozova raion. |
+| 338380 | 09:09 / 06:09 | Air raid alert in Shostka raion. |
+
+**Your specific questions:**
+
+- **Raion/hromada-level alerts:** Yes. Most alerts name a raion (for example, Sumy, Izium, Lozova). Zaporizhzhia's alert names the city and its hromada.
+- **Threat types:** The messages mention drones. Two warnings refer to "ударних БпЛА" (strike UAVs). None of the eight mention ballistic threats.
+- **Alert start:** Yes. Start notices use "Повітряна тривога" (air raid alert).
+- **Alert end ("відбій"):** None of these eight messages is an end notice. Earlier messages on the page (IDs 338362 and 338363) announce "Відбій тривоги" for specific areas.
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://t.me/s/deraketaua",
+  "prompt": "Channel name and subscriber count? Give the highest message ID visible and the 5 most recent message texts with times. What kind of info do posts contain (launch reports, bomber takeoffs, directions, oblasts)?"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://t.me/s/etryvoga",
+  "prompt": "Channel name and subscriber count? Give the highest message ID visible and the 5 most recent message texts with times. What kind of info do posts contain?"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://t.me/s/kpszsu?before=2000",
+  "prompt": "Show the dates (full dates if visible, e.g. from datetime attributes) of the messages on this page and their IDs. When did the channel's posts around ID 1000-2000 happen?"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Channel:** єТривога (@etryvoga)
+**Subscribers:** 103
+
+**Highest message ID visible:** 8
+
+**Five most recent text posts** (times are shown without dates, so I've ordered them by message ID):
+
+1. **ID 8 (15:31):** Reminds followers that the main alert channel is the separate Telegram channel UkraineAlarmSignal.
+2. **ID 7 (12:28):** Announces a new iOS feature that lets users pick multiple regions or cities and turn alerts on or off for each. Android support is coming, and users are advised to reinstall the app.
+3. **ID 6 (22:30):** Shares a link to a friends' Telegram channel that posts only air-raid alert information.
+4. **ID 5 (22:32):** Says the app reached the top of the Ukrainian App Store. It denies rumors that the app collects private user data, states that it is an independent volunteer project, and attributes the mismatched privacy policy to the developers' earlier game work.
+5. **ID 3 (15:14):** A greeting noting that the volunteer app has sent over three million air-threat notifications. It says an open API is being considered, with no timeline, and links to the app.
+
+**Post content:** Posts are mostly short updates from a volunteer team about an air-raid alert app. They include app feature announcements, download links, responses to rumors about privacy and data collection, and links to related alert channels. Some posts are greetings or thank-you messages. Each post shows view counts and emoji reactions.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The page shows only times (HH:MM), not full dates or datetime attributes. The dates below are inferred from date references in the post text, so treat them as approximate. The page includes only IDs 1980–1999, so posts 1000–1979 aren't visible.
+
+| ID | Time shown | Inferred date | Basis |
+|---|---|---|---|
+| 1980 | 19:06 | ~28 Sep 2022 | Undated; the Kh-59 strike report precedes 1981–1982 |
+| 1981 | 06:27 | ~29 Sep 2022 | Losses counted "з 24.02 по 29.09" |
+| 1982 | 06:30 | ~29 Sep 2022 | Cites an article dated 28 Sep 2022 |
+| 1983 | 15:09 | ~29–30 Sep 2022 | Refers to Su-25s downed "29 вересня" |
+| 1984 | 20:56 | ~29 Sep 2022 | Undated; sits between 1983 and 1985 |
+| 1985 | 22:24 | ~29 Sep 2022 | Shahed attack "29 вересня з 23.00 по 24.00" |
+| 1986 | 05:58 | 30 Sep 2022 | Losses counted "по 30.09" |
+| 1987 | 06:39 | ~1 Oct 2022 | Refers to "30 вересня" as the previous day |
+| 1988 | 08:04 | 1 Oct 2022 | Losses counted "по 01.10" |
+| 1989 | 21:36 | 1 Oct 2022 | "День 220" of the war |
+| 1990 | 05:36 | 2 Oct 2022 | Refers to "2 жовтня уночі" |
+| 1991 | 07:35 | 2 Oct 2022 | Losses counted "по 02.10" |
+| 1992 | 08:11 | 2 Oct 2022 | Territorial Defence Day greeting |
+| 1993 | 09:22 | 2 Oct 2022 | Same Territorial Defence Day post |
+| 1994 | 15:46 | ~2 Oct 2022 | Undated; sits between 1993 and 1998 |
+| 1998 | 06:11 | 3 Oct 2022 | Losses counted "по 03.10" |
+| 1999 | 08:58 | ~3 Oct 2022 | Undated; follows 1998 |
+
+So posts around IDs 1980–1999 date from roughly 28 September to 3 October 2022. Those dates are inferred, not stated on the page.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Channel:** "Де Ракета ?🚀 | Моніторинг" (@deraketaua)
+**Subscribers:** 156K
+
+**Highest visible message ID:** 64999
+
+**Five most recent posts (newest first):**
+
+1. **14:48 (64999):** "Карта по реактивним шахедам станом на зараз:" (a map of jet-powered Shahed drones; no other text visible)
+2. **14:43 (64998):** "Збиття на Тернопільщині" (shootdown in Ternopil oblast)
+3. **14:36 (64997):** "Карта по реактивним шахедам станом на зараз:" (another map update)
+4. **14:31 (64996):** "1 реактивний шахед з Хмельниччини на Тернопільщину в район Чортків" (one jet Shahed from Khmelnytskyi toward Chortkiv area, Ternopil oblast)
+5. **14:27 (64995):** "3 реактивні шахеди з Дніпропетровщини на Полтавщину..." (three jet Shaheds from Dnipropetrovsk oblast toward Poltava oblast)
+
+**What the posts contain:**
+- **Tracking updates on drones:** Mostly short alerts on the number and type of "реактивні шахеди" (jet-powered Shaheds), each with its location.
+- **Direction and route:** Entry and exit points, such as "з Чернігівщини" (from Chernihiv oblast) or "з півдня" (from the south), and sometimes the next target area.
+- **Oblasts and cities:** Frequent references to oblasts, cities, and districts, plus landmarks such as bridges, a power plant, and reservoirs.
+- **Shootdown reports:** Posts marked "Збиття" (shootdown) with the location.
+- **Maps:** Periodic "Карта по реактивним шахедам" updates.
+- **Clear reports:** Occasional notes like "По іншим шахедам чисто" (no other drones detected).
+- **Engagement metrics:** Each post shows reaction counts and view counts.
+
+The visible content does not include bomber takeoffs or launch reports as such. It focuses on in-flight tracking.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Sample post dates at several message IDs per channel
+
+```
+cd /tmp/aaf_peek && for spec in kpszsu:2000 kpszsu:10000 kpszsu:20000 kpszsu:40000 kpszsu:60000 deraketaua:100 deraketaua:20000 deraketaua:40000 air_alert_ua:1000 air_alert_ua:100000 air_alert_ua:200000; do ch=${spec%%:*}; id=${spec##*:}; d=$(curl -s "https://t.me/s/$ch?before=$id" | grep -o 'datetime="[^"]*"' | head -1); echo "$ch before=$id -> $d"; sleep 1; done; curl -s "https://t.me/s/air_alert_ua" | grep -o 'tgme_widget_message_edited\|edited' | head -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+kpszsu before=2000 -> datetime="2022-09-28T19:06:21+00:00"
+kpszsu before=10000 -> datetime="2024-01-22T12:13:47+00:00"
+kpszsu before=20000 -> datetime="2024-09-25T19:05:38+00:00"
+kpszsu before=40000 -> datetime="2025-08-06T06:53:59+00:00"
+kpszsu before=60000 -> datetime="2026-04-15T00:23:21+00:00"
+deraketaua before=100 -> datetime="2022-10-02T13:11:56+00:00"
+deraketaua before=20000 -> datetime="2024-06-07T12:12:43+00:00"
+deraketaua before=40000 -> datetime="2025-05-31T22:38:18+00:00"
+air_alert_ua before=1000 -> datetime="2022-03-20T18:55:16+00:00"
+air_alert_ua before=100000 -> datetime="2024-07-12T19:47:24+00:00"
+air_alert_ua before=200000 -> datetime="2025-11-21T03:39:39+00:00"
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 14:55:39 UTC)
+
+The Telegram channels look easy to download. Now I'm checking one more ready-made dataset: daily missile and drone attack counts compiled from Air Force reports.
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "Massive Missile Attacks on Ukraine dataset Kaggle piterfm missiles drones launched destroyed",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "Massive Missile Attacks on Ukraine dataset Kaggle piterfm missiles drones launched destroyed"
+
+Links: [{"title":"The Storm Above Kyiv: Four Years of Russian Air War Data — And What It Tells Us About Trump's \"Peace Prize\" Delusion","url":"https://thechrissampson.substack.com/p/the-storm-above-kyiv-four-years-of"},{"title":"12f3148d 841a 478d b9ed 72bf0764b286","url":"https://map.ua-energy.org/en/resources/12f3148d-841a-478d-b9ed-72bf0764b286"},{"title":"9091d6f9 564f 434a a9d2 bba9657ca2c1","url":"https://map.ua-energy.org/en/datasets/9091d6f9-564f-434a-a9d2-bba9657ca2c1"},{"title":"Ukraine War – Missile strikes data","url":"https://ix5.org/thoughts/2023/ukraine-war-missile-strikes-data/"},{"title":"Ukraine Reports Record Russian Missile and Drone Attack","url":"https://www.bloomberg.com/news/articles/2025-06-29/ukraine-reports-record-russian-missile-and-drone-attack"},{"title":"Massive Russian missile attack raises urgency for Western aid to Ukraine","url":"https://san.com/cc/massive-russian-missile-attack-raises-urgency-for-western-aid-to-ukraine"},{"title":"www.osw.waw.pl","url":"https://www.osw.waw.pl/en/publikacja/31480/pdf"},{"title":"massive missile attack","url":"https://empr.media/tag/massive-missile-attack/page/8"},{"title":"massive attack","url":"https://empr.media/tag/massive-attack/page/4"}]
+
+I couldn't find the Kaggle dataset by piterfm in these results, so I can't confirm its contents or fields. The closest match is a similar public dataset from DiXi Group, hosted on the Ukraine energy map site. It records missile and drone strikes on Ukrainian critical infrastructure, and its fields include weapon type, subtype, the number fired, and the number shot down for the period 11.09.2022 to 26.08.2024. A later version of the same DiXi series covers data through 17.11.2024 and was last updated on 18.11.2024, though it isn't updated regularly.
+
+Other results were news reports and analyses, not dataset pages. They included an official Ukrainian Air Force report of a record attack in June 2025 with 537 missiles and drones, of which 475 were repelled, and an analysis of a November 2022 attack. For the Kaggle dataset itself, I'd suggest searching Kaggle directly for the uploader's name.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check the missile-attacks Kaggle dataset exists and when it was updated
+
+```
+curl -s -o /dev/null -w "%{http_code}\n" "https://www.kaggle.com/datasets/piterfm/massive-missile-attacks-on-ukraine"; curl -s "https://www.kaggle.com/api/v1/datasets/view/piterfm/massive-missile-attacks-on-ukraine" | python3 -c "import sys,json; d=json.load(sys.stdin); print({k:d.get(k) for k in ('title','lastUpdated','subtitle','totalBytes','licenseName','currentVersionNumber')})" 2>&1 | head -5
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+200
+{'title': 'Massive Missile Attacks on Ukraine', 'lastUpdated': '2026-10-10T15:30:22.52Z', 'subtitle': '2022–2023 russian strikes against Ukrainian', 'totalBytes': 908194, 'licenseName': 'CC BY-NC-SA 4.0', 'currentVersionNumber': 214}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect how the alert dataset is generated
+
+```
+curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/contents/processors" | python3 -c "import sys,json; [print(f['name']) for f in json.load(sys.stdin)]"; echo ----; curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/process.py | head -60; echo ----; curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/config.py.EXAMPLE
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+__init__.py
+legacy_states.py
+official_channel_processor.py
+pkl
+states.json
+tg_dataclasses.py
+volunteer_etryvoga_processor.py
+----
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+
+from config import API_ID, API_HASH, API_SESSION_STRING
+from processors.official_channel_processor import OfficialAirAlertProcessor
+from processors.volunteer_etryvoga_processor import VolunteerEtryvogaProcessor
+
+client = TelegramClient(StringSession(API_SESSION_STRING), API_ID, API_HASH)
+
+
+with client:
+    # process_oblasts_only() creates a dataset with only oblasts info
+    # and starts from 26th of February
+    processor = VolunteerEtryvogaProcessor(client)
+    client.loop.run_until_complete(processor.process())
+
+    # Create a dataset with all official data
+    #  for oblasts, raions and hromadas,
+    #  and it starts from 15th of March
+    processor = OfficialAirAlertProcessor(client)
+    client.loop.run_until_complete(processor.process())
+----
+import os
+
+# From https://my.telegram.org/apps
+API_ID = int(os.environ.get('API_ID', '15705'))
+API_SESSION_STRING = os.environ.get('API_SESSION_STRING')
+API_HASH = os.environ.get('API_HASH')
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read the official-channel parser source
+
+```
+curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/official_channel_processor.py | head -80
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+import csv
+import datetime
+import json
+import logging
+import os.path
+import pathlib
+import pickle
+from typing import Optional, List
+
+from telethon.tl.types import Message
+
+from .legacy_states import get_new_name
+from .tg_dataclasses import OfficialAirRaidAlertChannelAlert, PLACE_LEVEL
+
+logging.basicConfig()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+data_uk_file_path = pathlib.Path(__file__).parent.resolve() / "../datasets/official_data_uk.csv"
+data_en_file_path = pathlib.Path(__file__).parent.resolve() / "../datasets/official_data_en.csv"
+
+last_processed_id_path = pathlib.Path(__file__).parent.resolve() / "pkl" / "official_last_processed_id.txt"
+pkl_file_path = pathlib.Path(__file__).parent.resolve() / "pkl" / "official_active_alerts.pkl"
+
+
+class OfficialAirAlertProcessor:
+    channel_name = "air_alert_ua"
+
+    # State
+    # key is place name in hashtag format, value is tuple (oblast name, raion name, hromada name, level)
+    hash_states_by_name: dict[str, tuple[str, str, str, PLACE_LEVEL]] = {}
+
+    active_alerts_by_location: dict[str, OfficialAirRaidAlertChannelAlert] = {}
+    completed_alerts: list[OfficialAirRaidAlertChannelAlert] = []
+
+    last_processed_id: int = 0
+
+    def __init__(self, client):
+        self.client = client
+
+        self.load_states()
+        self.load_active_alerts()
+        self.load_last_processed_id()
+
+    async def process(self):
+        previous_day = None
+
+        logging.info("Starting processing official channel messages from %s", self.last_processed_id)
+
+        # TODO Fetch latest days from .csv file and just append it
+        async for message in self.client.iter_messages(self.channel_name, reverse=True, min_id=self.last_processed_id):
+            if not previous_day or previous_day != message.date.date():
+                previous_day = message.date.date()
+                logger.info("Processing day %s", previous_day)
+
+            if not message.message:
+                continue
+
+            self.process_message(message)
+
+            self.last_processed_id = message.id
+
+        logging.info("Finished processing official channel messages at %s", self.last_processed_id)
+        self.write()
+
+    def load_active_alerts(self):
+        if not os.path.exists(pkl_file_path):
+            return
+
+        with open(pkl_file_path, "rb") as f:
+            self.active_alerts_by_location = pickle.load(f)
+
+    def dump_active_alerts(self):
+        with open(pkl_file_path, "wb") as f:
+            pickle.dump(self.active_alerts_by_location, f)
+
+    def load_last_processed_id(self):
+        if not os.path.exists(last_processed_id_path):
+            return
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md`
+
+```
+---
+name: data-sources
+description: Alert history and Telegram sources found on 2026-10-12, with their freshness, granularity and gotchas
+metadata:
+  type: reference
+---
+
+Findings as of 2026-10-12 (re-verify freshness before relying on them):
+
+- github.com/Vadimkin/ukrainian-air-raid-sirens-dataset (MIT, times in UTC). It is built with Telethon by parsing the Telegram channel @air_alert_ua (processors/official_channel_processor.py).
+  - official_data_en.csv: columns oblast,raion,hromada,level,started_at,finished_at,source; starts 2022-03-15. Stopped updating 2026-09-08 (last alert 2026-09-07), although the repo still gets daily commits.
+  - Mostly raion-level alerts from about Aug–Nov 2025; oblast-level before that.
+  - volunteer_data_en.csv: oblast-level only; columns region,started_at,finished_at,naive; current to the present day.
+  - Permanent sirens are excluded from the files: Luhansk since 2022-04-04, Crimea since 2022-12-10.
+- alerts.in.ua API: the history endpoint only covers `month_ago`, at 2 requests/min, and needs a requested token. It cannot backfill more than about a month.
+- Telegram feature channels:
+  - @kpszsu (official Air Force): post volume grew strongly from 2024; about 86k IDs.
+  - @deraketaua (volunteer monitoring): from 2022-10; about 65k IDs.
+  - @air_alert_ua: about 338k IDs; this is the target/alert data itself, not a feature source.
+- Kaggle piterfm/massive-missile-attacks-on-ukraine (CC BY-NC-SA 4.0): per-attack launched/destroyed counts. Counts are published after the attack, so key features by publication time.
+- Prior work: arXiv 2411.14625 (Pavlyshenko). RandomForest, "alert within 5 min", 4 oblasts, time split at 2024-07-01, no Telegram features.
+
+Related: [[kse-stage2-task]]
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md",
+  "old_string": "**Why:** It is graded",
+  "new_string": "Agreed plan (2026-10-12):\n- The forecast is fully parametrized (target: active/onset/minutes/time-to-event; unit: oblast/raion; step; horizons). Code supports the whole grid; the write-up evaluates one main configuration in depth.\n- Model progression: baselines → logistic regression → LightGBM → LightGBM + Telegram. Report whatever results come out. See [[data-sources]].\n\n**Why:** It is graded"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/MEMORY.md`
+
+```
+- [KSE Stage 2 task](kse-stage2-task.md) — what this repo is for, no-leakage rules, submission = repo + full AI chat export, agreed plan
+- [Data sources](data-sources.md) — alert datasets and Telegram channels found 2026-10-12: freshness, granularity, gotchas
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/MEMORY.md has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+### Assistant (2026-10-12 14:58:06 UTC)
+
+## 1. Target and horizon
+
+### What "horizon" means
+
+When we make a forecast, four time settings are involved:
+
+- **Forecast time *t*:** the moment the forecast is made. The model sees only data from before *t*.
+- **Step:** the length of one predicted time slot, e.g. 15 min, 1 h or 1 day.
+- **Horizon *h*:** which future slot we're predicting, counted in steps from *t*. *h* = 1 is the slot right after *t*.
+- **Issue frequency:** how often a new forecast is made, e.g. every hour or once a day.
+
+For example, with *t* = 18:00 and a 1-hour step:
+
+```
+   the model can see             │  the model predicts
+… 15:00   16:00   17:00   18:00  │ 18–19   19–20   20–21   …   17–18 tomorrow
+                                 t  h=1     h=2     h=3     …   h=24
+```
+
+The horizon matters because accuracy drops the further ahead you look, and different information matters at different distances:
+- **h = 1:** "an alert is on now" dominates the forecast.
+- **h = 24:** time-of-day and day-of-week patterns and recent attack intensity dominate.
+
+So we report results for each horizon, as a score-vs-horizon curve per model. Short and long horizons also answer different practical questions: "is it safe to start the exam now?" versus "should we plan the event for tomorrow evening?"
+
+### Making everything a parameter
+
+Yes, we can do that. The code would take a forecast specification like this sketch:
+
+```python
+ForecastSpec(target="active",      # active | onset | minutes | time_to_event
+             unit="oblast",        # oblast | raion
+             step="1h",            # 15min | 1h | 1d
+             horizons=range(1, 25))
+```
+
+Inside, every alert source is converted into one table of alert periods: region, start, end. From that table, any specification gets:
+- its grid of (region, *t*) rows;
+- its labels at each horizon;
+- its features, computed only from what was known at *t*.
+
+The no-leakage rule then lives in one function used by every specification. The backtest and the baselines are also shared.
+
+The "several models" are handled internally: you ask with a specification, and the code trains whichever models it needs, e.g. one LightGBM per horizon. The "minutes" target only switches LightGBM from yes/no to regression. "Time to event" can be posed as a series of "does an alert start in this slot, given none has started yet?" questions, so it reuses the onset setup.
+
+Three caveats:
+
+1. **Raion level has a short history.** I counted the official data. In June 2025 there were 680 raion-level alerts against 2,926 oblast-wide ones. By November 2025 it was 14,514 against 328. Before about August 2025, an oblast-wide alert can be spread to all of its raions, but raion-specific behaviour only has about a year of data.
+2. **Small steps multiply cost.** A 15-minute step with a 24-hour horizon means 96 horizons.
+3. **There are too many combinations to analyse all of them well.** 4 targets × 2 units × 3 steps = 24 configurations, each with many horizons. The code can support all of them, but a mini-project can't analyse each one carefully.
+
+So I'd make **one main configuration** the focus of the write-up: oblast × 1 h × active, h = 1–24, with the calm-vs-on-alert evaluation split from before. Other configurations go in a short comparison table. Raion level would be a secondary configuration covering the period since autumn 2025.
+
+## 2. Telegram
+
+### This affects the core alert data too
+
+- The main alert dataset ([Vadimkin, MIT licence](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset)) is created by **parsing the official `@air_alert_ua` Telegram channel** with Telethon, a Python library for Telegram's API.
+- **Its official raion-level file stopped updating on 2026-09-08**; the last alert in it is from 2026-09-07. The repo still gets daily commits, but those only update the volunteer file. The volunteer file is current through this morning but has oblasts only.
+- [alerts.in.ua](https://devs.alerts.in.ua/) can't close that gap. Its history goes back only one month (to about 12 September), at 2 requests per minute.
+
+**So to get the most recent data, we need to read `@air_alert_ua` ourselves.** Telegram access is needed now for the alert data. Telegram *features* still come after the baselines.
+
+### Is there a ready-made dataset?
+
+Not for the channels we need. The academic datasets I found:
+- [Bawa et al., ICWSM 2025](https://arxiv.org/html/2501.01884v3): 518 channels, but only about one year before and after the invasion.
+- [TRWU (UNLP 2024)](https://aclanthology.org/2024.unlp-1.5.pdf): annotated Telegram news.
+- A [Helsinki channel list on Zenodo](https://zenodo.org/records/16949193): channel metadata only, no posts.
+
+None of them covers September–October 2026, which is our test period. Since we have to download recent posts anyway, downloading the full history of a few channels adds little work.
+
+One structured dataset is worth adding: **[Massive Missile Attacks on Ukraine](https://www.kaggle.com/datasets/piterfm/massive-missile-attacks-on-ukraine)** on Kaggle. It counts missiles and drones launched and shot down per attack, based on Air Force reports. It was updated 2026-10-10 and is licensed CC BY-NC-SA 4.0. That gives attack-intensity features, but with a leakage trap: the counts are published *after* an attack, usually in the morning report. Features must therefore be dated by publication time, not attack time. I haven't checked its columns yet.
+
+### Sources
+
+| Channel | What it posts | Since | ~Posts (latest ID) | Role |
+|---|---|---|---|---|
+| `@air_alert_ua` (official "Повітряна тривога") | Automatic start and end messages for each raion or hromada | Mar 2022 | ~338k | **Alert data** (the target, not a feature) |
+| `@kpszsu` (Air Force, 909k subscribers) | Drone groups and their direction, missile launches, morning attack summaries | 2022 | ~86k | Main text features |
+| `@deraketaua` ("Де ракета", 156k subscribers) | Volunteer tracking: drone counts, routes, shoot-downs | Oct 2022 | ~65k | Second feature source: faster but unofficial |
+
+To see how fast the Air Force channel grew, I sampled post dates at different message IDs:
+
+| Message ID | Date |
+|---|---|
+| ~2k | Oct 2022 |
+| 10k | Jan 2024 |
+| 20k | Sep 2024 |
+| 40k | Aug 2025 |
+| 60k | Apr 2026 |
+
+**So the Telegram signal changes over time.** "3 posts mentioning Kharkiv in the last hour" means something different in 2022 than in 2026. In practice, we'd train the Telegram model on about 2024 onwards and compare it with the alerts-only model **on the same period**, so the comparison is fair.
+
+Related work: [Pavlyshenko & Pavlyshenko (2024)](https://arxiv.org/html/2411.14625v1) used the same alert dataset with a random forest. They predicted "an alert within the next 5 minutes" for 4 oblasts, using a single train/test split by date. They found neighbouring regions and hour/weekday/month features most important. They used no Telegram features, and their extracted text mentions no baseline comparison or leakage discussion. Those are the gaps our project fills.
+
+### How long the download takes
+
+The three channels hold about 490k posts in total. Message IDs are an upper bound, because deleted posts leave gaps. Telethon fetches up to 100 messages per request. Telegram doesn't publish its rate limits ([Telethon FAQ](https://docs.telethon.dev/en/stable/quick-references/faq.html)), so this is my estimate: **about 1–3 hours in total**, including the pauses Telegram enforces. The text itself is only tens of MB. I'll write the downloader to resume where it stopped and run it in the background.
+
+Two other routes, without the API:
+- **Public web preview** (`t.me/s/<channel>`, no login): about 25k page loads, so 7+ hours at a polite pace. It also loses edit timestamps, which we need for the leakage check.
+- **Telegram Desktop's "Export chat history":** manual, one channel at a time. Fine as a fallback.
+
+**What you need to do:** create an API app at [my.telegram.org/apps](https://my.telegram.org/apps) to get an `api_id` and `api_hash`. The first login asks for your phone number and a code. That happens in **your terminal**, through a script I'll prepare, never in this chat.
+
+## 3 and 4
+
+Noted: the submission is the repo plus the chat export, and the plan is baselines → logistic regression → LightGBM → LightGBM + Telegram.
+
+## Next
+
+1. **You:** create the Telegram API credentials.
+2. **Me:**
+   - set up the repo structure, `.env.example` and `.gitignore`;
+   - write the alert-data loader for the official and volunteer files;
+   - write the Telegram downloader that fills 8 September to today from `@air_alert_ua`.
+3. **Then:** exploratory analysis and the baselines for the main configuration.
+
+Should I start on step 2 with oblast × 1 h × active, h = 1–24, as the main configuration?
+
+Sources:
+- [Vadimkin/ukrainian-air-raid-sirens-dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset)
+- [alerts.in.ua API docs](https://devs.alerts.in.ua/)
+- [Pavlyshenko & Pavlyshenko, arXiv 2411.14625](https://arxiv.org/html/2411.14625v1)
+- [Bawa et al., Telegram as a Battlefield (arXiv 2501.01884)](https://arxiv.org/html/2501.01884v3)
+- [TRWU, UNLP 2024](https://aclanthology.org/2024.unlp-1.5.pdf)
+- [Zenodo: Russian and Ukrainian war-related Telegram channels](https://zenodo.org/records/16949193)
+- [Kaggle: Massive Missile Attacks on Ukraine](https://www.kaggle.com/datasets/piterfm/massive-missile-attacks-on-ukraine)
+- [Telethon FAQ](https://docs.telethon.dev/en/stable/quick-references/faq.html)
+- [netfreedom.org.ua guide to monitoring channels (2026)](https://netfreedom.org.ua/de-raketa-v-telehram-povnyi-hid-z-monitorynhu-povitrianykh-zahroz-u-2026-rotsi/)
+- [Kyiv Post on monitoring channels](https://www.kyivpost.com/amp/post/14817)
+- Telegram web previews: [t.me/s/kpszsu](https://t.me/s/kpszsu), [t.me/s/air_alert_ua](https://t.me/s/air_alert_ua), [t.me/s/deraketaua](https://t.me/s/deraketaua)
+
+---
+
+## User (2026-10-12 16:34:07 UTC)
+
+1. Got the horizon meaning. 
+2. Raion level has a short history: Got it, but it's still interesting. I see that we do not have the data at the raion level after 8th of september; is there a way to actually close that gap while keeping high quality and accuracy?
+3. Small steps multiply cost: Sure. I think we can print some estimated time for the computations. By the way, we would need to calculate the whole model each time we run it, so the time it takes to forecast something will differ depending on the difficulty and amount of data? Do we have, like, training/inference stages here?
+4. There are too many combinations to analyse all of them well: In what aspect will it be hard? Do we need to manually configure each of them? Will it be hard to write a lot of code, analyze the results of the forecasts, or something else?  What is the overhead?
+2. 
+3. The dataset from Kaggle looks interesting; could it impact the quality of the forecasts? How shall we integrate that data into the computations?
+4. Maybe check the Pavlyshenko & Pavlyshenko paper; are there any insights we can adopt?
+5. What date should we download the Telegram data from?  Will the desktop's "Export chat history" be faster than the API? Will it be equally good?
+
+<details><summary>Tool call: Bash</summary>
+
+Check workflow runs and what the latest commit changed
+
+```
+cd /tmp/aaf_peek && curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/actions/runs?per_page=5" | python3 -c "import sys,json; [print(r['created_at'], r['name'], r['conclusion']) for r in json.load(sys.stdin).get('workflow_runs',[])]"; echo ----; curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/commits?per_page=1" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['sha'])" > sha.txt; curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/commits/$(cat sha.txt)" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f['filename'], f['changes']) for f in d['files']]"; echo ----; curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/pkl/official_last_processed_id.txt; echo; curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/pkl/volunteer_last_processed_id.txt 2>/dev/null | head -c 100; echo; curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/contents/processors/pkl" | python3 -c "import sys,json; [print(f['name']) for f in json.load(sys.stdin)]"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2026-10-12T05:03:30Z Update datasets success
+2026-10-11T04:48:22Z Update datasets success
+2026-10-10T04:59:51Z Update datasets success
+2026-10-09T05:15:10Z Update datasets success
+2026-10-08T05:12:08Z Update datasets success
+----
+datasets/volunteer_data_en.csv 185
+datasets/volunteer_data_uk.csv 185
+processors/pkl/volunteer_active_alerts.pkl 0
+processors/pkl/volunteer_last_processed_id.txt 2
+----
+338380
+653539
+.gitkeep
+official_active_alerts.pkl
+official_last_processed_id.txt
+volunteer_active_alerts.pkl
+volunteer_last_processed_id.txt
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check date and text of latest official alert channel posts
+
+```
+curl -s "https://t.me/s/air_alert_ua" | grep -o 'datetime="[^"]*"' | tail -3; echo ----; curl -s "https://t.me/s/air_alert_ua" | python3 -I -c "
+import sys,re,html
+s=sys.stdin.read()
+texts=re.findall(r'tgme_widget_message_text[^>]*>(.*?)</div>', s, re.S)
+for t in texts[-4:]:
+    print('-', html.unescape(re.sub('<[^>]+>',' ',t)).strip()[:300])
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+datetime="2026-09-07T06:08:49+00:00"
+datetime="2026-09-07T06:08:54+00:00"
+datetime="2026-09-07T06:09:04+00:00"
+----
+- 🔴    🔴   09:01 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада!  Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття  #м_Запоріжжя_та_Запорізька_територіальна_громада
+- 🔴   09:08 Повітряна тривога в Ізюмський район  Слідкуйте за подальшими повідомленнями.  #Ізюмський_район
+- 🔴   09:08 Повітряна тривога в Лозівський район  Слідкуйте за подальшими повідомленнями.  #Лозівський_район
+- 🔴   09:09 Повітряна тривога в Шосткинський район  Слідкуйте за подальшими повідомленнями.  #Шосткинський_район
+```
+
+</details>
+
+### Assistant (2026-10-12 16:35:18 UTC)
+
+The official `@air_alert_ua` channel itself went silent on 2026-09-07 at 06:09 UTC. So the gap is in the source, not in the dataset's pipeline. Now I'm looking for other raion-level sources.
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "канал \"Повітряна тривога\" air_alert_ua припинив роботу вересень 2026",
+  "mode": "extended"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://api.ukrainealarm.com/swagger/index.html",
+  "prompt": "List all API endpoints (paths and short descriptions), especially any history endpoints (regionHistory, dateHistory) and how far back they go, granularity (oblast, raion, hromada), how to get an API key, and rate limits."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The server returned HTTP 403 Forbidden.
+
+The response body was not retrieved. If this URL requires authentication, use an authenticated tool (e.g. `gh` for GitHub, or an MCP-provided fetch tool) instead of WebFetch.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "канал "Повітряна тривога" air_alert_ua припинив роботу вересень 2026"
+
+Links: [{"title":"Повітряна Тривога","url":"https://t.me/s/air_alert_ua"},{"title":"Оновлення застосунку «Повітряна тривога»: доступні всі області, версія для Huawei, подовжена тривалість сигналу та ін.","url":"https://ajax.systems/ua/blog/air-alert-update/"},{"title":"Чому не приходять сповіщення про тривоги?","url":"https://blog.alerts.in.ua/p/push-notifications-issue"},{"title":"alerts.in.ua","url":"https://t.me/s/alerts_in_ua?before=137"},{"title":"API Docs","url":"https://devs.alerts.in.ua/"},{"title":"\"Година запитань до уряду\" знову була перервана через повітряну тривогу","url":"https://interfax.com.ua/news/general/1218339.html"},{"title":"Telegram channel \"Повітряна Тривога\" — @air_alert_ua — TGStat","url":"https://uk.tgstat.com/en/channel/@air_alert_ua"},{"title":"Війна Росії проти України. Всі новини на цей час","url":"https://www.radiosvoboda.org/a/rosiya-ukrayina-zahroza-viyny/31703318/lbl0lbi469504.html"},{"title":"🔴 Карта повітряних тривог України — тривога зараз, шахеди","url":"https://my-kiev.com/alerts/"},{"title":"Повітряна Тривога • 248 тыс подписчиков","url":"https://uk.telegram-store.com/catalog/channels/air_alert_ua"}]
+
+Поиск не нашёл никаких сообщений о том, что канал @air_alert_ua прекратил работу в сентябре 2026 года. Ни одного источника с такой информацией в результатах нет.
+
+Что нашлось:
+- Страница канала в Telegram описывает его как официальный канал, который информирует о воздушной тревоге в любом регионе Украины, а информацию, по её словам, предоставляют органы исполнительной власти Украины (Інформація надається органами виконавчої влади України).
+- Каталог TGStat показывает свежие сообщения о тревогах и отбоях по районам (Повітряна Тривога @air_alert_ua), но дата этого снимка в результатах не указана, поэтому он не подтверждает текущую работу канала.
+- Сторонние сервисы по-прежнему ссылаются на канал как на источник данных. Например, сервис alerts.in.ua указывает, что данные берутся из официальных источников, таких как официальное API, канал «Повітряна тривога», ОВА, Суспільне, ДСНС. Документация могла устареть, поэтому это тоже не доказательство.
+
+Вывод: данных о прекращении работы канала в сентябре 2026 года нет. Чтобы проверить статус, стоит открыть t.me/air_alert_ua напрямую или посмотреть последние сообщения в канале, а также новости от органов власти, которые упоминаются как источник данных.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Probe official alarm API docs and alerts.in.ua channel news
+
+```
+for u in "https://api.ukrainealarm.com/swagger/v3/swagger.json" "https://api.ukrainealarm.com/swagger/v1/swagger.json" "https://api.ukrainealarm.com/swagger/index.html"; do echo "$u -> $(curl -s -o /tmp/aaf_peek/sw.json -w '%{http_code}' -A 'Mozilla/5.0' "$u")"; done; python3 -I -c "
+import json
+try:
+  d=json.load(open('/tmp/aaf_peek/sw.json'))
+  for p,v in d.get('paths',{}).items(): print(p, list(v.keys()), (list(v.values())[0].get('summary') or '')[:100])
+except Exception as e: print('not json', e)
+"; echo ----; curl -s "https://t.me/s/alerts_in_ua" | python3 -I -c "
+import sys,re,html
+s=sys.stdin.read()
+dates=re.findall(r'datetime=\"([^\"]*)\"', s)
+texts=re.findall(r'tgme_widget_message_text[^>]*>(.*?)</div>', s, re.S)
+for d,t in list(zip(dates,texts))[-4:]:
+    print(d, '-', html.unescape(re.sub('<[^>]+>',' ',t)).strip()[:400])
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+https://api.ukrainealarm.com/swagger/v3/swagger.json -> 403
+https://api.ukrainealarm.com/swagger/v1/swagger.json -> 403
+https://api.ukrainealarm.com/swagger/index.html -> 403
+not json Expecting value: line 1 column 1 (char 0)
+----
+2025-01-03T11:09:40+00:00 - Зміна методики оголошення тривог у Черкаській області   На Черкащині впровадили систему диференційованих повітряних тривог.  У разі прольоту безпілотника над окремим районом тривогу оголошуватимуть лише в цьому районі, а не по всій області.  Система оповіщення про ракетні загрози залишилася без змін.
+2025-01-11T19:04:21+00:00 - Режим спостереження  А Ви знали, що на мапі тривог можна дивитися, що та де летить?  Детальніше можете прочитати в блозі.   https://blog.alerts.in.ua/p/missiles-movement
+2025-04-15T10:21:05+00:00 - Вирішили провести коротке опитування, щодо благодійного мерчу від Мапи тривог.  То ж якщо у Вас є вільна хвилина часу, будемо вдячні за Ваші відповіді.   https://alerts.in.ua/poll/charity-merch?source=telegram
+2025-04-23T09:10:14+00:00 - ⚡️  Збираємо на Медевак  (Збір завершено)   За донат від 300 грн — розігруємо декілька цивільних медаптечок від UA First Aid.    Переможців розіграшу можна подивитися за посиланням:   https://charity.alerts.in.ua/uafirstaid-medvak81/?utm_source=telegram&_=1
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "api.ukrainealarm.com regionHistory dateHistory endpoint api v3 alerts history",
+  "mode": "standard"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://air-alarms.in.ua/",
+  "prompt": "What does this site offer: historical alert data per region (oblast/raion/hromada)? Downloadable data, API, history by date? How far back? Is the data current (latest date shown)?"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The server returned HTTP 403 Forbidden.
+
+The response body was not retrieved. If this URL requires authentication, use an authenticated tool (e.g. `gh` for GitHub, or an MCP-provided fetch tool) instead of WebFetch.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "api.ukrainealarm.com regionHistory dateHistory endpoint api v3 alerts history"
+
+Links: [{"title":"pypi.org","url":"https://pypi.org/project/ua-alarm/1.3.6.4/"},{"title":"# SITREP — UKRAINE AIR RAID WARNING STATUS","url":"https://api.alerts.in.ua/v3/alerts/active.md"},{"title":"pypi.org","url":"https://pypi.org/project/ua-alarm/1.3.9/"},{"title":"REST API for Alerts History","url":"https://docs.confluent.io/platform/6.2/control-center/alerts/rest.html"},{"title":"wikipedia.com","url":"https://Wikipedia.com/wiki/Alerts.in.ua"},{"title":"www.urlert.com","url":"https://www.urlert.com/domains/ukrainealarm.com"},{"title":"History And Events","url":"https://docs.candescent.com/api/generated/history-and-events/"},{"title":"Ukraine Alarm","url":"https://home-assistant.io/integrations/ukraine_alarm"},{"title":"uav radar","url":"https://peerpush.com/p/uav-radar"},{"title":"History And Events","url":"https://dev.dbk.ncr.com/docs/api/generated/history-and-events/"}]
+
+The search didn't turn up the official documentation for the `regionHistory` or `dateHistory` endpoints, so I can't confirm their parameters or response format from these results.
+
+What the results do show:
+
+- **UkraineAlarm API:** A Python client library says it implements the api.ukrainealarm.com API, which returns information about air raid alarms in Ukraine. It also notes that an API key is required, and it is requested through a form on api.ukrainealarm.com.
+- **Rate limits:** A Home Assistant integration that uses a public wrapper around the service says you can monitor up to 5 regions to avoid hitting the API rate limit. That wrapper is a different API, so this is only a rough guide.
+- **Unrelated results:** The Confluent "alerts history" docs (`/2.0/alerts/history`) and the Candescent/NCR "History And Events" docs describe different products, so I'd disregard them for this query.
+- **Unreliable result:** An alerts.in.ua page labeled as a live status report reads like unverified or possibly fabricated data. I wouldn't rely on it.
+
+To pin down the endpoints, the next search should target the UkraineAlarm developer documentation or its GitHub repository, such as the `PaulAnnekov/ukrainealarm` project that the Python library credits.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://pypi.org/project/ua-alarm/1.3.9/",
+  "prompt": "List the API methods/endpoints this client implements for api.ukrainealarm.com (e.g., get_alerts, region history, date history), with any notes on how far back history goes and granularity."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The page content you provided doesn't mention any API methods, endpoints, or history details for api.ukrainealarm.com. It only contains a message saying a required part of the site failed to load, probably because of a browser extension, network issue, or browser setting.
+
+To answer your question, you'd need the client's actual code or network traffic, or the provider's official API documentation. If you can share the page's source, JavaScript files, or captured requests that call api.ukrainealarm.com, I can list the endpoints and note any details about history range and granularity.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Download alarm-API client package and list endpoints it uses
+
+```
+mkdir -p /tmp/aaf_peek/pkg && cd /tmp/aaf_peek/pkg && curl -s https://pypi.org/pypi/ua-alarm/json | python3 -I -c "
+import sys,json; d=json.load(sys.stdin); 
+urls=[u['url'] for u in d['urls'] if u['packagetype']=='sdist' or u['url'].endswith('.whl')]; print(urls[:2]); open('u.txt','w').write(urls[0])
+" && curl -sL -o pkg.tgz "$(cat u.txt)" && (tar xzf pkg.tgz 2>/dev/null || unzip -oq pkg.tgz) ; grep -rhoE '"/api/v3[^"]*"|/api/v3/[A-Za-z/{}_]+' . | sort -u | head -30
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+['https://files.pythonhosted.org/packages/de/69/c47d34290a361031a78d6fc7f35873ef34434ec9387e201f902c124adc1e/ua_alarm-1.3.10.3.tar.gz']
+"/api/v3/alerts"
+"/api/v3/alerts/regionHistory"
+"/api/v3/alerts/status"
+"/api/v3/regions"
+"/api/v3/webhook"
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read how the client calls the region history endpoint
+
+```
+cd /tmp/aaf_peek/pkg && grep -rn -B3 -A12 'regionHistory' --include=*.py . | head -50
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+(eval):1: no matches found: --include=*.py
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 16:35:57 UTC)
+
+Still checking the official UkraineAlarm API for a history endpoint that could fill the raion-level gap.
+
+<details><summary>Tool call: Bash</summary>
+
+Show code around the region history call
+
+```
+cd /tmp/aaf_peek/pkg && grep -rn -B3 -A12 'regionHistory' . | grep -v '^Binary' | head -40
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+ua_alarm-1.3.10.3/ua_alarm/client.py-33-
+ua_alarm-1.3.10.3/ua_alarm/client.py-34-    _ALERTS_ENDPOINT = "/api/v3/alerts"
+ua_alarm-1.3.10.3/ua_alarm/client.py-35-    _ALERT_STATUS_ENDPOINT = "/api/v3/alerts/status"
+ua_alarm-1.3.10.3/ua_alarm/client.py:36:    _REGION_HISTORY_ENDPOINT = "/api/v3/alerts/regionHistory"
+ua_alarm-1.3.10.3/ua_alarm/client.py-37-    _REGIONS_ENDPOINT = "/api/v3/regions"
+ua_alarm-1.3.10.3/ua_alarm/client.py-38-    _WEBHOOK_ENDPOINT = "/api/v3/webhook"
+ua_alarm-1.3.10.3/ua_alarm/client.py-39-
+ua_alarm-1.3.10.3/ua_alarm/client.py-40-    def __init__(self, api_token: str):
+ua_alarm-1.3.10.3/ua_alarm/client.py-41-        """
+ua_alarm-1.3.10.3/ua_alarm/client.py-42-        Initializes the UkraineAlertApiClient with the provided API token.
+ua_alarm-1.3.10.3/ua_alarm/client.py-43-
+ua_alarm-1.3.10.3/ua_alarm/client.py-44-        Args:
+ua_alarm-1.3.10.3/ua_alarm/client.py-45-            api_token (str): The API token required for authorization.
+ua_alarm-1.3.10.3/ua_alarm/client.py-46-        """
+ua_alarm-1.3.10.3/ua_alarm/client.py-47-        self.base_url = "https://api.ukrainealarm.com"
+ua_alarm-1.3.10.3/ua_alarm/client.py-48-        self.headers = {"Authorization": api_token}
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read the region history method docstring
+
+```
+cd /tmp/aaf_peek/pkg && grep -n -A25 'def get_region_history\|def .*history' ua_alarm-1.3.10.3/ua_alarm/client.py | head -40
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+132:    async def get_region_history(
+133-            self, region_id: str | int
+134-    ) -> types.RegionAlarmsHistory:
+135-        """
+136-        Retrieves the history of alerts for a specific region from the UkraineAlert API.
+137-
+138-        Args:
+139-            region_id (str or int): The ID of the region for which the history of alerts is requested.
+140-
+141-        Returns:
+142-            types.RegionAlarmsHistory: An object representing the history of alerts for the specified region.
+143-        """
+144-        params = {"regionId": region_id}
+145-        return await self.__make_request(
+146-            "GET", self._REGION_HISTORY_ENDPOINT, params=params
+147-        )
+148-
+149-    async def get_regions(self) -> types.RegionsViewModel:
+150-        """
+151-        Retrieves information about regions from the UkraineAlert API.
+152-
+153-        Returns:
+154-            types.RegionsViewModel: An object representing information about regions.
+155-        """
+156-        return await self.__make_request("GET", self._REGIONS_ENDPOINT)
+157-
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check available Python tooling
+
+```
+python3 -c "import pandas, numpy; print(pandas.__version__, numpy.__version__)" 2>&1; which uv pip3 python3; python3 --version
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'pandas'
+/opt/homebrew/bin/uv
+/opt/homebrew/opt/python@3.12/libexec/bin/pip3
+/opt/homebrew/opt/python@3.12/libexec/bin/python3
+Python 3.12.14
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Compare official vs volunteer hourly alert states
+
+```
+mkdir -p /tmp/aaf_scripts && cat > /tmp/aaf_scripts/compare_sources.py <<'EOF'
+import sys
+import pandas as pd
+
+off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+vol = pd.read_csv(sys.argv[2], parse_dates=["started_at", "finished_at"])
+print("official oblast names:", sorted(off.oblast.unique()))
+print("volunteer region names:", sorted(vol.region.unique()))
+print("naive share (2026):", vol[vol.started_at >= "2026-01-01"].naive.mean().round(3))
+
+start, end = pd.Timestamp("2026-06-01", tz="UTC"), pd.Timestamp("2026-09-07", tz="UTC")
+hours = pd.date_range(start, end, freq="h", inclusive="left")
+
+def hourly_active(df, region_col):
+    df = df[(df.finished_at > start) & (df.started_at < end)]
+    out = {}
+    for region, g in df.groupby(region_col):
+        s = pd.Series(False, index=hours)
+        for a, b in zip(g.started_at, g.finished_at):
+            s[(hours + pd.Timedelta(hours=1) > a) & (hours < b)] = True
+        out[region] = s
+    return pd.DataFrame(out)
+
+o = hourly_active(off, "oblast")
+v = hourly_active(vol, "region")
+common = sorted(set(o.columns) & set(v.columns))
+print("common regions:", len(common), "| only official:", sorted(set(o.columns) - set(v.columns)), "| only volunteer:", sorted(set(v.columns) - set(o.columns)))
+o, v = o[common], v[common]
+agree = (o == v).values.mean()
+tp = (o & v).values.sum(); fp = (~o & v).values.sum(); fn = (o & ~v).values.sum()
+print(f"hourly 'active' agreement Jun 1 - Sep 6 2026: {agree:.3f}; volunteer precision vs official {tp/(tp+fp):.3f}, recall {tp/(tp+fn):.3f}")
+per = pd.DataFrame({"official_active_share": o.mean(), "volunteer_active_share": v.mean(), "agreement": (o == v).mean()}).round(3)
+print(per.sort_values("agreement").to_string())
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/compare_sources.py /tmp/aaf_peek/official_data_en.csv /tmp/aaf_peek/volunteer_data_en.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+official oblast names: ['Cherkaska oblast', 'Chernihivska oblast', 'Chernivetska oblast', 'Dnipropetrovska oblast', 'Donetska oblast', 'Ivano-Frankivska oblast', 'Kharkivska oblast', 'Khersonska oblast', 'Khmelnytska oblast', 'Kirovohradska oblast', 'Kyiv City', 'Kyivska oblast', 'Luhanska oblast', 'Lvivska oblast', 'Mykolaivska oblast', 'Odeska oblast', 'Poltavska oblast', 'Rivnenska oblast', 'Sumska oblast', 'Ternopilska oblast', 'Vinnytska oblast', 'Volynska oblast', 'Zakarpatska oblast', 'Zaporizka oblast', 'Zhytomyrska oblast']
+volunteer region names: ['Cherkaska oblast', 'Chernihivska oblast', 'Chernivetska oblast', 'Dnipropetrovska oblast', 'Donetska oblast', 'Ivano-Frankivska oblast', 'Kharkivska oblast', 'Khersonska oblast', 'Khmelnytska oblast', 'Kirovohradska oblast', 'Kyiv City', 'Kyivska oblast', 'Luhanska oblast', 'Lvivska oblast', 'Mykolaivska oblast', 'Odeska oblast', 'Poltavska oblast', 'Rivnenska oblast', 'Sumska oblast', 'Ternopilska oblast', 'Vinnytska oblast', 'Volynska oblast', 'Zakarpatska oblast', 'Zaporizka oblast', 'Zhytomyrska oblast']
+naive share (2026): 0.047
+common regions: 24 | only official: [] | only volunteer: []
+hourly 'active' agreement Jun 1 - Sep 6 2026: 0.806; volunteer precision vs official 0.864, recall 0.600
+                         official_active_share  volunteer_active_share  agreement
+Donetska oblast                          0.998                   0.279      0.281
+Zaporizka oblast                         0.983                   0.338      0.355
+Sumska oblast                            0.976                   0.523      0.547
+Chernihivska oblast                      0.869                   0.514      0.638
+Dnipropetrovska oblast                   1.000                   0.670      0.670
+Kharkivska oblast                        0.994                   0.676      0.681
+Volynska oblast                          0.018                   0.310      0.701
+Poltavska oblast                         0.575                   0.420      0.792
+Lvivska oblast                           0.008                   0.211      0.797
+Khersonska oblast                        0.467                   0.376      0.805
+Mykolaivska oblast                       0.535                   0.482      0.852
+Odeska oblast                            0.489                   0.414      0.880
+Cherkaska oblast                         0.236                   0.189      0.885
+Kyivska oblast                           0.361                   0.271      0.892
+Kirovohradska oblast                     0.397                   0.309      0.895
+Kyiv City                                0.165                   0.164      0.899
+Zhytomyrska oblast                       0.139                   0.145      0.924
+Ternopilska oblast                       0.014                   0.053      0.956
+Khmelnytska oblast                       0.031                   0.060      0.957
+Vinnytska oblast                         0.087                   0.070      0.961
+Rivnenska oblast                         0.045                   0.039      0.984
+Chernivetska oblast                      0.019                   0.017      0.994
+Ivano-Frankivska oblast                  0.009                   0.009      0.996
+Zakarpatska oblast                       0.007                   0.006      0.998
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect Volyn alerts in both sources
+
+```
+cat > /tmp/aaf_scripts/inspect_region.py <<'EOF'
+import sys
+import pandas as pd
+off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+vol = pd.read_csv(sys.argv[2], parse_dates=["started_at", "finished_at"])
+region = sys.argv[3]
+start, end = pd.Timestamp("2026-06-01", tz="UTC"), pd.Timestamp("2026-09-07", tz="UTC")
+for name, df, col in [("official", off, "oblast"), ("volunteer", vol, "region")]:
+    d = df[(df[col] == region) & (df.started_at >= start) & (df.started_at < end)].copy()
+    d["dur_h"] = (d.finished_at - d.started_at).dt.total_seconds() / 3600
+    print(f"--- {name} {region}: n={len(d)}, total hours={d.dur_h.sum():.0f}")
+    print(d.dur_h.describe().round(2).to_string())
+    print(d.sort_values("dur_h", ascending=False).head(5).drop(columns=[c for c in ("source",) if c in d]).to_string())
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/inspect_region.py /tmp/aaf_peek/official_data_en.csv /tmp/aaf_peek/volunteer_data_en.csv "Volynska oblast"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+--- official Volynska oblast: n=81, total hours=41
+count    81.00
+mean      0.51
+std       0.41
+min       0.08
+25%       0.26
+50%       0.32
+75%       0.48
+max       1.52
+                 oblast                      raion hromada  level                started_at               finished_at     dur_h
+268091  Volynska oblast     Kamin-Kashyrskyi raion     NaN  raion 2026-06-08 09:27:27+00:00 2026-06-08 10:58:41+00:00  1.520556
+265826  Volynska oblast     Kamin-Kashyrskyi raion     NaN  raion 2026-06-01 23:28:03+00:00 2026-06-02 00:58:09+00:00  1.501667
+265827  Volynska oblast              Lutskyi raion     NaN  raion 2026-06-01 23:28:11+00:00 2026-06-02 00:58:04+00:00  1.498056
+268104  Volynska oblast  Volodymyr-Volynskyi raion     NaN  raion 2026-06-08 10:25:25+00:00 2026-06-08 11:55:12+00:00  1.496389
+272030  Volynska oblast     Kamin-Kashyrskyi raion     NaN  raion 2026-06-21 08:12:50+00:00 2026-06-21 09:38:32+00:00  1.428333
+--- volunteer Volynska oblast: n=355, total hours=405
+count    355.00
+mean       1.14
+std        1.47
+min        0.01
+25%        0.45
+50%        0.70
+75%        1.25
+max       17.45
+                 region                started_at               finished_at  naive      dur_h
+102712  Volynska oblast 2026-07-01 12:14:15+00:00 2026-07-02 05:41:12+00:00  False  17.449167
+103062  Volynska oblast 2026-07-05 11:20:50+00:00 2026-07-05 19:22:08+00:00  False   8.021667
+105279  Volynska oblast 2026-07-25 00:28:20+00:00 2026-07-25 07:35:30+00:00  False   7.119444
+105066  Volynska oblast 2026-07-23 11:16:20+00:00 2026-07-23 18:15:30+00:00  False   6.986111
+107739  Volynska oblast 2026-08-16 02:30:20+00:00 2026-08-16 08:44:20+00:00  False   6.233333
+```
+
+</details>
+
+### Assistant (2026-10-12 16:37:38 UTC)
+
+Comparing the two alert sources turned up a definition mismatch that changes the gap answer. Now checking the Kaggle attacks dataset's columns.
+
+<details><summary>Tool call: Bash</summary>
+
+Try downloading the Kaggle attacks dataset
+
+```
+mkdir -p /tmp/aaf_peek/kaggle && cd /tmp/aaf_peek/kaggle && code=$(curl -sL -o ds.zip -w '%{http_code}' "https://www.kaggle.com/api/v1/datasets/download/piterfm/massive-missile-attacks-on-ukraine"); echo "http $code"; file ds.zip; unzip -o -q ds.zip 2>/dev/null && ls -la
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+http 200
+ds.zip: Zip archive data, at least v4.5 to extract, compression method=deflate
+total 2152
+drwxr-xr-x@ 5 david  wheel     160 Oct 12 19:37 .
+drwxr-xr-x@ 8 david  wheel     256 Oct 12 19:37 ..
+-rw-r--r--@ 1 david  wheel  184392 Oct 12 19:37 ds.zip
+-rw-r--r--@ 1 david  wheel  902798 Oct 10 15:30 missile_attacks_daily.csv
+-rw-r--r--@ 1 david  wheel    5396 Oct 10 15:30 missiles_and_uavs.csv
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect columns and freshness of attacks dataset
+
+```
+cat > /tmp/aaf_scripts/inspect_attacks.py <<'EOF'
+import sys
+import pandas as pd
+pd.set_option("display.width", 250); pd.set_option("display.max_colwidth", 60)
+d = pd.read_csv(sys.argv[1])
+print(d.shape); print(d.dtypes.to_string())
+print(d.head(3).T.to_string())
+print("--- latest rows")
+print(d.sort_values("time_start").tail(5)[["time_start","time_end","model","launched","destroyed","target","launch_place","source"] if "source" in d else d.columns[:8]].to_string())
+for c in ("time_start","time_end"):
+    s = d[c].astype(str)
+    print(c, "examples:", s.sample(5, random_state=1).tolist(), "| share with time-of-day:", s.str.contains(":").mean().round(3))
+print("rows per year:", pd.to_datetime(d.time_start, errors="coerce", format="mixed").dt.year.value_counts().sort_index().to_dict())
+print("target non-null share:", d.target.notna().mean().round(3) if "target" in d else "n/a")
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/inspect_attacks.py /tmp/aaf_peek/kaggle/missile_attacks_daily.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+(4224, 22)
+time_start                        str
+time_end                          str
+model                             str
+launch_place                      str
+target                            str
+target_main                       str
+status_data                       str
+launched                      float64
+destroyed                     float64
+not_reach_goal                float64
+still_attacking               float64
+num_hit_location              float64
+num_fall_fragment_location    float64
+is_shahed                     float64
+border_crossing                   str
+carrier                           str
+affected region                   str
+destroyed_types                   str
+destroyed_details                 str
+launched_details                  str
+launch_place_details              str
+source                            str
+                                                                                                                                                     0                                                                                                 1                                                                                     2
+time_start                                                                                                                            2026-10-09 18:00                                                                                  2026-10-09 18:00                                                                      2026-10-08 18:00
+time_end                                                                                                                              2026-10-10 09:00                                                                                  2026-10-10 09:00                                                                      2026-10-09 08:00
+model                                                                                                                                   Shahed-136/131                                                                               Geran-4 and Geran-5                                                                        Shahed-136/131
+launch_place                Primorsko-Akhtarsk and Kursk oblast and Oryol oblast and Millerovo and Shatalovo and Hvardiiske, Crimea and Donetsk oblast                                                                                               NaN         Primorsko-Akhtarsk and Oryol oblast and Hvardiiske, Crimea and Donetsk oblast
+target                                                                                                                                         Ukraine                                                                                              west                                                                               Ukraine
+target_main                                                                Kyiv oblast and Kharkiv oblast and Poltava oblast and Dnipropetrovsk
+
+[… 4,760 characters shortened in this export …]
+
+                                NaN                                                                                   NaN
+launch_place_details                                                                                                                               NaN                                                                                               NaN                                                                                   NaN
+source                                                           kpszsu/posts/pfbid02nNW9Fo2np7kzxfTmuxnHPyDqTauuBf5Z6VuZhnCRL2PgrTU2c1AgEd5HostVwPegl           PvkZahid/posts/pfbid02LeUVNwqqRmbAMzWgRVVY6MvLRBWyPqs7Z59Pk8MWiChXyWpBGfAtR46DPhmDvQ8bl  kpszsu/posts/pfbid0BKLf3x2inZ4ojbsEU9bmqiJ53gXW2HjLtjVUAf3DSG9KmP7Kryws1ZGWKhQzn7ekl
+--- latest rows
+         time_start          time_end                model  launched  destroyed   target                                                                                                                launch_place                                                                                   source
+3  2026-10-08 18:00  2026-10-09 08:00  Geran-4 and Geran-5      21.0       21.0     west                                                                                                                         NaN  PvkZahid/posts/pfbid02PefWxCeNBDCYMwwfLyAkLmhib7AWWfxNAn6TnyjVFQ3MRmPMuBxtHfone5Mveeptl
+2  2026-10-08 18:00  2026-10-09 08:00       Shahed-136/131     136.0      114.0  Ukraine                                               Primorsko-Akhtarsk and Oryol oblast and Hvardiiske, Crimea and Donetsk oblast     kpszsu/posts/pfbid0BKLf3x2inZ4ojbsEU9bmqiJ53gXW2HjLtjVUAf3DSG9KmP7Kryws1ZGWKhQzn7ekl
+4        2026-10-09        2026-10-09          Unknown UAV      28.0       28.0    south                                                                                                                         NaN  PvKPivden/posts/pfbid0TnVT4UwcJq5KYq9CqQJZvJRi1CPJsaD21T4QXo143BQZSFp1gCVjXuU2nQbkctmhl
+1  2026-10-09 18:00  2026-10-10 09:00  Geran-4 and Geran-5      25.0       25.0     west                                                                                                                         NaN  PvkZahid/posts/pfbid02LeUVNwqqRmbAMzWgRVVY6MvLRBWyPqs7Z59Pk8MWiChXyWpBGfAtR46DPhmDvQ8bl
+0  2026-10-09 18:00  2026-10-10 09:00       Shahed-136/131     160.0      117.0  Ukraine  Primorsko-Akhtarsk and Kursk oblast and Oryol oblast and Millerovo and Shatalovo and Hvardiiske, Crimea and Donetsk oblast    kpszsu/posts/pfbid02nNW9Fo2np7kzxfTmuxnHPyDqTauuBf5Z6VuZhnCRL2PgrTU2c1AgEd5HostVwPegl
+time_start examples: ['2024-03-21', '2023-06-08 22:00', '2023-06-08 22:00', '2026-06-11 18:00', '2024-07-16'] | share with time-of-day: 0.42
+time_end examples: ['2024-03-21', '2023-06-09 04:00', '2023-06-09 04:00', '2026-06-12 08:00', '2024-07-16'] | share with time-of-day: 0.603
+rows per year: {2022: 103, 2023: 528, 2024: 1349, 2025: 1266, 2026: 978}
+target non-null share: 1.0
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://arxiv.org/html/2411.14625v1",
+  "prompt": "I need precise details: (1) the exact list of features, including which lags (in minutes) and how neighbouring regions' features were constructed; (2) how 'cumulative alert duration' is defined; (3) the 'ndays' feature and what they say about it; (4) the description of their earlier Telegram channel/NLP heuristic approach; (5) any accuracy/AUC numbers mentioned anywhere (text or captions); (6) the EDA findings (e.g., hourly patterns, durations, correlations between regions, clustering); (7) their stated conclusions and future work. Quote key sentences."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Note:** The paper is an arXiv preprint (2411.14625v1). Its text and figure captions don't give every detail you asked for, so I've marked gaps where they occur.
+
+**1) Feature list, lags, and neighbour construction**
+- Inputs are binary alert indicators for each oblast, one per region name, at 1-minute resolution. The paper says "we can use lagged values for binary regions features," but it never states the lag values in minutes.
+- Other inputs are a per-region cumulative-duration feature (see 2), plus month, day of week, hour, and `ndays`.
+- One model is trained per target region: Lvivska, Vinnytska, Kyivska, and Kharkivska oblasts. Targets use 5- and 15-minute horizons.
+- The paper does not explain how neighbouring regions were chosen or how their features were built. It only reports that neighbour features rank highly in importance.
+
+**2) Cumulative alert duration**
+- Despite the name, the definition describes the current duration of an alert, not a running total. The paper says: "When the air alert starts in a region, then this feature is equal to the current duration of the alert."
+- It is 0 when there is no alert in that region, and it returns to 0 "When the alert in the region is over."
+
+**3) The `ndays` feature**
+- It is "the number of days from the initial date in the dataset."
+- The authors say it matters because "the patterns of air alerts are constantly changing and there are different alert patterns for different time periods."
+- The abstract adds that "Some regions highly rely on the time feature."
+
+**4) Earlier Telegram/NLP approach**
+- The authors created a Telegram channel for air-alert forecasts. The method was "loading messages from other Telegram Messenger channels, analyze them using NLP methods," followed by "experimental heuristics" to predict when an alert would start.
+- The paper gives no details on the NLP methods, the heuristics, or how well they worked.
+
+**5) Accuracy and AUC numbers**
+- The text and captions report no numeric accuracy or AUC values. Those results appear only in figure images that aren't described in the text.
+- The appendix code prints accuracy to two decimals and puts AUC in the ROC legend, but no values are reported.
+- Other issues: the text says "500 iterations," while the code uses `n_estimators=500`. Figures 20–21 (Kharkivska) reuse the Kyivska filenames, so they may be mislabelled.
+
+**6) EDA findings**
+- Heatmaps and boxplots show alert durations by oblast, but the text gives no numbers.
+- Luhansk has only a short history in the dataset.
+- The authors say that "the alerts from neighbouring regions have higher correlation with air alerts in Kharkiv oblast" than distant western regions do.
+- The correlation heatmap shows "some regions has high level of correlation," which the authors read as evidence of geospatial patterns.
+- The time series runs from Mar 25 2022 to Nov 6 2024 at 1-minute granularity.
+- Hourly patterns, clustering, and specific duration statistics are not discussed.
+
+**7) Conclusions and future work**
+- The conclusion states that "features from neighboring regions play more important role for the target variable of a specified region."
+- It also notes that "air alert patterns change with time."
+- No future work is stated.
+- The stated aim is to "forecast the duration of air alerts," but the model actually predicts whether an alert will start within the next 5 or 15 minutes. The paper does not reconcile this mismatch.
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "- alerts.in.ua API: the history endpoint only covers `month_ago`, at 2 requests/min, and needs a requested token. It cannot backfill more than about a month.",
+  "new_string": "- The @air_alert_ua channel itself stopped posting on 2026-09-07 at 06:09 UTC (last message ID 338380). So the official CSV gap is in the source, not the pipeline. No public explanation found.\n- Volunteer and official oblast-level hourly \"active\" states disagree. Over Jun–Sep 2026 agreement is 80.6% (volunteer precision 0.86, recall 0.60).\n  - With \"any raion under alert\", frontline oblasts are active about 100% of hours.\n  - Volyn: volunteer has 355 alerts / 405 h vs official 81 / 41 h.\n  - Never splice the two sources across the train/test boundary.\n- alerts.in.ua API: the history endpoint only covers `month_ago`, at 2 requests/min, and needs a requested token. It cannot backfill more than about a month. It is the only found fill for the raion gap, and its window rolls forward daily.\n- UkraineAlarm API (api.ukrainealarm.com) has /api/v3/alerts/regionHistory. Its depth is unknown and it needs a key."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "- Kaggle piterfm/massive-missile-attacks-on-ukraine (CC BY-NC-SA 4.0): per-attack launched/destroyed counts. Counts are published after the attack, so key features by publication time.",
+  "new_string": "- Kaggle piterfm/massive-missile-attacks-on-ukraine (CC BY-NC-SA 4.0). Anonymous download works via https://www.kaggle.com/api/v1/datasets/download/piterfm/massive-missile-attacks-on-ukraine.\n  - Files: missile_attacks_daily.csv (about 4.2k rows, one per report window × weapon model) and missiles_and_uavs.csv.\n  - time_start/time_end is the report window, e.g. 18:00 → 09:00. Only about 42% of rows have a time of day; the rest are dates only.\n  - The source column is a Facebook post link, with no publication timestamp. Use a conservative availability lag, or match to @kpszsu post times.\n  - Has target_main (oblasts) and launch_place."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+### Assistant (2026-10-12 16:40:10 UTC)
+
+## 1. Closing the raion-level gap after 8 September
+
+**The gap is in the source itself.** The official `@air_alert_ua` channel posted its last message on **2026-09-07 at 06:09 UTC** (message 338380). The dataset's own pipeline stopped at that same message, so the parser isn't broken: the channel went quiet. I found no announcement explaining why. It's worth opening the channel in your Telegram app to check for a pinned post.
+
+Re-running the parser won't help, so we need another source:
+
+| Source | Period covered | Limits |
+|---|---|---|
+| **alerts.in.ua API**, history per raion | about 12 Sep → today (one month back only) | 2 requests per minute, so about 70 min for all raions; needs a token, requested through a form |
+| **UkraineAlarm** official API (`/api/v3/alerts/regionHistory`) | unknown | needs a key, requested through a form; its docs were blocked to me |
+| Volunteer dataset (we already have it) | up to today | oblasts only, and it measures something different (see below) |
+
+- **7–12 September is probably lost at raion level** (about 5 days), unless UkraineAlarm's history reaches back that far. Losing those days is acceptable: we mark them missing and skip them in raion-level training and scoring.
+- **This is urgent.** The alerts.in.ua window moves forward every day, so each day without the token loses another day of history.
+
+**Can we keep the quality high? Partly.**
+- **We can't directly validate alerts.in.ua against the official data.** The two don't overlap: official ends 7 Sep, and alerts.in.ua history starts around 12 Sep.
+- **What we can do:**
+  - compare their statistics (alerts per raion per day, durations) across the switch and look for jumps;
+  - cross-check against the volunteer data;
+  - if UkraineAlarm's history overlaps the official data, run a real side-by-side check.
+- **Why this matters:** I compared official and volunteer data hour by hour per oblast for 1 Jun – 6 Sep 2026.
+  - They agree only **80.6%** of the time.
+  - In Volyn, official data has 81 alerts and 41 hours under alert; volunteer data has 355 alerts and 405 hours.
+  - Part of the difference is definitional, part is unexplained.
+- **Rule this gives us:** never switch sources between training and test. Otherwise the model is scored against a target defined differently from the one it learned.
+
+**A second finding.** Since alerts became raion-level, "oblast on alert" effectively means "some raion is on alert." At the front that is almost always true. From June to September 2026:
+
+| Oblast | Hours with some raion on alert |
+|---|---|
+| Dnipropetrovsk | 100% |
+| Donetsk | 99.8% |
+| Kharkiv | 99.4% |
+
+An oblast-level forecast there is trivial. For the recent period, raion level is more than interesting: it may be the right main level. I'll show the numbers once the data is assembled, and you decide.
+
+## 2. Training vs inference, and time estimates
+
+Yes, the work splits into stages:
+
+| Stage | What happens | When | Cost |
+|---|---|---|---|
+| **Update data** | download only what's new | before a run | minutes |
+| **Build** | grid, labels and features for one forecast configuration (target, region level, step, horizons) | when the data or configuration changes | seconds to minutes, cached |
+| **Train** | fit models on all data before a cutoff date, save them to disk | e.g. daily or weekly | **expensive** |
+| **Predict** (inference) | load the saved models, compute features for "now", output probabilities | any time | **seconds** |
+| **Backtest** | repeat train + predict for many past cutoffs, then score | when evaluating | training cost × number of cutoffs |
+
+So a forecast does **not** retrain anything, and it stays fast however much history there is. Training time grows with rows × horizons, and a backtest multiplies that by the number of cutoffs. The backtest can also measure how stale a model can get before accuracy drops.
+
+**Time estimates:** before each training or backtest, the code times one small trial fit and scales it up. LightGBM's time grows roughly linearly with the number of rows. Rough laptop figures, to be measured:
+
+| Configuration | Rows per horizon | Horizons | One full training |
+|---|---|---|---|
+| Oblast × 1 h, since 2022 | ~1M | 24 | ~5–20 min |
+| Raion × 1 h, since Nov 2025 | ~1M | 24 | ~5–20 min |
+| Raion × 15 min | ~4M | 96 | hours |
+| Oblast × 1 day | ~40k | 7 | seconds |
+
+Two ways to cut cost: train only selected horizons (e.g. 1, 2, 3, 6, 12, 24, which is 4× fewer models), and limit the training window.
+
+## 3. Where the overhead of many configurations comes from
+
+Nothing needs manual setup: a configuration is a handful of parameters, and a list of them in a config file runs in a loop. The cost sits in four places:
+
+1. **Code (moderate, one-time).** It scales with the **4 target types** (a label builder and a matching baseline for each), not the 24 combinations. The fiddly part is edge cases:
+   - Does an alert that restarts after a 2-minute gap count as a new onset?
+   - How do we count minutes for an alert that crosses midnight?
+   - What do we do with "time to next alert" when the data ends before the next alert happens?
+2. **Compute:** every configuration needs its own backtest, at the costs in the table above.
+3. **Checking and explaining: the real cost.** Each configuration's results need checking: are they plausible, is there leakage, do they beat the baselines, are the probabilities calibrated? 24 configurations × 24 horizons × several metrics gives thousands of numbers, and the write-up has to explain them.
+4. **A statistical trap.** If you try 24 configurations and highlight whichever scores best on the test period, you've tuned to the test data, and that score is optimistic. That is a quieter form of leakage. The fix:
+   - choose using the validation period;
+   - use the test period once;
+   - report every configuration, not just the winner.
+
+So everything runs automatically into one summary table, and only the main configuration gets the deep analysis.
+
+## 4. The Kaggle attacks dataset
+
+I downloaded it. It has about 4,200 rows, one per Air Force report × weapon type, from 2022 to 10 Oct 2026. Each row has:
+- the report window (e.g. 18:00 → 09:00);
+- the weapon (Shahed, the jet drones Geran-4/5, missile types);
+- counts launched and destroyed, and hits;
+- the main target oblasts and the launch sites.
+
+For example, on the night of 9–10 October: 160 Shaheds launched, 117 destroyed, main targets Kyiv, Kharkiv, Poltava and Dnipropetrovsk oblasts.
+
+**Will it improve forecasts?** My expectation is a small-to-moderate gain at long horizons and about zero at short ones. The with/without comparison will decide.
+- Much of it repeats what the alert history already shows: a big attack means many alerts.
+- **What alerts can't show:** scale (20 drones vs 160), weapon mix (ballistic missiles vs drones), the main target oblasts, and where launches came from.
+- Reports come out the morning after, so the dataset can't help at 1–3 h. It may help at 12–24 h and with daily targets, for example through patterns like "a big combined missile strike every week or two."
+
+**How we'd integrate it:**
+1. **Download script.** The data isn't committed to the repo: its CC BY-NC-SA licence means we download it and credit the author.
+2. **Decide when each row became public. This is the step that controls leakage.** The dataset gives the report window, not the publication time (its sources are Facebook links), and only 42% of rows include a time of day. Rule:
+   - rows with a time are usable from the window end plus a safety buffer, e.g. 3 h;
+   - date-only rows are usable from the next day.
+
+   Later, we can match rows to the `@kpszsu` Telegram summaries to get exact publication times.
+3. **Features at *t*, using only rows already public before *t*:**
+   - launches in the last report;
+   - launches summed over the last 7 days;
+   - days since the last big missile strike;
+   - whether this oblast was a main target last night;
+   - share of launches destroyed.
+4. **Comparison:** the same model trained with and without these features.
+
+Two cautions:
+- Some rows come from regional Air Force commands (West, South) and may overlap with the national totals, so we must avoid counting them twice.
+- The dataset has been revised 214 times, so today's numbers for old attacks may differ from what was known at the time. The effect is small, but I'll list it as a limitation.
+
+## 5. Ideas from the Pavlyshenko & Pavlyshenko paper
+
+**Worth adopting:**
+- **Neighbouring regions' current alert state.** These were their most important features. We'll build a map of which oblasts and raions border each other and feed in the neighbours' states and recent history.
+- **How long the current alert has lasted so far** (0 if calm). This is the same as our leakage-safe *t* − start.
+- **Hour, weekday and month** as features.
+- **Separate vs shared models.** They trained one model per oblast, for 4 oblasts. We can compare that with a single shared model that takes the region as a feature and so learns from more data.
+- **Prior Telegram use.** They mention an earlier Telegram/NLP prediction project, which supports our idea, but published no details.
+
+**What to do differently:**
+- **Their target.** "Alert within the next 5 minutes" counts an ongoing alert as positive, so the current state answers most of it. Without a "same as now" baseline, nobody can tell how much the model adds. We have both the baselines and the calm-vs-on-alert split.
+- **`ndays` (days since the data starts).** For tree models this is risky: every test-period value is larger than anything seen in training, so the model treats the whole test period like the last days of training. We'd handle changing patterns with a recent training window, extra weight on recent data, and frequent retraining instead. We can test `ndays` as one extra comparison.
+- **Single split at 2024-07-01.** We use repeated train-then-forecast cutoffs (walk-forward).
+- **No numbers in the text, some mislabelled figures, no leakage discussion.** We report tables and document the leakage controls.
+- **They also found that alert patterns change over time.** That matches the growth in Telegram posting volume and the switch to raion-level alerts.
+
+## 6. Telegram: start date, and Desktop export vs API
+
+**Start date:** download each feature channel's full history: `@kpszsu` from 2022 and `@deraketaua` from October 2022. That's about 150k posts, roughly 20–60 min. Downloading is cheap, while choosing the training period is an analysis decision, made after plotting posts per month. How the channels' posting changed over time is itself worth a paragraph in the write-up. `@air_alert_ua` needs no download, since it stopped and the existing dataset already contains its history.
+
+**Desktop export vs API:**
+- **Speed:** Desktop export isn't faster. The Desktop app talks to the same servers through the same API, under the same limits.
+- **Content:** about the same, with text, dates and edit times.
+- **The difference is reproducibility.** The API script can be rerun by graders, fetches only new posts before the final evaluation, and runs unattended. Desktop export means clicking through it by hand and re-exporting every time.
+
+I recommend the API, with Desktop export as a fallback if login fails.
+
+## What you need to do
+
+1. **Today:** request an alerts.in.ua token at [alerts.in.ua/api-request](https://alerts.in.ua/api-request). Its history window shrinks every day.
+2. Request a UkraineAlarm API key at api.ukrainealarm.com. Its history might cover 7–12 September.
+3. Create Telegram API credentials at [my.telegram.org/apps](https://my.telegram.org/apps).
+
+Keep all keys out of this chat; they'll go into `.env`.
+
+Meanwhile, should I start the repo skeleton and the loaders for the data we already have (official + volunteer alerts, Kaggle attacks)?
+
+Sources:
+- [t.me/s/air_alert_ua](https://t.me/s/air_alert_ua) — last post date
+- [Vadimkin/ukrainian-air-raid-sirens-dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset) — pipeline and last processed ID
+- [alerts.in.ua API docs](https://devs.alerts.in.ua/)
+- [ua-alarm on PyPI](https://pypi.org/project/ua-alarm/1.3.9/) — UkraineAlarm endpoints
+- [Kaggle: Massive Missile Attacks on Ukraine](https://www.kaggle.com/datasets/piterfm/massive-missile-attacks-on-ukraine)
+- [Pavlyshenko & Pavlyshenko, arXiv 2411.14625](https://arxiv.org/html/2411.14625v1)
+
+---
+
+## User (2026-10-12 17:06:37 UTC)
+
+1. I do have an alerts.in.ua API token, so we can download the data they provide. But no UkraineAlarm API key; they answer slowly, so skip them- no time to wait.
+2. So what is your recommendation for the configuration? Should we use several/parameters, or focus only on one? Why?
+3. Let's ignore the Kaggle dataset; I don't see a big impact on the results with it. 
+4. I like the Worth adopting section from the paper; keep it. 
+5. Ok, let's use the API for Telegram channel downloads.
+And let's create some sort of design doc, where we will keep track of the architecture decisions and open questions about it that we need to answer before the start of building, and the overview of the product.
+
+<details><summary>Tool call: Bash</summary>
+
+Download the alerts.in.ua Python client to read its API usage
+
+```
+mkdir -p /tmp/aaf_peek/pkg2 && cd /tmp/aaf_peek/pkg2 && curl -s https://pypi.org/pypi/alerts_in_ua/json | python3 -I -c "
+import sys,json; d=json.load(sys.stdin); print(d['info']['version'], d['info']['project_urls']); 
+u=[x['url'] for x in d['urls'] if x['packagetype']=='sdist']; open('u.txt','w').write(u[0])" && curl -sL -o p.tgz "$(cat u.txt)" && tar xzf p.tgz && find . -name '*.py' | head -20
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+0.3.2 {'Homepage': 'https://github.com/alerts-ua/alerts-in-ua-py'}
+./alerts_in_ua-0.3.2/setup.py
+./alerts_in_ua-0.3.2/alerts_in_ua/alerts.py
+./alerts_in_ua-0.3.2/alerts_in_ua/air_raid_alert_status.py
+./alerts_in_ua-0.3.2/alerts_in_ua/air_raid_alert_oblast_statuses.py
+./alerts_in_ua-0.3.2/alerts_in_ua/user_agent.py
+./alerts_in_ua-0.3.2/alerts_in_ua/air_raid_alert_statuses.py
+./alerts_in_ua-0.3.2/alerts_in_ua/client.py
+./alerts_in_ua-0.3.2/alerts_in_ua/__init__.py
+./alerts_in_ua-0.3.2/alerts_in_ua/async_client.py
+./alerts_in_ua-0.3.2/alerts_in_ua/location_uid_resolver.py
+./alerts_in_ua-0.3.2/alerts_in_ua/errors.py
+./alerts_in_ua-0.3.2/alerts_in_ua/ua_date_parser.py
+./alerts_in_ua-0.3.2/alerts_in_ua/air_raid_alert_status_resolver.py
+./alerts_in_ua-0.3.2/alerts_in_ua/air_raid_alert_oblast_status.py
+./alerts_in_ua-0.3.2/alerts_in_ua/alert.py
+./alerts_in_ua-0.3.2/tests/test_alert.py
+./alerts_in_ua-0.3.2/tests/test_async_client.py
+./alerts_in_ua-0.3.2/tests/test_client.py
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read client history call, UID resolver and alert fields
+
+```
+cd /tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/alerts_in_ua && grep -n "history\|month_ago\|def \|url\|API_" client.py | head -40; echo ----; head -40 location_uid_resolver.py; grep -c ':' location_uid_resolver.py; echo ----; sed -n 1,60p alert.py
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+15:    API_BASE_URL = "https://api.alerts.in.ua"
+16:    def __init__(self, token: str):
+18:        self.base_url = Client.API_BASE_URL + "/v1/"
+27:    def _request(self, endpoint: str, use_cache=True):
+36:                self.base_url + endpoint,
+45:            self.base_url + endpoint,
+83:    def get_active_alerts(self, use_cache=True) -> Alerts:
+87:    def get_alerts_history(self, oblast_uid_or_location_title: Union[int, str], period: str = 'week_ago', use_cache: bool = True) -> Alerts:
+96:        url = f"regions/{oblast_uid}/alerts/{period}.json"
+97:        data = self._request(url, use_cache=use_cache)
+100:    def get_air_raid_alert_status(self, oblast_uid_or_location_title: Union[int, str], oblast_level_only=False, use_cache=True) -> AirRaidAlertOblastStatus:
+111:    def get_air_raid_alert_statuses_by_oblast(self, oblast_level_only=False, use_cache=True) -> AirRaidAlertOblastStatuses:
+115:    def get_air_raid_alert_statuses(self, use_cache=True) -> AirRaidAlertStatuses:
+----
+class LocationUidResolver:
+    def __init__(self):
+        self.uid_to_location = {
+            31: "м. Київ",
+            30: "м. Севастополь",
+            8: "Волинська область",
+            38: "Володимирський район",
+            41: "Камінь-Каширський район",
+            40: "Ковельський район",
+            39: "Луцький район",
+            4: "Вінницька область",
+            36: "Вінницький район",
+            37: "Гайсинський район",
+            35: "Жмеринський район",
+            33: "Могилів-Подільський район",
+            32: "Тульчинський район",
+            34: "Хмільницький район",
+            9: "Дніпропетровська область",
+            44: "Дніпровський район",
+            42: "Кам'янський район",
+            46: "Криворізький район",
+            47: "Нікопольський район",
+            45: "Павлоградський район",
+            43: "Самарівський район",
+            48: "Синельниківський район",
+            28: "Донецька область",
+            54: "Бахмутський район",
+            55: "Волноваський район",
+            51: "Горлівський район",
+            53: "Донецький район",
+            49: "Кальміуський район",
+            50: "Краматорський район",
+            52: "Маріупольський район",
+            56: "Покровський район",
+            10: "Житомирська область",
+            57: "Бердичівський район",
+            59: "Житомирський район",
+            60: "Звягельський район",
+            58: "Коростенський район",
+            11: "Закарпатська область",
+160
+----
+from typing import Optional, Dict, List, Union
+import json
+import datetime
+import pytz
+from .ua_date_parser import UaDateParser
+
+class Alert:
+
+    def __init__(self, data: Dict):
+        self.id = data["id"]
+        self.location_title = data.get("location_title")
+        self.location_type = data.get("location_type")
+        self.started_at = UaDateParser.parse_date(data.get("started_at"))
+        self.finished_at = UaDateParser.parse_date(data.get("finished_at"))
+        self.updated_at = UaDateParser.parse_date(data.get("updated_at"))
+        self.alert_type = data.get("alert_type")
+        self.location_uid = data.get("location_uid")
+        self.location_oblast = data.get("location_oblast")
+        self.location_oblast_uid = data.get("location_oblast_uid")
+        self.location_raion = data.get("location_raion")
+        self.notes = data.get("notes")
+        self.calculated = data.get("calculated")
+
+
+    def is_finished(self) -> bool:
+        return self.finished_at is not None
+    def __repr__(self):
+        return f"Alert({{'id': {self.id!r}, 'location_title': {self.location_title!r}, 'location_type': {self.location_type!r}, 'started_at': {self.started_at!r}, 'finished_at': {self.finished_at!r}, 'updated_at': {self.updated_at!r}, 'alert_type': {self.alert_type!r}, 'location_uid': {self.location_uid!r}, 'location_oblast': {self.location_oblast!r}, 'location_oblast_uid': {self.location_oblast_uid!r}, 'location_raion': {self.location_raion!r}, 'notes': {self.notes!r}, 'calculated': {self.calculated!r}}}"
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+List oblast-level UIDs and request/date handling
+
+```
+cd /tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/alerts_in_ua && python3 -I -c "
+import re
+src=open('location_uid_resolver.py').read()
+pairs=re.findall(r'(\d+): \"([^\"]+)\"', src)
+obl=[(int(u),n) for u,n in pairs if 'область' in n or n.startswith('м. ')]
+print(len(pairs), 'locations;', len(obl), 'oblast-level:'); print(sorted(obl))
+print('types:', {('район' in n, 'громада' in n) for u,n in pairs})
+"; sed -n 25,60p client.py; cat ua_date_parser.py | head -30
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+152 locations; 26 oblast-level:
+[(3, 'Хмельницька область'), (4, 'Вінницька область'), (5, 'Рівненська область'), (8, 'Волинська область'), (9, 'Дніпропетровська область'), (10, 'Житомирська область'), (11, 'Закарпатська область'), (12, 'Запорізька область'), (13, 'Івано-Франківська область'), (14, 'Київська область'), (15, 'Кіровоградська область'), (16, 'Луганська область'), (17, 'Миколаївська область'), (18, 'Одеська область'), (19, 'Полтавська область'), (20, 'Сумська область'), (21, 'Тернопільська область'), (22, 'Харківська область'), (23, 'Херсонська область'), (24, 'Черкаська область'), (25, 'Чернігівська область'), (26, 'Чернівецька область'), (27, 'Львівська область'), (28, 'Донецька область'), (30, 'м. Севастополь'), (31, 'м. Київ')]
+types: {(True, False), (False, False)}
+        self.cache = {}
+
+    def _request(self, endpoint: str, use_cache=True):
+        # Check if endpoint is in cache and return cached data if not modified
+        if endpoint in self.cache and use_cache == True:
+            cached_data = self.cache[endpoint]
+            headers = {
+                **self.headers,
+                **{"If-Modified-Since": cached_data["Last-Modified"]},
+            }
+            response = requests.get(
+                self.base_url + endpoint,
+                headers=headers,
+                timeout=Client.REQUEST_TIMEOUT,
+            )
+            if response.status_code == 304:
+                return cached_data["Data"]
+
+        # Make the request
+        response = requests.get(
+            self.base_url + endpoint,
+            headers=self.headers,
+            timeout=Client.REQUEST_TIMEOUT,
+        )
+
+        # Check if response is successful
+        if response.status_code == 200:
+            data = response.json()
+            self.cache[endpoint] = {
+                "Data": data,
+                "Last-Modified": response.headers["Last-Modified"],
+            }
+            return data
+        else:
+            message = None
+            try:
+import datetime
+import pytz
+from typing import Optional
+
+class UaDateParser:
+    @staticmethod
+    def parse_date(date_string: Optional[str], time_format: str='%Y-%m-%dT%H:%M:%S.%fZ' ) -> Optional[datetime.datetime]:
+        if date_string:
+            kyiv_tz = None
+            try:
+                kyiv_tz = pytz.timezone('Europe/Kyiv')
+            except pytz.UnknownTimeZoneError:
+                kyiv_tz = pytz.timezone('Europe/Kiev') # KyivNotKiev. Hopefully remove this method in future
+
+            utc_dt = datetime.datetime.strptime(date_string, time_format)
+            local_dt = utc_dt.replace(tzinfo=pytz.utc).astimezone(kyiv_tz)
+            return kyiv_tz.normalize(local_dt)
+        return None
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Skill</summary>
+
+```
+{
+  "skill": "mattpocock-skills:domain-modeling",
+  "args": "Create a design doc for this repo: product overview, architecture decision records (decisions made so far in our conversation), and open questions to resolve before building."
+}
+```
+
+</details>
+
+<details><summary>System: skill instructions loaded (2026-10-12 17:07:53 UTC)</summary>
+
+````
+Base directory for this skill: /Users/david/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.2.3/skills/engineering/domain-modeling
+
+# Domain Modeling
+
+Actively build and sharpen the project's domain model as you design. This is the *active* discipline: challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `CONTEXT.md` for vocabulary is not this skill: that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
+
+## File structure
+
+Most repos have a single context:
+
+```
+/
+├── CONTEXT.md
+├── docs/
+│   └── adr/
+│       ├── 0001-event-sourced-orders.md
+│       └── 0002-postgres-for-write-model.md
+└── src/
+```
+
+If a `CONTEXT-MAP.md` exists at the root, the repo has multiple contexts. The map points to where each one lives:
+
+```
+/
+├── CONTEXT-MAP.md
+├── docs/
+│   └── adr/                          ← system-wide decisions
+├── src/
+│   ├── ordering/
+│   │   ├── CONTEXT.md
+│   │   └── docs/adr/                 ← context-specific decisions
+│   └── billing/
+│       ├── CONTEXT.md
+│       └── docs/adr/
+```
+
+Create files lazily: only when you have something to write. If no `CONTEXT.md` exists, create one when the first term is resolved. If no `docs/adr/` exists, create it when the first ADR is needed.
+
+## During the session
+
+### Challenge against the glossary
+
+When the user uses a term that conflicts with the existing language in `CONTEXT.md`, call it out immediately. "Your glossary defines 'cancellation' as X, but you seem to mean Y. Which is it?"
+
+### Sharpen fuzzy language
+
+When the user uses vague or overloaded terms, propose a precise canonical term. "You're saying 'account': do you mean the Customer or the User? Those are different things."
+
+### Discuss concrete scenarios
+
+When domain relationships are being discussed, stress-test them with specific scenarios. Invent scenarios that probe edge cases and force the user to be precise about the boundaries between concepts.
+
+### Cross-reference with code
+
+When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible. Which is right?"
+
+### Update CONTEXT.md inline
+
+When a term is resolved, update `CONTEXT.md` right there. Don't batch these up: capture them as they happen. Use the format in [CONTEXT-FORMAT.md](./CONTEXT-FORMAT.md).
+
+`CONTEXT.md` should be totally devoid of implementation details. Do not treat `CONTEXT.md` as a spec, a scratch pad, or a repository for implementation decisions. It is a glossary and nothing else.
+
+### Offer ADRs sparingly
+
+Only offer to create an ADR when all three are true:
+
+1. **Hard to reverse**: the cost of changing your mind later is meaningful
+2. **Surprising without context**: a future reader will wonder "why did they do it this way?"
+3. **The result of a real trade-off**: there were genuine alternatives and you picked one for specific reasons
+
+If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
+
+
+ARGUMENTS: Create a design doc for this repo: product overview, architecture decision records (decisions made so far in our conversation), and open questions to resolve before building.
+````
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Launching skill: mattpocock-skills:domain-modeling
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read glossary and ADR format guides
+
+```
+cat /Users/david/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.2.3/skills/engineering/domain-modeling/CONTEXT-FORMAT.md; echo; echo =====; cat /Users/david/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.2.3/skills/engineering/domain-modeling/ADR-FORMAT.md
+```
+
+</details>
+
+<details><summary>Tool result (error)</summary>
+
+````
+Exit code 1
+# CONTEXT.md Format
+
+## Structure
+
+```md
+# {Context Name}
+
+{One or two sentence description of what this context is and why it exists.}
+
+## Language
+
+**Order**:
+{A one or two sentence description of the term}
+_Avoid_: Purchase, transaction
+
+**Invoice**:
+A request for payment sent to a customer after delivery.
+_Avoid_: Bill, payment request
+
+**Customer**:
+A person or organization that places orders.
+_Avoid_: Client, buyer, account
+```
+
+## Rules
+
+- **Be opinionated.** When multiple words exist for the same concept, pick the best one and list the others under `_Avoid_`.
+- **Keep definitions tight.** One or two sentences max. Define what it IS, not what it does.
+- **Only include terms specific to this project's context.** General programming concepts (timeouts, error types, utility patterns) don't belong even if the project uses them extensively. Before adding a term, ask: is this a concept unique to this context, or a general programming concept? Only the former belongs.
+- **Group terms under subheadings** when natural clusters emerge. If all terms belong to a single cohesive area, a flat list is fine.
+
+## Single vs multi-context repos
+
+**Single context (most repos):** One `CONTEXT.md` at the repo root.
+
+**Multiple contexts:** A `CONTEXT-MAP.md` at the repo root lists the contexts, where they live, and how they relate to each other:
+
+```md
+# Context Map
+
+## Contexts
+
+- [Ordering](./src/ordering/CONTEXT.md): receives and tracks customer orders
+- [Billing](./src/billing/CONTEXT.md): generates invoices and processes payments
+- [Fulfillment](./src/fulfillment/CONTEXT.md): manages warehouse picking and shipping
+
+## Relationships
+
+- **Ordering → Fulfillment**: Ordering emits `OrderPlaced` events; Fulfillment consumes them to start picking
+- **Fulfillment → Billing**: Fulfillment emits `ShipmentDispatched` events; Billing consumes them to generate invoices
+- **Ordering ↔ Billing**: Shared types for `CustomerId` and `Money`
+```
+
+The skill infers which structure applies:
+
+- If `CONTEXT-MAP.md` exists, read it to find contexts
+- If only a root `CONTEXT.md` exists, single context
+- If neither exists, create a root `CONTEXT.md` lazily when the first term is resolved
+
+When multiple contexts exist, infer which one the current topic relates to. If unclear, ask.
+
+(eval):1: ==== not found
+````
+
+</details>
+
+### Assistant (2026-10-12 17:07:57 UTC)
+
+Setting up the design doc now. I'm reading the decision-record format and then writing the files.
+
+<details><summary>Tool call: Bash</summary>
+
+Read decision-record format guide
+
+```
+cat /Users/david/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.2.3/skills/engineering/domain-modeling/ADR-FORMAT.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+````
+# ADR Format
+
+ADRs live in `docs/adr/` and use sequential numbering: `0001-slug.md`, `0002-slug.md`, etc.
+
+Create the `docs/adr/` directory lazily: only when the first ADR is needed.
+
+## Template
+
+```md
+# {Short title of the decision}
+
+{1-3 sentences: what's the context, what did we decide, and why.}
+```
+
+That's it. An ADR can be a single paragraph. The value is in recording *that* a decision was made and *why*, not in filling out sections.
+
+## Optional sections
+
+Only include these when they add genuine value. Most ADRs won't need them.
+
+- **Status** frontmatter (`proposed | accepted | deprecated | superseded by ADR-NNNN`): useful when decisions are revisited
+- **Considered Options**: only when the rejected alternatives are worth remembering
+- **Consequences**: only when non-obvious downstream effects need to be called out
+
+## Numbering
+
+Scan `docs/adr/` for the highest existing number and increment by one.
+
+## When to offer an ADR
+
+All three of these must be true:
+
+1. **Hard to reverse**: the cost of changing your mind later is meaningful
+2. **Surprising without context**: a future reader will look at the code and wonder "why on earth did they do it this way?"
+3. **The result of a real trade-off**: there were genuine alternatives and you picked one for specific reasons
+
+If a decision is easy to reverse, skip it: you'll just reverse it. If it's not surprising, nobody will wonder why. If there was no real alternative, there's nothing to record beyond "we did the obvious thing."
+
+### What qualifies
+
+- **Architectural shape.** "We're using a monorepo." "The write model is event-sourced, the read model is projected into Postgres."
+- **Integration patterns between contexts.** "Ordering and Billing communicate via domain events, not synchronous HTTP."
+- **Technology choices that carry lock-in.** Database, message bus, auth provider, deployment target. Not every library: just the ones that would take a quarter to swap out.
+- **Boundary and scope decisions.** "Customer data is owned by the Customer context; other contexts reference it by ID only." The explicit no-s are as valuable as the yes-s.
+- **Deliberate deviations from the obvious path.** "We're using manual SQL instead of an ORM because X." Anything where a reasonable reader would assume the opposite. These stop the next engineer from "fixing" something that was deliberate.
+- **Constraints not visible in the code.** "We can't use AWS because of compliance requirements." "Response times must be under 200ms because of the partner API contract."
+- **Rejected alternatives when the rejection is non-obvious.** If you considered GraphQL and picked REST for subtle reasons, record it; otherwise someone will suggest GraphQL again in six months.
+````
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check auth header and history call in client
+
+```
+cd /tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/alerts_in_ua && sed -n 1,24p client.py; sed -n 87,99p client.py
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+import requests
+from .errors import UnauthorizedError, RateLimitError, InternalServerError, ForbiddenError, ApiError
+from .alert import Alert
+from .alerts import Alerts
+from .user_agent import UserAgent
+from typing import List, Dict, Union
+from .air_raid_alert_oblast_statuses import AirRaidAlertOblastStatuses
+from .air_raid_alert_oblast_status import AirRaidAlertOblastStatus
+from .air_raid_alert_status import AirRaidAlertStatus
+from .air_raid_alert_statuses import AirRaidAlertStatuses
+from .location_uid_resolver import LocationUidResolver
+from .air_raid_alert_status_resolver import AirRaidAlertStatusResolver
+class Client:
+    REQUEST_TIMEOUT = 5
+    API_BASE_URL = "https://api.alerts.in.ua"
+    def __init__(self, token: str):
+        self.token = token
+        self.base_url = Client.API_BASE_URL + "/v1/"
+        self.location_uid_resolver = LocationUidResolver()
+        self.headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.token}",
+            "User-Agent": UserAgent.get_user_agent(self.token)
+        }
+    def get_alerts_history(self, oblast_uid_or_location_title: Union[int, str], period: str = 'week_ago', use_cache: bool = True) -> Alerts:
+        if isinstance(oblast_uid_or_location_title, str):
+           if oblast_uid_or_location_title.isdigit():
+              oblast_uid = int(oblast_uid_or_location_title)
+           else:
+              oblast_uid = self.location_uid_resolver.resolve_uid(oblast_uid_or_location_title)
+        else:
+            oblast_uid = oblast_uid_or_location_title
+
+        url = f"regions/{oblast_uid}/alerts/{period}.json"
+        data = self._request(url, use_cache=use_cache)
+        return Alerts(data)
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+View README and working tree
+
+```
+cat README.md && git status --short
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+# air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/CONTEXT.md`
+
+```
+# Air alert forecasting
+
+Forecasting air raid alerts in Ukraine using only information that was public before the forecast is made.
+
+## Language
+
+### Alerts
+
+**Alert**:
+A declared period during which a location is under an air raid warning. It has a location, a start and an end.
+_Avoid_: siren, alarm
+
+**Location level**:
+The administrative level an alert is declared for: oblast, raion or hromada. Since about autumn 2025, most alerts are declared per raion.
+
+**Alert source**:
+A record of alerts produced by one pipeline: official, volunteer or alerts.in.ua. Different sources define alerts differently, so they are not interchangeable.
+_Avoid_: dataset (when the source is meant)
+
+**Permanent alert**:
+An alert that has not ended since 2022, in Luhansk oblast and Crimea. These locations are excluded from forecasting.
+
+### Forecasts
+
+**Unit level**:
+The level forecasts are made for: oblast or raion.
+
+**Unit**:
+One specific oblast or raion that receives forecasts.
+_Avoid_: region, area
+
+**Forecast time (t)**:
+The moment a forecast is issued. Only information available strictly before t may be used.
+_Avoid_: now, issue date
+
+**Training cutoff**:
+The latest moment whose data a trained model has seen. It is never later than the forecast times the model is used for.
+
+**Step**:
+The length of one slot, e.g. 15 minutes, 1 hour or 1 day.
+
+**Slot**:
+A clock-aligned time interval one step long.
+
+**Horizon (h)**:
+How many steps ahead of t a slot lies. h = 1 is the slot that starts at t.
+_Avoid_: lead time
+
+**Target**:
+What is predicted for a unit and slot. It is one of Active, Onset, Minutes or Time to alert.
+
+**Active**:
+The unit is under alert at some moment during the slot.
+
+**Onset**:
+A new alert starts in the unit during the slot.
+
+**Minutes**:
+How many minutes of the slot the unit is under alert.
+
+**Time to alert**:
+The number of slots until the next onset in the unit.
+_Avoid_: time to event
+
+**Forecast spec**:
+A combination of target, unit level, step and horizons that defines one forecasting task.
+_Avoid_: config, setup, configuration
+
+**Main spec**:
+The forecast spec that is analysed in depth in the report.
+
+### Information and evaluation
+
+**Availability time**:
+The moment a piece of information became public, and from which forecasts may use it.
+_Avoid_: timestamp
+
+**As-of view**:
+Everything that was known strictly before a given t. It is the only data a forecast at t may use.
+
+**Calm at t / On alert at t**:
+Whether the unit was under alert at the forecast time. Results are reported separately for the two groups, because the calm group measures how well alert starts are predicted.
+
+**Baseline**:
+A simple rule that a model must beat. The two baselines are Persistence ("same state as at t") and Historical rate (the share of past slots with an alert at the same hour and weekday).
+
+**Backtest**:
+Repeating train-then-forecast over a sequence of training cutoffs, then scoring the forecasts against what actually happened.
+_Avoid_: cross-validation
+
+**Threat post**:
+A Telegram post reporting a threat that has been launched or is in flight (drones, missiles, aircraft). It is distinct from posts that only announce alerts.
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/docs/adr/0001-as-of-data-model.md`
+
+```
+---
+status: accepted
+---
+
+# Every record carries an availability time; features read data only through one as-of view
+
+Leakage is the task's one hard rule. Every record in the canonical tables therefore carries an **availability time**:
+- an alert's start is known from its start time;
+- its end is known only from its end time;
+- a Telegram post is known from its post time, or from its edit time if it was edited.
+
+Features may read data only through a single as-of function. It returns what was known strictly before t, and it clips alerts still in progress at t, because their end is not yet known.
+
+We chose this over building features ad hoc with shifted rolling windows. That approach spreads the leakage rule across dozens of places. A single choke point can be audited, and it can be tested by appending fake future data and checking that no feature changes.
+
+## Consequences
+
+- The feature pipeline is slower and more rigid than plain pandas rolling windows.
+- Raw data is stored exactly as fetched and never edited. Everything downstream is rebuilt from it.
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/docs/adr/0002-one-main-spec.md`
+
+```
+---
+status: proposed
+---
+
+# Code accepts any forecast spec; only one main spec is analysed in depth
+
+The code accepts any forecast spec: target × unit level × step × horizons. Only the **main spec** gets the full analysis: baselines, ablations, calibration, error analysis and write-up. A few secondary specs answer one question each. Any other spec appears only in an automatically generated summary table.
+
+Analysing every combination in depth is not worth it, for three reasons:
+- Checking and explaining results is the real cost: thousands of numbers across 24 specs × 24 horizons × several metrics.
+- Compute: each spec is a full backtest.
+- The selection trap: picking the best of many specs by its test-period score quietly tunes to the test data, so the reported score is optimistic.
+
+Proposed main spec: **raion × 1 h × Active, horizons 1–24**, scored separately for units calm at t and on alert at t. It depends on open question Q3 in [DESIGN.md](../DESIGN.md).
+
+## Considered options
+
+- **One hard-coded task:** simpler, but the product should answer different questions (next hour, tomorrow, how many minutes).
+- **Analysing the full grid:** too costly, and it invites the selection trap.
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/docs/adr/0003-one-alert-source-per-spec.md`
+
+```
+---
+status: accepted
+---
+
+# Each forecast spec uses one alert definition from training through test
+
+The available alert sources define alerts differently. Official and volunteer data agree on only 80.6% of oblast-hours (June–September 2026). If the source changed at the train/test boundary, the model would be scored against a different target from the one it learned.
+
+Each spec therefore uses a single definition end to end:
+- The official record ends on 2026-09-07. It is extended with alerts.in.ua history only after a consistency check (open question Q3 in [DESIGN.md](../DESIGN.md)).
+- No raion-level source covers 2026-09-07 to about 2026-09-12. That period is marked missing and is not trained on or scored.
+
+## Considered options
+
+- **Volunteer data after 2026-09-07:** it is current, but it has a different alert definition and is oblast-level only.
+- **UkraineAlarm API:** it might cover the gap, but key requests are answered slowly and there is no time to wait.
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/docs/adr/0004-telegram-via-api.md`
+
+```
+---
+status: accepted
+---
+
+# Telegram posts are downloaded through the official API (Telethon)
+
+Posts are downloaded with Telethon, using the user's own Telegram API credentials.
+
+## Considered options
+
+- **Public web preview (`t.me/s/<channel>`):** needs no login. It is slower (20 posts per page) and does not expose edit times. The leakage check needs edit times: a post edited after t must not be used in its edited form.
+- **Telegram Desktop "Export chat history":** gives about the same content. But it is manual, cannot be rerun by graders, and cannot fetch only new posts before the final evaluation.
+
+## Consequences
+
+- The user needs a Telegram account and `api_id`/`api_hash` credentials, kept in `.env`.
+- The first login happens in the user's terminal. The session file is git-ignored.
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/CONTEXT.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/docs/adr/0001-as-of-data-model.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/docs/adr/0002-one-main-spec.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/docs/adr/0003-one-alert-source-per-spec.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/docs/adr/0004-telegram-via-api.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/docs/DESIGN.md`
+
+````
+# Design: air raid alert forecasting
+
+Status: **pre-build**. Last updated 2026-10-12.
+
+Related documents:
+- Terms used here are defined in [CONTEXT.md](../CONTEXT.md).
+- Hard-to-reverse decisions are recorded in [docs/adr/](adr/).
+
+## 1. Product overview
+
+**What it is.** A Python tool that forecasts air raid alerts in Ukraine. At a forecast time t it uses only information published before t: the alert history and Telegram threat posts. For each unit (raion or oblast) it outputs the probability of an alert in each of the coming hours.
+
+**What question it answers.** "How likely is an alert here in the next hour, this evening, or this time tomorrow?" This helps people, schools and businesses plan. It is not a warning system and does not replace official alerts.
+
+**What it can do:**
+
+| Command | Result |
+|---|---|
+| `update-data` | Download new alert history and Telegram posts. Incremental. |
+| `train --spec …` | Fit the models for a forecast spec on everything before a training cutoff, and save them. |
+| `predict --spec … --at <time>` | Load saved models and print probabilities per unit × horizon. Takes seconds and does no retraining. |
+| `backtest --spec …` | Walk-forward evaluation on the latest period against baselines. Writes metric tables and plots. |
+
+Long training and backtest runs print an estimated duration first. The estimate comes from a timed trial fit scaled to the full data size.
+
+Example of `predict` output (the numbers are illustrative):
+
+```
+Forecast spec: raion × 1 h × Active   Forecast time: 2026-10-12 18:00 Kyiv (data up to 17:59)
+Raion                 h=1    h=3    h=6    h=12   h=24
+Kharkivskyi           0.83   0.66   0.58   0.49   0.55
+Kyiv city             0.11   0.19   0.27   0.34   0.21
+…
+```
+
+**Task constraints (from the KSE brief):**
+- Use the most recent data, and evaluate on the latest period.
+- No leakage: nothing used for training or as an input may come from after t.
+- Optional text or media data, under the same rule.
+- Submission is the GitHub repo plus a full export of the AI conversation. Secrets therefore never go into chat; they go only into the git-ignored `.env`.
+
+## 2. How it works
+
+```
+sources ─► raw layer ─► canonical tables ─► spec builder ─► models ─► forecasts / backtest reports
+           (as fetched,  (alert intervals,   (slots, labels,   (baselines, logistic regression,
+           never edited)  threat posts; each  as-of features)   LightGBM, LightGBM + Telegram)
+                          with an availability
+                          time)
+```
+
+- **Raw layer:** responses are stored exactly as fetched, and everything else is rebuilt from them ([ADR-0001](adr/0001-as-of-data-model.md)).
+- **As-of view:** features read data only through one function that returns what was known strictly before t. Alerts in progress at t are clipped at t ([ADR-0001](adr/0001-as-of-data-model.md)).
+- **Forecast spec:** target × unit level × step × horizons. One main spec is analysed in depth ([ADR-0002](adr/0002-one-main-spec.md)).
+- **Alert sources:** one alert definition per spec, from training through test ([ADR-0003](adr/0003-one-alert-source-per-spec.md)).
+- **Stages:** update data → build → train → predict. A backtest repeats train + predict over many training cutoffs. Training is the expensive stage; prediction loads saved models.
+
+## 3. Evaluation protocol
+
+- **Walk-forward backtest:** train on everything before a cutoff, forecast the next period, move the cutoff forward, repeat.
+- **Periods:** training | validation | test.
+  - Model and setting choices are made on validation.
+  - The test period is the latest period, and it is used once, for the final report.
+- **Baselines:** Persistence and Historical rate. Every model must be compared against both.
+- **Metrics, per horizon:**
+  - Brier score (primary);
+  - log loss, ROC-AUC, PR-AUC;
+  - calibration plot.
+- **Calm at t / On alert at t:** results are reported separately. The calm group measures how well onsets are predicted.
+- **Ablation:** compare with and without Telegram features on the same period.
+- **Reporting:** report every spec that was run, not only the best.
+
+## 4. Decisions
+
+Hard-to-reverse decisions (ADRs):
+
+| ADR | Decision | Status |
+|---|---|---|
+| [0001](adr/0001-as-of-data-model.md) | Every record has an availability time; features read data only through the as-of view | accepted |
+| [0002](adr/0002-one-main-spec.md) | Code accepts any forecast spec; one main spec is analysed in depth | proposed |
+| [0003](adr/0003-one-alert-source-per-spec.md) | One alert definition per spec, from training through test | accepted |
+| [0004](adr/0004-telegram-via-api.md) | Telegram posts are downloaded through the official API (Telethon) | accepted |
+
+Decision log (smaller choices that are easy to reverse):
+
+- **Model progression:** baselines → logistic regression → LightGBM → LightGBM + Telegram. LightGBM because the data is tabular, there are about 1M rows per horizon, it learns interactions on its own, it retrains fast, and SHAP explains it. *(2026-10-12)*
+- **Adopted from Pavlyshenko & Pavlyshenko (2024, arXiv 2411.14625):**
+  - neighbouring units' alert state and recent history;
+  - duration of the current alert so far (0 if calm);
+  - hour, weekday and month;
+  - a comparison of one shared model against one model per unit.
+
+  *(2026-10-12)*
+- **Not adopted:** the "days since start" trend feature (`ndays`). Trees cannot extrapolate it. Drift is handled instead with the training window, recency weighting and frequent retraining. It may be tested as an ablation. *(2026-10-12)*
+- **Rejected:** the Kaggle "Massive Missile Attacks on Ukraine" dataset. Its expected impact is small: it overlaps with the alert history, and its reports appear the morning after, so it cannot help at short horizons. It also needs its own leakage handling. *(2026-10-12)*
+- **Rejected:** the UkraineAlarm API, because key requests are answered too slowly. *(2026-10-12)*
+- **Time zones:** timestamps are stored in UTC. Calendar features (hour, weekday) are computed in Europe/Kyiv local time, so they follow daylight saving. *(2026-10-12)*
+
+## 5. Data sources (checked 2026-10-12)
+
+| Source | Coverage | Location level | Use |
+|---|---|---|---|
+| Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; about 90% raion since Nov 2025 | Main alert history |
+| [alerts.in.ua API](https://devs.alerts.in.ua/) history | Rolling one month, about 2026-09-12 → now | oblast / raion / hromada | Fill the gap and cover the latest period. Snapshot it before the window moves on. |
+| Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Cross-check reference |
+| Telegram `@kpszsu` (Air Force), `@deraketaua` (volunteer monitoring) | 2022 → now | Text mentioning oblasts, raions and cities | Threat-post features |
+
+Known facts that shape the design:
+- **`@air_alert_ua` is silent:** the channel has posted nothing since 2026-09-07 06:09 UTC, and no reason has been published.
+- **Raion gap:** no raion-level source covers 2026-09-07 to about 2026-09-12.
+- **Sources disagree:** official and volunteer data agree on only 80.6% of oblast-hours (June–September 2026). In Volyn, official data has 81 alerts and 41 h under alert; volunteer data has 355 alerts and 405 h.
+- **Frontline oblasts:** if "oblast on alert" means "any raion on alert", frontline oblasts are on alert in about 100% of hours (Dnipropetrovsk 100%, Donetsk 99.8%, Kharkiv 99.4%; June–September 2026).
+- **Permanent alerts:** Luhansk (since 2022-04-04) and Crimea (since 2022-12-10) are not in the datasets.
+- **Telegram volume grows:** posting on `@kpszsu` grew a lot over time, from about 2k posts by October 2022 to about 86k by October 2026, so the meaning of Telegram features changes over time.
+
+## 6. Open questions (to answer before building)
+
+### Data
+
+- **Q1. Does an oblast-level alerts.in.ua history request return raion-level alerts?**
+  - Why it matters: if it doesn't, we need about 125 raion requests (about 1 h) instead of 26 (about 13 min).
+  - How we'll decide: inspect the first snapshot.
+- **Q2. Is alerts.in.ua consistent with the official record?** No overlap period exists, so we check indirectly:
+  - **(a)** compare agreement(alerts.in.ua, volunteer) after 2026-09-12 with agreement(official, volunteer) before 2026-09-07, per oblast;
+  - **(b)** compare distributions across the boundary: alerts per raion per day, durations, and the mix of location levels.
+  - If they match, the raion main spec goes ahead. If not, see Q3.
+- **Q3. Fallback if Q2 fails.**
+  - Options: an oblast-level main spec built from one consistent source, or a shorter, alerts.in.ua-only raion period.
+- **Q4. Keeping the latest period current.**
+  - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
+
+### Target
+
+- **Q5. Main spec.**
+  - Proposal: raion × 1 h × Active, horizons 1–24, depending on Q2.
+  - Secondary specs: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).
+- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+  - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
+- **Q7. Label rules.**
+  - How much overlap makes a slot Active: any overlap, or at least 1 minute?
+  - Are alerts separated by a short gap merged when counting onsets? If so, how short is "short"?
+  - What to do with volunteer "naive" alerts, whose end time is imputed as start + 30 min?
+- **Q8. Units to exclude or report separately.**
+  - Permanent alerts (Luhansk, Crimea, Sevastopol).
+  - Occupied raions.
+  - Frontline raions on alert almost all the time: keep them in training but report metrics with and without them?
+
+### Evaluation
+
+- **Q9. Periods.**
+  - Training start for the raion spec: from November 2025 only, or include earlier years with oblast-wide alerts spread to all raions plus a regime flag?
+  - Validation period?
+  - Test period: proposed as the last 4 weeks, about 2026-09-14 → 2026-10-11.
+  - How often to retrain inside the backtest: weekly?
+- **Q10. Which horizons to train:** all of 1–24, or a subset (1, 2, 3, 6, 12, 24) to cut compute?
+
+### Features
+
+- **Q11. Neighbour map.**
+  - Source of raion boundaries, e.g. the admin-2 geojson.
+  - Definition of a neighbour: units that share a border.
+- **Q12. Telegram features.**
+  - Final channel list.
+  - Matching text to units: a list of oblast, raion and city names in all grammatical cases, mapped to raions.
+  - Feature types: threat posts per unit in the last 1/3/6 h, threat type (Shahed, jet drone, ballistic, cruise missile, MiG-31K, bombers).
+  - Edited posts: if a post was edited at or after t, use the original or drop it?
+  - From which date the Telegram model is trained, based on a plot of posts per month.
+  - Exclude LLM-based extraction? A model trained on data from the test period could leak.
+- **Q13. One shared model or one per unit:** decided by an experiment on the validation period. Default: shared.
+
+### Product
+
+- **Q14. Deliverable form.**
+  - CLI + README + a results notebook?
+  - Plots as PNG or as an HTML report?
+
+````
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/docs/DESIGN.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Point ADR cross-references at the right open question
+
+```
+sed -i '' 's/It depends on open question Q3 in/It depends on open question Q2 in/' docs/adr/0002-one-main-spec.md && sed -i '' 's/(open question Q3 in/(open question Q2 in/' docs/adr/0003-one-alert-source-per-spec.md && grep -n "Q2" docs/adr/*.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+docs/adr/0002-one-main-spec.md:14:Proposed main spec: **raion × 1 h × Active, horizons 1–24**, scored separately for units calm at t and on alert at t. It depends on open question Q2 in [DESIGN.md](../DESIGN.md).
+docs/adr/0003-one-alert-source-per-spec.md:10:- The official record ends on 2026-09-07. It is extended with alerts.in.ua history only after a consistency check (open question Q2 in [DESIGN.md](../DESIGN.md)).
+```
+
+</details>
+
+### Assistant (2026-10-12 17:11:14 UTC)
+
+The design docs are written. Next I'm adding the alerts.in.ua snapshot script, so nothing more is lost from its rolling one-month window.
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/scripts/fetch_alerts_in_ua.py`
+
+```
+"""Snapshot alerts.in.ua alert history before it rolls out of the API's one-month window.
+
+Each response is saved exactly as received to data/raw/alerts_in_ua/<fetched_at>/<uid>.json.
+Parsing happens later, so this script makes no decisions about the data.
+
+Usage: python scripts/fetch_alerts_in_ua.py [--uids 4 8 9 ...]
+Needs ALERTS_IN_UA_TOKEN in .env or in the environment.
+"""
+
+import argparse
+import json
+import os
+import pathlib
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+HISTORY_URL = "https://api.alerts.in.ua/v1/regions/{uid}/alerts/month_ago.json"
+# Oblast-level location UIDs from the alerts.in.ua location table (incl. Kyiv city and Sevastopol).
+OBLAST_UIDS = [3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31]
+REQUEST_INTERVAL_S = 31  # the history endpoint allows 2 requests per minute
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def load_token() -> str:
+    token = os.environ.get("ALERTS_IN_UA_TOKEN")
+    env_file = ROOT / ".env"
+    if not token and env_file.exists():
+        for line in env_file.read_text().splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "ALERTS_IN_UA_TOKEN":
+                token = value.strip().strip("\"'")
+    if not token:
+        sys.exit("ALERTS_IN_UA_TOKEN is not set: add it to .env")
+    return token
+
+
+def fetch(uid: int, token: str) -> bytes:
+    request = urllib.request.Request(
+        HISTORY_URL.format(uid=uid),
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read()
+        except urllib.error.HTTPError as error:
+            if error.code == 429 and attempt < 2:
+                time.sleep(60)
+                continue
+            raise
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--uids", type=int, nargs="+", default=OBLAST_UIDS)
+    args = parser.parse_args()
+
+    token = load_token()
+    fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+    out_dir = ROOT / "data" / "raw" / "alerts_in_ua" / fetched_at
+    out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Fetching {len(args.uids)} locations, about {len(args.uids) * REQUEST_INTERVAL_S / 60:.0f} min "
+          f"(the API allows 2 history requests per minute)", flush=True)
+
+    failed = []
+    for i, uid in enumerate(args.uids):
+        if i:
+            time.sleep(REQUEST_INTERVAL_S)
+        try:
+            body = fetch(uid, token)
+        except urllib.error.HTTPError as error:
+            print(f"[{i + 1}/{len(args.uids)}] uid {uid}: HTTP {error.code}", flush=True)
+            failed.append(uid)
+            continue
+        (out_dir / f"{uid}.json").write_bytes(body)
+        alerts = json.loads(body).get("alerts", [])
+        print(f"[{i + 1}/{len(args.uids)}] uid {uid}: {len(alerts)} alerts", flush=True)
+
+    print(f"Saved to {out_dir}" + (f"; failed uids: {failed}" if failed else ""))
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/.gitignore`
+
+```
+# Secrets: never commit, never paste into chat
+.env
+*.session
+*.session-journal
+
+# Downloaded and generated data, trained models
+data/
+models/
+
+# Python
+__pycache__/
+.venv/
+.ipynb_checkpoints/
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/.env.example`
+
+```
+# Copy to .env and fill in. .env is git-ignored; never paste these values into chat.
+ALERTS_IN_UA_TOKEN=
+TELEGRAM_API_ID=
+TELEGRAM_API_HASH=
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/README.md`
+
+```
+# air-alert-forecast
+
+Forecasting air raid alerts in Ukraine from information available before the forecast is made.
+
+Work in progress. See [docs/DESIGN.md](docs/DESIGN.md) for the product overview, decisions and open questions, and [CONTEXT.md](CONTEXT.md) for the terms used.
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/scripts/fetch_alerts_in_ua.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/.gitignore (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/.env.example (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/README.md has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Syntax-check the script and confirm it stops cleanly without a token
+
+```
+python3 -I -m py_compile scripts/fetch_alerts_in_ua.py && env -u ALERTS_IN_UA_TOKEN python3 -I scripts/fetch_alerts_in_ua.py; echo "exit $?"; ls -la; git status --short; rm -rf data
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+ALERTS_IN_UA_TOKEN is not set: add it to .env
+exit 1
+total 32
+drwxr-xr-x@  9 david  staff   288 Oct 12 20:11 .
+drwxr-xr-x@  8 david  staff   256 Oct 12 16:58 ..
+-rw-r--r--@  1 david  staff   141 Oct 12 20:11 .env.example
+drwxr-xr-x@ 13 david  staff   416 Oct 12 20:08 .git
+-rw-r--r--@  1 david  staff   193 Oct 12 20:11 .gitignore
+-rw-r--r--@  1 david  staff  3161 Oct 12 20:10 CONTEXT.md
+-rw-r--r--@  1 david  staff   278 Oct 12 20:11 README.md
+drwxr-xr-x@  4 david  staff   128 Oct 12 20:11 docs
+drwxr-xr-x@  4 david  staff   128 Oct 12 20:11 scripts
+ M README.md
+?? .env.example
+?? .gitignore
+?? CONTEXT.md
+?? docs/
+?? scripts/
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Remove bytecode cache and list repo files
+
+```
+rm -rf scripts/__pycache__ && find . -path ./.git -prune -o -type f -print | sort
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+./.env.example
+./.gitignore
+./CONTEXT.md
+./README.md
+./docs/DESIGN.md
+./docs/adr/0001-as-of-data-model.md
+./docs/adr/0002-one-main-spec.md
+./docs/adr/0003-one-alert-source-per-spec.md
+./docs/adr/0004-telegram-via-api.md
+./scripts/fetch_alerts_in_ua.py
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md",
+  "old_string": "Agreed plan (2026-10-12):\n- The forecast is fully parametrized (target: active/onset/minutes/time-to-event; unit: oblast/raion; step; horizons). Code supports the whole grid; the write-up evaluates one main configuration in depth.\n- Model progression: baselines → logistic regression → LightGBM → LightGBM + Telegram. Report whatever results come out. See [[data-sources]].",
+  "new_string": "The user asked for a design doc that tracks decisions and open questions before building. It lives in the repo:\n- docs/DESIGN.md: overview, decision log, open questions Q1–Q14.\n- docs/adr/: decision records.\n- CONTEXT.md: glossary.\n\nRecord each new decision there as it is made. Move answered open questions into the decision log or an ADR. Use the CONTEXT.md terms (Unit, Forecast spec, Horizon, Active/Onset, Availability time). See [[data-sources]]."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/kse-stage2-task.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "- Kaggle piterfm/massive-missile-attacks-on-ukraine (CC BY-NC-SA 4.0).",
+  "new_string": "- The user has an alerts.in.ua token (in .env). UkraineAlarm is skipped because key approval is slow.\n- Kaggle piterfm/massive-missile-attacks-on-ukraine was REJECTED by the user on 2026-10-12 (low expected impact). Details kept only for reference (CC BY-NC-SA 4.0)."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+### Assistant (2026-10-12 17:12:08 UTC)
+
+## My recommendation: one main configuration, plus two smaller ones
+
+Build the code to accept any configuration, but analyse **one main configuration in depth**. Add **two secondary configurations**, each answering one specific question. Anything else can still be run and shows up only in an automatic summary table.
+
+**Main: raion × 1 h × "alert active", horizons 1–24.**
+- **Raion level** matches how alerts are declared now: about 90% of alerts have been raion-level since November 2025. At oblast level, frontline oblasts count as on alert in about 100% of hours, so there's nothing to forecast there. More units also give more training rows and finer neighbour effects.
+- **1-hour steps, 1–24 hours ahead** covers everything from "next hour" to "this time tomorrow". Telegram should matter most at the short end and time-of-day/weekday patterns at the long end. Training stays at minutes, not hours.
+- **"Active"** answers the question people actually ask: "will there be an alert at 19:00?" Scoring separately for units that were calm at forecast time also shows how well new alerts are predicted, without a second model.
+- **Condition:** alerts.in.ua must turn out consistent with the official record (Q2 in the doc). If it isn't, we fall back to an oblast-level main configuration built from one consistent source.
+
+**Secondary configurations:**
+- **Oblast × 1 h × active:** does the long history since 2022 beat the finer but shorter raion history? It's also comparable with the Pavlyshenko paper.
+- **Raion × 1 day × minutes:** day-ahead planning ("how many minutes of alerts tomorrow?"). It's a different question and a regression model rather than a probability.
+
+**Why not analyse more in depth:**
+- Checking and explaining results is the real cost: every configuration adds hundreds of numbers to sanity-check and explain.
+- Each configuration is a full backtest, so compute adds up.
+- Comparing many configurations and reporting the best test score inflates that score.
+
+## The design doc
+
+It's in the repo rather than a separate document, because graders will see the repo:
+
+- **`docs/DESIGN.md`**, the main document:
+  - product overview and what each command does;
+  - how the pipeline works;
+  - evaluation protocol;
+  - decision log;
+  - data sources and the facts we found;
+  - **open questions Q1–Q14**, grouped into Data, Target, Evaluation, Features and Product.
+- **`docs/adr/0001–0004`**: one short record for each hard-to-reverse decision:
+  - the "only data known before *t*" rule;
+  - one main configuration;
+  - one alert source from training through test;
+  - Telegram via the API.
+
+  0002 (the main configuration) is marked *proposed* until you confirm it.
+- **`CONTEXT.md`**: a glossary (Unit, Forecast spec, Horizon, Slot, Active, Onset, Availability time…) so the code, the docs and this chat use the same words.
+
+Your other decisions are in the decision log:
+- Kaggle dataset rejected, with your reason;
+- UkraineAlarm skipped;
+- the paper's "worth adopting" features kept, with its days-since-start feature not adopted;
+- LightGBM step-by-step plan;
+- Telegram via the API.
+
+## alerts.in.ua download
+
+I wrote `scripts/fetch_alerts_in_ua.py`. It saves the API's responses unchanged, 26 oblast-level requests at the allowed 2 per minute, about 13 minutes. I checked that it compiles and stops cleanly without a token. I haven't run it against the API yet, because the token isn't in place.
+
+Copy `.env.example` to `.env` and put the token there; don't paste it here. Then say "go" and I'll run it in the background. The first download answers **Q1** (does an oblast request also return raion-level alerts?) and gives the data for the consistency check in **Q2**.
+
+I also added a `.gitignore` covering `.env`, `data/` and Telegram `*.session` files (a session file is effectively a login), plus a README pointer to the design doc. Nothing is committed yet. Should I commit this to `main`?
+
+---
+
+## User (2026-10-12 17:30:14 UTC)
+
+I like this approach; let's keep it. Question about OBLAST_UIDS in our script: which oblasts do we use, and what do we drop? why? Also, how do we stack the raion and oblast data? Do we use different data for these two types of areas?
+
+### Assistant (2026-10-12 17:30:52 UTC)
+
+Updating ADR-0002 to accepted. Then I'll check in the data which locations are worth keeping before answering.
+
+<details><summary>Tool call: Bash</summary>
+
+Mark the main-spec decision as accepted
+
+```
+sed -i '' 's/^status: proposed$/status: accepted/' docs/adr/0002-one-main-spec.md && sed -i '' 's/| Code accepts any forecast spec; one main spec is analysed in depth | proposed |/| Code accepts any forecast spec; one main spec is analysed in depth | accepted |/' docs/DESIGN.md && head -3 docs/adr/0002-one-main-spec.md && grep -n "0002" docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://devs.alerts.in.ua/",
+  "prompt": "Reproduce the full Location UID table exactly (UID → name), especially UIDs 1-31: which UID is Autonomous Republic of Crimea (Автономна Республіка Крим), Sevastopol, Kyiv city, Luhansk oblast? Are UIDs 1, 2, 6, 7 used? Also, does the docs say whether the history endpoint for an oblast UID includes raion/hromada-level alerts inside that oblast?"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+---
+status: accepted
+---
+54:- **Forecast spec:** target × unit level × step × horizons. One main spec is analysed in depth ([ADR-0002](adr/0002-one-main-spec.md)).
+80:| [0002](adr/0002-one-main-spec.md) | Code accepts any forecast spec; one main spec is analysed in depth | accepted |
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Location UID table (as listed on the page):**
+
+| UID | Назва області/міста |
+|---|---|
+| 3 | Хмельницька область |
+| 4 | Вінницька область |
+| 5 | Рівненська область |
+| 8 | Волинська область |
+| 9 | Дніпропетровська область |
+| 10 | Житомирська область |
+| 11 | Закарпатська область |
+| 12 | Запорізька область |
+| 13 | Івано-Франківська область |
+| 14 | Київська область |
+| 15 | Кіровоградська область |
+| 16 | Луганська область |
+| 17 | Миколаївська область |
+| 18 | Одеська область |
+| 19 | Полтавська область |
+| 20 | Сумська область |
+| 21 | Тернопільська область |
+| 22 | Харківська область |
+| 23 | Херсонська область |
+| 24 | Черкаська область |
+| 25 | Чернігівська область |
+| 26 | Чернівецька область |
+| 27 | Львівська область |
+| 28 | Донецька область |
+| 29 | Автономна Республіка Крим |
+| 30 | м. Севастополь |
+| 31 | м. Київ |
+
+**Answers to your questions:**
+
+- **Crimea:** UID 29. **Sevastopol:** UID 30. **Kyiv city:** UID 31. **Luhansk oblast:** UID 16.
+- **UIDs 1, 2, 6, 7:** The page's table doesn't list them, and the page doesn't say whether they're used. The table only covers 3–31.
+- **History endpoint and raion/hromada alerts:** The page doesn't say. It states only that the endpoint "Повертає список тривог за вказаний період" (returns the list of alerts for the given period). Its example for oblast UID 16 includes a `location_raion` field, but the docs don't explain whether alerts from lower-level areas within the oblast are included.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Profile oblasts, raions and hromada alerts in official data
+
+```
+cat > /tmp/aaf_scripts/units_overview.py <<'EOF'
+import sys
+import pandas as pd
+pd.set_option("display.width", 200)
+off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+off["year"] = off.started_at.dt.year
+print("Luhansk/Crimea-ish rows by year and level:")
+m = off.oblast.str.contains("Luhan|Crimea|Sevastop|Krym", case=False)
+print(off[m].groupby(["oblast", "year", "level"]).size().to_string())
+
+era = off[off.started_at >= "2025-11-01"]
+print("\nRaion era (since 2025-11-01) level mix:", era.level.value_counts(normalize=True).round(3).to_dict())
+print("raions per oblast seen in raion era:", era[era.raion.notna()].groupby("oblast").raion.nunique().to_dict())
+print("raions ever seen:", off[off.raion.notna()].groupby(["oblast","raion"]).ngroups)
+
+# share of hours each raion is covered by a whole-raion alert (raion-level or oblast-wide), Jun 1 - Sep 6 2026
+start, end = pd.Timestamp("2026-06-01", tz="UTC"), pd.Timestamp("2026-09-07", tz="UTC")
+hours = pd.date_range(start, end, freq="h", inclusive="left")
+raions = off[off.raion.notna()][["oblast", "raion"]].drop_duplicates()
+w = off[(off.finished_at > start) & (off.started_at < end)]
+def share(rows):
+    s = pd.Series(False, index=hours)
+    for a, b in zip(rows.started_at, rows.finished_at):
+        s[(hours + pd.Timedelta(hours=1) > a) & (hours < b)] = True
+    return s.mean()
+res = []
+for ob, ra in raions.itertuples(index=False):
+    whole = w[((w.level == "raion") & (w.oblast == ob) & (w.raion == ra)) | ((w.level == "oblast") & (w.oblast == ob))]
+    anyp = w[((w.oblast == ob) & (w.raion == ra)) | ((w.level == "oblast") & (w.oblast == ob))]
+    res.append((ob, ra, round(share(whole), 3), round(share(anyp), 3)))
+r = pd.DataFrame(res, columns=["oblast", "raion", "whole_raion", "incl_hromada"])
+print("\nraions:", len(r), "| never on alert Jun-Sep 2026:", (r.whole_raion == 0).sum(), "| >=90% of hours (whole raion):", (r.whole_raion >= 0.9).sum(), "| >=90% incl hromada:", (r.incl_hromada >= 0.9).sum())
+print(r.sort_values("incl_hromada", ascending=False).head(15).to_string(index=False))
+print("never:", r[r.whole_raion == 0][["oblast","raion"]].values.tolist())
+print("\nhromada-level alerts in raion era, top hromadas:")
+print(era[era.level == "hromada"].groupby(["oblast", "hromada"]).size().sort_values(ascending=False).head(10).to_string())
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/units_overview.py /tmp/aaf_peek/official_data_en.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Luhansk/Crimea-ish rows by year and level:
+oblast           year  level 
+Luhanska oblast  2022  oblast    2
+
+Raion era (since 2025-11-01) level mix: {'raion': 0.919, 'hromada': 0.073, 'oblast': 0.007}
+raions per oblast seen in raion era: {'Cherkaska oblast': 4, 'Chernihivska oblast': 5, 'Chernivetska oblast': 3, 'Dnipropetrovska oblast': 7, 'Donetska oblast': 8, 'Ivano-Frankivska oblast': 6, 'Kharkivska oblast': 7, 'Khersonska oblast': 5, 'Khmelnytska oblast': 3, 'Kirovohradska oblast': 4, 'Kyivska oblast': 7, 'Lvivska oblast': 7, 'Mykolaivska oblast': 4, 'Odeska oblast': 7, 'Poltavska oblast': 4, 'Rivnenska oblast': 4, 'Sumska oblast': 5, 'Ternopilska oblast': 3, 'Vinnytska oblast': 6, 'Volynska oblast': 4, 'Zakarpatska oblast': 6, 'Zaporizka oblast': 5, 'Zhytomyrska oblast': 4}
+raions ever seen: 118
+
+raions: 118 | never on alert Jun-Sep 2026: 0 | >=90% of hours (whole raion): 16 | >=90% incl hromada: 17
+                oblast                raion  whole_raion  incl_hromada
+Dnipropetrovska oblast    Nikopolskyi raion        0.657         0.999
+       Donetska oblast     Pokrovskyi raion        0.992         0.998
+       Donetska oblast    Volnovaskyi raion        0.992         0.992
+       Donetska oblast     Kalmiuskyi raion        0.992         0.992
+       Donetska oblast     Horlivskyi raion        0.992         0.992
+       Donetska oblast      Donetskyi raion        0.992         0.992
+       Donetska oblast   Mariupolskyi raion        0.992         0.992
+       Donetska oblast   Kramatorskyi raion        0.992         0.992
+       Donetska oblast    Bakhmutskyi raion        0.992         0.992
+      Zaporizka oblast     Zaporizkyi raion        0.983         0.983
+      Zaporizka oblast    Polohivskyi raion        0.983         0.983
+      Zaporizka oblast    Berdianskyi raion        0.983         0.983
+      Zaporizka oblast  Melitopolskyi raion        0.983         0.983
+      Zaporizka oblast    Vasylivskyi raion        0.983         0.983
+Dnipropetrovska oblast Synelnykivskyi raion        0.980         0.980
+never: []
+
+hromada-level alerts in raion era, top hromadas:
+oblast                  hromada                                          
+Kharkivska oblast       m. Kharkiv ta Kharkivska terytorialna hromada        2671
+Dnipropetrovska oblast  m. Nikopol ta Nikopolska terytorialna hromada        1946
+Zaporizka oblast        m. Zaporizhzhia ta Zaporizka terytorialna hromada    1842
+Donetska oblast         Pokrovska terytorialna hromada                       1161
+Dnipropetrovska oblast  m. Marhanets ta Marhanetska terytorialna hromada      882
+                        Chervonohryhorivska terytorialna hromada               64
+Zhytomyrska oblast      Zviahelskyi raion                                      58
+Zaporizka oblast        Bilenkivska terytorialna hromada                        9
+Kharkivska oblast       Lypetska terytorialna hromada                           4
+Donetska oblast         m. Kramatorsk ta Kramatorska terytorialna hromada       2
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check whether city alert zones differ from their raion
+
+```
+cat > /tmp/aaf_scripts/city_vs_raion.py <<'EOF'
+import sys
+import pandas as pd
+off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+start, end = pd.Timestamp("2026-06-01", tz="UTC"), pd.Timestamp("2026-09-07", tz="UTC")
+minutes = pd.date_range(start, end, freq="5min", inclusive="left")
+w = off[(off.finished_at > start) & (off.started_at < end)]
+def mask(rows):
+    s = pd.Series(False, index=minutes)
+    for a, b in zip(rows.started_at, rows.finished_at):
+        s[(minutes >= a) & (minutes < b)] = True
+    return s
+for ob, ra, hr in [("Kharkivska oblast", "Kharkivskyi raion", "m. Kharkiv ta Kharkivska terytorialna hromada"),
+                   ("Zaporizka oblast", "Zaporizkyi raion", "m. Zaporizhzhia ta Zaporizka terytorialna hromada")]:
+    oblast_wide = w[(w.level == "oblast") & (w.oblast == ob)]
+    raion = pd.concat([w[(w.level == "raion") & (w.raion == ra)], oblast_wide])
+    city = w[(w.level == "hromada") & (w.hromada == hr)]
+    r, c = mask(raion), mask(city)
+    print(f"{ra} vs {hr[:14]}: raion on {r.mean():.2f}, city on {c.mean():.2f}, city on & raion off {(c & ~r).mean():.3f}, raion on & city off {(r & ~c).mean():.3f}")
+lo = w[w.level == "oblast"].assign(dur_h=lambda d: (d.finished_at - d.started_at).dt.total_seconds() / 3600)
+print(lo.groupby("oblast").dur_h.agg(["count", "sum", "max"]).round(0).sort_values("sum", ascending=False).head(6).to_string())
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/city_vs_raion.py /tmp/aaf_peek/official_data_en.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Kharkivskyi raion vs m. Kharkiv ta : raion on 0.76, city on 0.65, city on & raion off 0.005, raion on & city off 0.117
+Zaporizkyi raion vs m. Zaporizhzhi: raion on 0.90, city on 0.39, city on & raion off 0.000, raion on & city off 0.515
+           count    sum   max
+oblast                       
+Kyiv City    217  193.0  11.0
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Look at the wording of city-level alert messages
+
+```
+for q in "м. Харків" "м. Запоріжжя" "м. Нікополь"; do echo "== $q"; curl -s -G "https://t.me/s/air_alert_ua" --data-urlencode "q=$q" | python3 -I -c "
+import sys,re,html
+s=sys.stdin.read()
+dates=re.findall(r'datetime=\"([^\"]*)\"', s)
+texts=re.findall(r'tgme_widget_message_text[^>]*>(.*?)</div>', s, re.S)
+for d,t in list(zip(dates,texts))[-5:]:
+    print(d[:16], '|', ' '.join(html.unescape(re.sub('<[^>]+>',' ',t)).split())[:160])
+"; sleep 1; done
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+== м. Харків
+2026-09-07T02:24 | 🔴 05:24 Повітряна тривога в м . Харків та Харківська територіальна громада Слідкуйте за подальшими повідомленнями. #м_Харків_та_Харківська_територіальна_громада
+2026-09-07T03:45 | 🟢 06:45 Відбій тривоги в м . Харків та Харківська територіальна громада. Слідкуйте за подальшими повідомленнями. #м_Харків_та_Харківська_територіальна_громада
+2026-09-07T03:50 | 🔴 06:50 Повітряна тривога в м . Харків та Харківська територіальна громада Слідкуйте за подальшими повідомленнями. #м_Харків_та_Харківська_територіальна_громада
+2026-09-07T05:37 | 🟢 08:37 Відбій тривоги в м . Харків та Харківська територіальна громада. Слідкуйте за подальшими повідомленнями. #м_Харків_та_Харківська_територіальна_громада
+2026-09-07T05:49 | 🔴 08:49 Повітряна тривога в м . Харків та Харківська територіальна громада Слідкуйте за подальшими повідомленнями. #м_Харків_та_Харківська_територіальна_громада
+== м. Запоріжжя
+2026-09-07T05:32 | 🔴 🔴 08:32 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття #м_Запоріжж
+2026-09-07T05:38 | 🔴 🔴 08:38 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття #м_Запоріжж
+2026-09-07T05:50 | 🔴 🔴 08:50 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття #м_Запоріжж
+2026-09-07T05:55 | 🔴 🔴 08:55 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття #м_Запоріжж
+2026-09-07T06:01 | 🔴 🔴 09:01 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття #м_Запоріжж
+== м. Нікополь
+2026-09-06T16:12 | 🔴 19:12 Загроза артобстрілу! Зараз у м . Нікополь та Нікопольська територіальна громада артилерійський обстріл. Пройдіть в укриття! #м_Нікополь_та_Нікопольська_
+2026-09-06T16:44 | 🟢 19:44 Відбій загрози артобстрілу в м . Нікополь та Нікопольська територіальна громада. Слідкуйте за подальшими повідомленнями. #м_Нікополь_та_Нікопольська_тер
+2026-09-06T18:57 | 🔴 21:57 Загроза артобстрілу! Зараз у м . Нікополь та Нікопольська територіальна громада артилерійський обстріл. Пройдіть в укриття! #м_Нікополь_та_Нікопольська_
+2026-09-07T03:59 | 🟢 06:59 Відбій загрози артобстрілу в м . Нікополь та Нікопольська територіальна громада. Слідкуйте за подальшими повідомленнями. #м_Нікополь_та_Нікопольська_тер
+2026-09-07T04:31 | 🔴 07:31 Загроза артобстрілу! Зараз у м . Нікополь та Нікопольська територіальна громада артилерійський обстріл. Пройдіть в укриття! #м_Нікополь_та_Нікопольська_
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+See which locations get non-air-raid threat messages
+
+```
+for q in "Загроза артобстрілу" "Загроза ударних БпЛА" "вуличних боїв"; do echo "== $q"; curl -s -G "https://t.me/s/air_alert_ua" --data-urlencode "q=$q" | python3 -I -c "
+import sys,re,html,collections
+s=sys.stdin.read()
+texts=[' '.join(html.unescape(re.sub('<[^>]+>',' ',t)).split()) for t in re.findall(r'tgme_widget_message_text[^>]*>(.*?)</div>', s, re.S)]
+tags=collections.Counter(t.split('#')[-1][:60] for t in texts if '#' in t)
+print(len(texts), 'msgs on page; locations:', tags.most_common(8))
+"; sleep 1; done
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+== Загроза артобстрілу
+20 msgs on page; locations: [('м_Нікополь_та_Нікопольська_територіальна_громада', 18), ('м_Марганець_та_Марганецька_територіальна_громада', 2)]
+== Загроза ударних БпЛА
+20 msgs on page; locations: [('м_Запоріжжя_та_Запорізька_територіальна_громада', 19), ('м_Харків_та_Харківська_територіальна_громада', 1)]
+== вуличних боїв
+11 msgs on page; locations: [('Покровська_територіальна_громада', 4), ('м_Марганець_та_Марганецька_територіальна_громада', 2), ('Липецька_територіальна_громада', 2), ('м_Нікополь_та_Нікопольська_територіальна_громада', 2), ('Вовчанська_територіальна_громада', 1)]
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check how the official parser classifies message types
+
+```
+curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/official_channel_processor.py | sed -n 80,200p | grep -n -i -B2 -A8 "тривог\|відбій\|загроз\|артобстр\|def process_message" | head -60
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+38-                writer.writerow(record.dict(lang=lang))
+39-
+40:    def process_message(self, message: Message):
+41-        logger.info("Processing message %s", message.message)
+42-
+43-        hashed_locations, is_activated, is_deactivated = self.parse_message(message)
+44-
+45-        if not is_activated and not is_deactivated:
+46-            logger.error("Can't parse %s, skipping...", message.message)
+47-            return
+48-
+--
+84-        :return: tuple (hashed location name, is_enabled, is_disabled)
+85-        """
+86:        # 🔴 16:29 Повітряна тривога в Донецька область
+87:        # 🟢 17:02 Відбій тривоги в Донецька область.
+88:        # 🟡 06:22 Відбій тривоги в Дніпропетровська область
+89:        #          (тривога ще триває у якомусь районі)
+90:        # 🟢 12:33 Відбій тривоги в
+91-        #          • Мелітопольський район
+92-        #          • Василівський район
+93-        #          • Пологівський район
+94-        #          • Бердянський район
+95-        #          • Запорізький район
+96-
+97-        if self.is_ignored_message(message):
+98-            logger.error("Message %s is ignored", message.message)
+--
+119-
+120-        is_activated = ("Повітряна" in first_line) or ("🔴" in first_line)
+121:        is_deactivated = ("Відбій" in first_line) or ("🟢" in first_line)
+```
+
+</details>
+
+### Assistant (2026-10-12 17:33:10 UTC)
+
+I found a data-quality problem in the hromada-level records. Now updating the design doc and the download script.
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 48,
+  "limit": 70
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+````
+48	                          with an availability
+49	                          time)
+50	```
+51	
+52	- **Raw layer:** responses are stored exactly as fetched, and everything else is rebuilt from them ([ADR-0001](adr/0001-as-of-data-model.md)).
+53	- **As-of view:** features read data only through one function that returns what was known strictly before t. Alerts in progress at t are clipped at t ([ADR-0001](adr/0001-as-of-data-model.md)).
+54	- **Forecast spec:** target × unit level × step × horizons. One main spec is analysed in depth ([ADR-0002](adr/0002-one-main-spec.md)).
+55	- **Alert sources:** one alert definition per spec, from training through test ([ADR-0003](adr/0003-one-alert-source-per-spec.md)).
+56	- **Stages:** update data → build → train → predict. A backtest repeats train + predict over many training cutoffs. Training is the expensive stage; prediction loads saved models.
+57	
+58	## 3. Evaluation protocol
+59	
+60	- **Walk-forward backtest:** train on everything before a cutoff, forecast the next period, move the cutoff forward, repeat.
+61	- **Periods:** training | validation | test.
+62	  - Model and setting choices are made on validation.
+63	  - The test period is the latest period, and it is used once, for the final report.
+64	- **Baselines:** Persistence and Historical rate. Every model must be compared against both.
+65	- **Metrics, per horizon:**
+66	  - Brier score (primary);
+67	  - log loss, ROC-AUC, PR-AUC;
+68	  - calibration plot.
+69	- **Calm at t / On alert at t:** results are reported separately. The calm group measures how well onsets are predicted.
+70	- **Ablation:** compare with and without Telegram features on the same period.
+71	- **Reporting:** report every spec that was run, not only the best.
+72	
+73	## 4. Decisions
+74	
+75	Hard-to-reverse decisions (ADRs):
+76	
+77	| ADR | Decision | Status |
+78	|---|---|---|
+79	| [0001](adr/0001-as-of-data-model.md) | Every record has an availability time; features read data only through the as-of view | accepted |
+80	| [0002](adr/0002-one-main-spec.md) | Code accepts any forecast spec; one main spec is analysed in depth | accepted |
+81	| [0003](adr/0003-one-alert-source-per-spec.md) | One alert definition per spec, from training through test | accepted |
+82	| [0004](adr/0004-telegram-via-api.md) | Telegram posts are downloaded through the official API (Telethon) | accepted |
+83	
+84	Decision log (smaller choices that are easy to reverse):
+85	
+86	- **Model progression:** baselines → logistic regression → LightGBM → LightGBM + Telegram. LightGBM because the data is tabular, there are about 1M rows per horizon, it learns interactions on its own, it retrains fast, and SHAP explains it. *(2026-10-12)*
+87	- **Adopted from Pavlyshenko & Pavlyshenko (2024, arXiv 2411.14625):**
+88	  - neighbouring units' alert state and recent history;
+89	  - duration of the current alert so far (0 if calm);
+90	  - hour, weekday and month;
+91	  - a comparison of one shared model against one model per unit.
+92	
+93	  *(2026-10-12)*
+94	- **Not adopted:** the "days since start" trend feature (`ndays`). Trees cannot extrapolate it. Drift is handled instead with the training window, recency weighting and frequent retraining. It may be tested as an ablation. *(2026-10-12)*
+95	- **Rejected:** the Kaggle "Massive Missile Attacks on Ukraine" dataset. Its expected impact is small: it overlaps with the alert history, and its reports appear the morning after, so it cannot help at short horizons. It also needs its own leakage handling. *(2026-10-12)*
+96	- **Rejected:** the UkraineAlarm API, because key requests are answered too slowly. *(2026-10-12)*
+97	- **Time zones:** timestamps are stored in UTC. Calendar features (hour, weekday) are computed in Europe/Kyiv local time, so they follow daylight saving. *(2026-10-12)*
+98	
+99	## 5. Data sources (checked 2026-10-12)
+100	
+101	| Source | Coverage | Location level | Use |
+102	|---|---|---|---|
+103	| Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; about 90% raion since Nov 2025 | Main alert history |
+104	| [alerts.in.ua API](https://devs.alerts.in.ua/) history | Rolling one month, about 2026-09-12 → now | oblast / raion / hromada | Fill the gap and cover the latest period. Snapshot it before the window moves on. |
+105	| Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Cross-check reference |
+106	| Telegram `@kpszsu` (Air Force), `@deraketaua` (volunteer monitoring) | 2022 → now | Text mentioning oblasts, raions and cities | Threat-post features |
+107	
+108	Known facts that shape the design:
+109	- **`@air_alert_ua` is silent:** the channel has posted nothing since 2026-09-07 06:09 UTC, and no reason has been published.
+110	- **Raion gap:** no raion-level source covers 2026-09-07 to about 2026-09-12.
+111	- **Sources disagree:** official and volunteer data agree on only 80.6% of oblast-hours (June–September 2026). In Volyn, official data has 81 alerts and 41 h under alert; volunteer data has 355 alerts and 405 h.
+112	- **Frontline oblasts:** if "oblast on alert" means "any raion on alert", frontline oblasts are on alert in about 100% of hours (Dnipropetrovsk 100%, Donetsk 99.8%, Kharkiv 99.4%; June–September 2026).
+113	- **Permanent alerts:** Luhansk (since 2022-04-04) and Crimea (since 2022-12-10) are not in the datasets.
+114	- **Telegram volume grows:** posting on `@kpszsu` grew a lot over time, from about 2k posts by October 2022 to about 86k by October 2026, so the meaning of Telegram features changes over time.
+115	
+116	## 6. Open questions (to answer before building)
+117	
+````
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Alert sources:** one alert definition per spec, from training through test ([ADR-0003](adr/0003-one-alert-source-per-spec.md)).",
+  "new_string": "- **Alert sources:** one alert definition per spec, from training through test ([ADR-0003](adr/0003-one-alert-source-per-spec.md)).\n- **Unit levels are views of one alert table.** Each alert record has a location at one level: oblast ⊃ raion ⊃ hromada. Raion and oblast specs use the same records; only the mapping from records to units differs.\n  - **Raion unit:** on alert when there is an alert for that raion, or an oblast-wide alert for its oblast. Before autumn 2025 most alerts were oblast-wide, so all raions of an oblast move together in that period.\n  - **Oblast unit:** derived from the same records (definition: Q6).\n  - **Kyiv city:** its own unit at both levels.\n  - **Unit registry:** a single table lists every unit with its name in each source. The official data uses English transliteration, alerts.in.ua uses Ukrainian names and numeric UIDs, and some raions were renamed (e.g. Novomoskovskyi → Samarivskyi). Every source maps through this table."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Time zones:** timestamps are stored in UTC.",
+  "new_string": "- **Complete raw downloads:** downloads cover every location, including ones we won't forecast. Exclusions happen when units are built, so they are visible and reversible. *(2026-10-12)*\n- **Excluded from forecasting:** Luhansk oblast, Crimea and Sevastopol. Their alerts are permanent, so there is nothing to predict. *(2026-10-12)*\n- **Time zones:** timestamps are stored in UTC."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Frontline oblasts:** if \"oblast on alert\" means \"any raion on alert\", frontline oblasts are on alert in about 100% of hours (Dnipropetrovsk 100%, Donetsk 99.8%, Kharkiv 99.4%; June–September 2026).\n- **Permanent alerts:** Luhansk (since 2022-04-04) and Crimea (since 2022-12-10) are not in the datasets.",
+  "new_string": "- **Frontline oblasts:** if \"oblast on alert\" means \"any raion on alert\", frontline oblasts are on alert in about 100% of hours (Dnipropetrovsk 100%, Donetsk 99.8%, Kharkiv 99.4%; June–September 2026). These figures still include the non-air-raid hromada records described below.\n- **Permanent alerts:** Luhansk (since 2022-04-04) and Crimea (since 2022-12-10) are not in the datasets. The official data has only 2 Luhansk records, both from 2022.\n- **Near-permanent raions:** in June–September 2026, 16 of 118 raions were under a whole-raion alert in at least 90% of hours: all 8 Donetsk raions (99.2%), 5 Zaporizhzhia raions (98.3%) and others. Several of them are occupied.\n- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:\n  - Kharkiv city: real air raid alerts (its own alert zone).\n  - Zaporizhzhia city: \"Загроза ударних БпЛА\" (heightened strike-drone threat), issued only during a raion alert.\n  - Nikopol, Marhanets: \"Загроза артобстрілу\" (artillery shelling threat).\n  - Pokrovsk, Vovchansk, Lypetska: urban-fighting warnings.\n\n  The official dataset's parser counts every message starting with 🔴 as an alert start, and the CSV has no column for the message type. So these warnings appear as air raid alerts. This is why Nikopol raion looked like it was on alert in 99.9% of hours. alerts.in.ua does provide an `alert_type` field.\n- **City zone vs raion:** Kharkiv city's own alerts mostly fall inside Kharkivskyi raion alerts. The city is on alert while the raion is not in 0.5% of the time; the raion is on alert while the city is not in 11.7% (June–September 2026)."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Locate open-question sections for editing
+
+```
+grep -n "^### \|Q8\|^## 6" docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+132:## 6. Open questions (to answer before building)
+134:### Data
+148:### Target
+159:- **Q8. Units to exclude or report separately.**
+164:### Evaluation
+173:### Features
+187:### Product
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 132,
+  "limit": 35
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+132	## 6. Open questions (to answer before building)
+133	
+134	### Data
+135	
+136	- **Q1. Does an oblast-level alerts.in.ua history request return raion-level alerts?**
+137	  - Why it matters: if it doesn't, we need about 125 raion requests (about 1 h) instead of 26 (about 13 min).
+138	  - How we'll decide: inspect the first snapshot.
+139	- **Q2. Is alerts.in.ua consistent with the official record?** No overlap period exists, so we check indirectly:
+140	  - **(a)** compare agreement(alerts.in.ua, volunteer) after 2026-09-12 with agreement(official, volunteer) before 2026-09-07, per oblast;
+141	  - **(b)** compare distributions across the boundary: alerts per raion per day, durations, and the mix of location levels.
+142	  - If they match, the raion main spec goes ahead. If not, see Q3.
+143	- **Q3. Fallback if Q2 fails.**
+144	  - Options: an oblast-level main spec built from one consistent source, or a shorter, alerts.in.ua-only raion period.
+145	- **Q4. Keeping the latest period current.**
+146	  - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
+147	
+148	### Target
+149	
+150	- **Q5. Main spec.**
+151	  - Proposal: raion × 1 h × Active, horizons 1–24, depending on Q2.
+152	  - Secondary specs: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).
+153	- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+154	  - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
+155	- **Q7. Label rules.**
+156	  - How much overlap makes a slot Active: any overlap, or at least 1 minute?
+157	  - Are alerts separated by a short gap merged when counting onsets? If so, how short is "short"?
+158	  - What to do with volunteer "naive" alerts, whose end time is imputed as start + 30 min?
+159	- **Q8. Units to exclude or report separately.**
+160	  - Permanent alerts (Luhansk, Crimea, Sevastopol).
+161	  - Occupied raions.
+162	  - Frontline raions on alert almost all the time: keep them in training but report metrics with and without them?
+163	
+164	### Evaluation
+165	
+166	- **Q9. Periods.**
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Q4. Keeping the latest period current.**\n  - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?",
+  "new_string": "- **Q4. Keeping the latest period current.**\n  - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?\n- **Q15. How do we keep only real air raid alerts in the labels?** (See \"Hromada-level records\" in section 5.)\n  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download) and keep each message's type. Vadimkin's MIT-licensed parser is the starting point. This also lets us check his parsing elsewhere.\n  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus hromada zones checked by hand to be real air raid alerts (Kharkiv city). It is cheaper, but it relies on a sample showing that raion-level messages are air raid alerts only.\n  - Either way, alerts.in.ua is filtered to `alert_type = air_raid`, so training and test share one definition (ADR-0003).\n  - Proposal: (a)."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Q5. Main spec.**\n  - Proposal: raion × 1 h × Active, horizons 1–24, depending on Q2.\n  - Secondary specs: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).",
+  "new_string": "- **Q5. Main spec.** *Decided 2026-10-12* ([ADR-0002](adr/0002-one-main-spec.md)):\n  - Main: raion × 1 h × Active, horizons 1–24, provided Q2 passes.\n  - Secondary: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning)."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Q8. Units to exclude or report separately.**\n  - Permanent alerts (Luhansk, Crimea, Sevastopol).\n  - Occupied raions.\n  - Frontline raions on alert almost all the time: keep them in training but report metrics with and without them?",
+  "new_string": "- **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).\n  - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.\n  - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.\n- **Q16. Should city zones with their own air raid alerts be units?**\n  - Kharkiv city, for example, has its own alerts. They mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.\n  - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.\n  - Depends on Q15, which determines which hromada zones carry real air raid alerts."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "## 6. Open questions (to answer before building)\n",
+  "new_string": "## 6. Open questions (to answer before building)\n\nQuestion numbers are stable IDs, not an order. When a question is answered, it is marked *Decided* and its decision is recorded in the decision log or in an ADR.\n"
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/scripts/fetch_alerts_in_ua.py",
+  "old_string": "# Oblast-level location UIDs from the alerts.in.ua location table (incl. Kyiv city and Sevastopol).\nOBLAST_UIDS = [3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31]",
+  "new_string": "# Every oblast-level location UID from the alerts.in.ua location table: 24 oblasts, Crimea (29),\n# Sevastopol (30) and Kyiv city (31). Raw downloads are complete; exclusions happen when units are built.\nOBLAST_UIDS = [3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/scripts/fetch_alerts_in_ua.py has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fix request count in doc and recheck script
+
+```
+sed -i '' 's/instead of 26 (about 13 min)/instead of 27 (about 14 min)/' docs/DESIGN.md && grep -n "instead of 27" docs/DESIGN.md && python3 -I -m py_compile scripts/fetch_alerts_in_ua.py && rm -rf scripts/__pycache__ && echo ok
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "- alerts.in.ua API: the history endpoint",
+  "new_string": "- The official CSV mixes message types at hromada level. Its parser treats any 🔴 message as an alert start, and the CSV has no type column.\n  - Nikopol/Marhanets: artillery threat.\n  - Zaporizhzhia city: strike-drone threat escalation.\n  - Pokrovsk/Vovchansk/Lypetska: urban fighting.\n  - Kharkiv city: a real air raid zone.\n  - Open question Q15 in docs/DESIGN.md: re-parse @air_alert_ua with Telethon vs filter. alerts.in.ua has `alert_type`.\n- alerts.in.ua UIDs: oblasts 3–28 (no 6/7), Crimea 29, Sevastopol 30, Kyiv city 31.\n- alerts.in.ua API: the history endpoint"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+139:  - Why it matters: if it doesn't, we need about 125 raion requests (about 1 h) instead of 27 (about 14 min).
+ok
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+### Assistant (2026-10-12 17:34:12 UTC)
+
+ADR-0002 is now marked accepted. Answering your two questions turned up a data-quality problem, explained in the third section.
+
+## Which locations the script downloads, and what we drop
+
+The script downloads **every oblast-level location**: 24 oblasts, Kyiv city, Sevastopol and Crimea. Crimea (UID 29) was missing from my first version: I had copied the list from the alerts.in.ua Python client, which leaves it out. I've added it.
+
+My rule is **download everything, and drop locations only when building the units we forecast**. That way every exclusion is written down and can be undone. Two kinds of location are affected:
+
+| Location | What happens | Why |
+|---|---|---|
+| Luhansk oblast | Dropped | Permanent alert since 2022-04-04: the answer is always "yes", so there's nothing to learn. The official data has only 2 records for it, both from 2022. |
+| Crimea, Sevastopol | Dropped | Permanent alert since 2022-12-10; no records in the official data. |
+| Near-permanent raions | Kept, reported separately (Q8) | In June–September 2026, 16 of 118 raions were under alert in at least 90% of hours. That includes all 8 Donetsk raions (99.2%) and 5 Zaporizhzhia raions (98.3%), several of them occupied. Their state is useful information about their neighbours, but they make every model look good, so metrics are reported with and without them. |
+
+## How raion and oblast data fit together
+
+**It's one set of alerts viewed two ways, not two separate datasets.** Every alert record has a location at one level: oblast, raion or hromada, each containing the next. Both forecast levels use the same records; only the mapping from records to units changes:
+
+- **Raion unit:** on alert when there is an alert for that raion, or an oblast-wide alert for its oblast.
+- **Before autumn 2025:** most alerts were oblast-wide, so all raions of an oblast move together in that period. This shift in how alerts are issued feeds into Q9.
+- **Oblast unit:** built from the same records. How to define "oblast on alert" is still open (Q6).
+- **Kyiv city:** its own unit at both levels.
+- **Unit registry:** a single table lists each unit with its name in every source. The official CSV uses English transliteration, alerts.in.ua uses Ukrainian names and numeric UIDs, and some raions were renamed (e.g. Novomoskovskyi → Samarivskyi).
+
+We don't use volunteer data for the oblast level. One reason is the "same alert source from training through test" rule (ADR-0003). The other is that the secondary oblast configuration exists to compare the two levels. If each level had its own source, a difference in results could come from the source rather than the level.
+
+## A problem I found: some "alerts" aren't air raid alerts
+
+About 7% of records since November 2025 are at hromada level. I read the original channel messages behind the most frequent ones:
+
+| Hromada | What the message actually is | Air raid alert? |
+|---|---|---|
+| Kharkiv city | "Повітряна тривога": the city has its own alert zone | **Yes** |
+| Zaporizhzhia city | "Загроза ударних БпЛА… Підвищений рівень небезпеки": an extra strike-drone warning issued only during a raion alert | No, an escalation within an alert |
+| Nikopol, Marhanets | "Загроза артобстрілу": artillery shelling threat | No |
+| Pokrovsk, Vovchansk, Lypetska | Urban-fighting warnings | No |
+
+The dataset's parser counts **any message starting with 🔴 as an alert start**, and the CSV has no column saying what kind of message it was. So all of these appear as air raid alerts. That's why Nikopol raion looked like it was on alert 99.9% of the time: it was artillery warnings. alerts.in.ua does have an `alert_type` field, so the latest period can be filtered. The training data has to be filtered the same way (Q15), with two options:
+
+- **(a) Re-parse the official channel ourselves through the Telegram API** and keep each message's type. That's about 338k messages, roughly 1 hour to download, starting from the dataset author's MIT-licensed parser. It's the only way to guarantee "air raid alerts only" in both training and test, and we need Telegram access anyway. **I recommend this.**
+- **(b) Keep the CSV, but use only raion- and oblast-level records**, plus hromada zones checked by hand (Kharkiv city). It's cheaper, but whether raion-level messages are purely air raid alerts is checked only on a sample.
+
+This also raises Q16: should cities with their own alert zones, like Kharkiv, become separate units? Kharkiv's city alerts mostly fall inside its raion's alerts, but the two differ about 12% of the time.
+
+## Design doc updates
+
+- **`docs/DESIGN.md`:**
+  - the "one set of alerts, two views" model and the unit registry;
+  - two new decision-log entries (complete raw downloads; the permanent-alert exclusions);
+  - the new data facts;
+  - Q5 marked *decided*, Q8 narrowed;
+  - new questions Q15 (filtering alert types) and Q16 (city zones).
+- **Download script:** Crimea added, so it now makes 27 requests, about 14 minutes.
+
+## Next
+
+1. Put the alerts.in.ua token in `.env` and say "go". I'll run the download, which answers Q1 and gives the data for the Q2 consistency check.
+2. Choose (a) or (b) for Q15. If (a), the Telegram credentials become the next blocker.
+3. Nothing is committed yet. Should I commit to `main`?
+
+---
+
+## User (2026-10-12 17:41:09 UTC)
+
+Before I answer a/b, how did you confirm that messages like "Загроза артобстрілу" are not air alerts? And yes, commit as we go; we need the history.
+
+<details><summary>Tool call: Bash</summary>
+
+Read the parser's ignore rules and message parsing
+
+```
+curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/official_channel_processor.py > /tmp/aaf_peek/official_channel_processor.py; grep -n -A25 "def is_ignored_message" /tmp/aaf_peek/official_channel_processor.py; echo ----; grep -n -B2 -A30 "def parse_message" /tmp/aaf_peek/official_channel_processor.py | sed -n 1,60p
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+158:    def is_ignored_message(message: Message) -> bool:
+159-        return "Тестовий Регіон" in message.message
+160-
+161-    def parse_message(self, message: Message) -> tuple[Optional[List[str]], Optional[bool], Optional[bool]]:
+162-        """
+163-        :return: tuple (hashed location name, is_enabled, is_disabled)
+164-        """
+165-        # 🔴 16:29 Повітряна тривога в Донецька область
+166-        # 🟢 17:02 Відбій тривоги в Донецька область.
+167-        # 🟡 06:22 Відбій тривоги в Дніпропетровська область
+168-        #          (тривога ще триває у якомусь районі)
+169-        # 🟢 12:33 Відбій тривоги в
+170-        #          • Мелітопольський район
+171-        #          • Василівський район
+172-        #          • Пологівський район
+173-        #          • Бердянський район
+174-        #          • Запорізький район
+175-
+176-        if self.is_ignored_message(message):
+177-            logger.error("Message %s is ignored", message.message)
+178-            return None, None, None
+179-
+180-        first_line = message.message.split("\n")[0]
+181-
+182-        # #Донецька_область
+183-        # #м_Нікополь_та_Нікопольська_територіальна_громада
+----
+159-        return "Тестовий Регіон" in message.message
+160-
+161:    def parse_message(self, message: Message) -> tuple[Optional[List[str]], Optional[bool], Optional[bool]]:
+162-        """
+163-        :return: tuple (hashed location name, is_enabled, is_disabled)
+164-        """
+165-        # 🔴 16:29 Повітряна тривога в Донецька область
+166-        # 🟢 17:02 Відбій тривоги в Донецька область.
+167-        # 🟡 06:22 Відбій тривоги в Дніпропетровська область
+168-        #          (тривога ще триває у якомусь районі)
+169-        # 🟢 12:33 Відбій тривоги в
+170-        #          • Мелітопольський район
+171-        #          • Василівський район
+172-        #          • Пологівський район
+173-        #          • Бердянський район
+174-        #          • Запорізький район
+175-
+176-        if self.is_ignored_message(message):
+177-            logger.error("Message %s is ignored", message.message)
+178-            return None, None, None
+179-
+180-        first_line = message.message.split("\n")[0]
+181-
+182-        # #Донецька_область
+183-        # #м_Нікополь_та_Нікопольська_територіальна_громада
+184-        last_line = message.message.split("\n")[-1].lower()
+185-
+186-        if last_line == "#херсон":
+187-            # Special rule for https://t.me/air_alert_ua/5538
+188-            last_line = "#м_херсон_та_херсонська_територіальна_громада"
+189-
+190-        # Split last line by spaces and take only first part
+191-        # #Херсонський_район #Бериславський_район #Скадовський_район #Каховський_район #Генічеський_район
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read the rest of the message parser
+
+```
+sed -n 191,240p /tmp/aaf_peek/official_channel_processor.py
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+        # #Херсонський_район #Бериславський_район #Скадовський_район #Каховський_район #Генічеський_район
+        hashtag_locations = last_line.split(" ")
+        for hashtag_location in hashtag_locations:
+            if not self.hash_states_by_name.get(hashtag_location):
+                # TODO Raise an exception someday
+                logger.error("Can't process %s", hashtag_location)
+                return None, None, None
+
+        is_activated = ("Повітряна" in first_line) or ("🔴" in first_line)
+        is_deactivated = ("Відбій" in first_line) or ("🟢" in first_line)
+
+        if not is_activated and not is_deactivated:
+            # TODO Raise an exception someday
+            logging.info(
+                "Can't parse siren state %s at %s. First line: %s",
+                message.message,
+                message.date,
+                first_line,
+            )
+            return None, None, None
+
+        return hashtag_locations, is_activated, is_deactivated
+
+    @staticmethod
+    def location_to_hashtag(location: str) -> str:
+        # Івано-Франківськ => #ІваноФранківськ
+        # Запорізька область => #Запорізька_область
+        # м. Кривий Ріг... → м_Кривий_Ріг_та_Криворізька_територіальна_громада
+
+        hashtag_value = (
+            location.lower().replace("-", "").replace(" ", "_").replace(".", "").replace("'", "").replace("’", "")
+        )
+        return f"#{hashtag_value}"
+
+    def load_states(self):
+        states_file_path = pathlib.Path(__file__).parent.resolve() / "states.json"
+
+        with open(states_file_path, "r") as json_file:
+            raw_states = json.load(json_file)
+
+        for state in raw_states["states"]:
+            state_name = state["stateName"]
+            hashed_state_name = self.location_to_hashtag(state_name)
+            self.hash_states_by_name[hashed_state_name] = (state_name, "", "", "oblast")
+
+            for raion in state["districts"]:
+                raion_name = raion["districtName"]
+
+                maybe_renamed_raion = get_new_name(state_name, raion_name)
+                maybe_renamed_raion_name = maybe_renamed_raion[0] if maybe_renamed_raion else None
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Match dataset rows to the channel messages seen
+
+```
+cat > /tmp/aaf_scripts/match_rows.py <<'EOF'
+import sys
+import pandas as pd
+pd.set_option("display.width", 200)
+off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+w = off[(off.started_at >= "2026-09-06 12:00+00:00")]
+for key in ["Nikopol", "Zaporizhzhia", "m. Kharkiv"]:
+    print(w[w.hromada.fillna("").str.contains(key)][["hromada", "level", "started_at", "finished_at"]].to_string(index=False))
+    print()
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/match_rows.py /tmp/aaf_peek/official_data_en.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+                                      hromada   level                started_at               finished_at
+m. Nikopol ta Nikopolska terytorialna hromada hromada 2026-09-06 16:12:07+00:00 2026-09-06 16:44:22+00:00
+m. Nikopol ta Nikopolska terytorialna hromada hromada 2026-09-06 18:57:14+00:00 2026-09-07 03:59:44+00:00
+
+                                          hromada   level                started_at               finished_at
+m. Zaporizhzhia ta Zaporizka terytorialna hromada hromada 2026-09-06 14:15:40+00:00 2026-09-06 15:18:30+00:00
+m. Zaporizhzhia ta Zaporizka terytorialna hromada hromada 2026-09-06 17:24:49+00:00 2026-09-06 17:37:25+00:00
+m. Zaporizhzhia ta Zaporizka terytorialna hromada hromada 2026-09-06 19:45:28+00:00 2026-09-06 20:34:23+00:00
+m. Zaporizhzhia ta Zaporizka terytorialna hromada hromada 2026-09-06 23:44:35+00:00 2026-09-06 23:48:49+00:00
+
+                                      hromada   level                started_at               finished_at
+m. Kharkiv ta Kharkivska terytorialna hromada hromada 2026-09-06 15:49:48+00:00 2026-09-06 17:37:39+00:00
+m. Kharkiv ta Kharkivska terytorialna hromada hromada 2026-09-06 18:15:04+00:00 2026-09-06 23:48:11+00:00
+m. Kharkiv ta Kharkivska terytorialna hromada hromada 2026-09-06 23:58:26+00:00 2026-09-07 01:26:10+00:00
+m. Kharkiv ta Kharkivska terytorialna hromada hromada 2026-09-07 01:29:14+00:00 2026-09-07 02:12:33+00:00
+m. Kharkiv ta Kharkivska terytorialna hromada hromada 2026-09-07 02:24:41+00:00 2026-09-07 03:45:33+00:00
+m. Kharkiv ta Kharkivska terytorialna hromada hromada 2026-09-07 03:50:37+00:00 2026-09-07 05:37:49+00:00
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check alert type values in the client and Zaporizhzhia message history
+
+```
+grep -rn -i "artillery\|air_raid\|urban\|alert_type" /tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2 | grep -v "^Binary" | head -20; echo ----; curl -s -G "https://t.me/s/air_alert_ua" --data-urlencode "q=м. Запоріжжя" | python3 -I -c "
+import sys,re,html
+s=sys.stdin.read()
+dates=re.findall(r'datetime=\"([^\"]*)\"', s)
+texts=re.findall(r'tgme_widget_message_text[^>]*>(.*?)</div>', s, re.S)
+for d,t in list(zip(dates,texts)):
+    print(d[:16], '|', ' '.join(html.unescape(re.sub('<[^>]+>',' ',t)).split())[:110])
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:63:statuses = client.get_air_raid_alert_statuses()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:82:    statuses = await client.get_air_raid_alert_statuses()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:112:    print(f"{alert.location_title}: {alert.alert_type}")
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:117:##### `get_air_raid_alert_statuses(use_cache=True) -> AirRaidAlertStatuses`
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:128:statuses = client.get_air_raid_alert_statuses()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:146:##### `get_air_raid_alert_status(oblast_uid_or_location_title, oblast_level_only=False, use_cache=True) -> AirRaidAlertOblastStatus`
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:160:status = client.get_air_raid_alert_status(14)  # Київська область
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:163:status = client.get_air_raid_alert_status("Київська область")
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:171:##### `get_air_raid_alert_statuses_by_oblast(oblast_level_only=False, use_cache=True) -> AirRaidAlertOblastStatuses`
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:183:oblast_statuses = client.get_air_raid_alert_statuses_by_oblast()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:208:    print(f"{alert.location_title}: {alert.alert_type} at {alert.started_at}")
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:223:filtered = alerts.filter('location_oblast', 'Донецька область', 'alert_type', 'air_raid')
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:229:air_raid_alerts = alerts.get_air_raid_alerts()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:230:artillery_alerts = alerts.get_artillery_shelling_alerts()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:233:urban_fights_alerts = alerts.get_urban_fights_alerts()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:243:artillery_by_type = alerts.get_alerts_by_alert_type('artillery_shelling')
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:270:statuses = client.get_air_raid_alert_statuses()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:314:- `alert_type` (str): Type of alert ('air_raid', 'artillery_shelling', etc.)
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:392:    statuses = client.get_air_raid_alert_statuses()
+/tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2/PKG-INFO:418:            statuses = await client.get_air_raid_alert_statuses()
+----
+2026-09-06T19:45 | 🔴 🔴 22:45 Загроза керованих авіабомб в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рі
+2026-09-06T20:35 | 🟢 23:35 Відбій тривоги в м . Запоріжжя та Запорізька територіальна громада. Слідкуйте за подальшими повідомлен
+2026-09-06T21:00 | 🔴 00:00 Повітряна тривога в м . Запоріжжя та Запорізька територіальна громада Слідкуйте за подальшими повідомл
+2026-09-06T21:49 | 🔴 🔴 00:49 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-06T21:59 | 🔴 🔴 00:59 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-06T22:08 | 🔴 🔴 01:08 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-06T23:01 | 🔴 🔴 02:01 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-06T23:15 | 🔴 🔴 02:15 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-06T23:44 | 🔴 🔴 02:44 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-06T23:48 | 🟢 02:48 Відбій тривоги в м . Запоріжжя та Запорізька територіальна громада. Слідкуйте за подальшими повідомлен
+2026-09-07T01:25 | 🔴 04:25 Повітряна тривога в м . Запоріжжя та Запорізька територіальна громада Слідкуйте за подальшими повідомл
+2026-09-07T01:27 | 🔴 🔴 04:27 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-07T03:31 | 🔴 🔴 06:31 Ракетна загроза в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень небезп
+2026-09-07T05:18 | 🔴 🔴 08:18 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-07T05:28 | 🔴 🔴 08:28 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-07T05:32 | 🔴 🔴 08:32 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-07T05:38 | 🔴 🔴 08:38 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-07T05:50 | 🔴 🔴 08:50 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-07T05:55 | 🔴 🔴 08:55 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+2026-09-07T06:01 | 🔴 🔴 09:01 Загроза ударних БпЛА в м . Запоріжжя та Запорізька територіальна громада! Увага! Підвищений рівень н
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read how repeated alert starts are handled
+
+```
+sed -n 119,157p /tmp/aaf_peek/official_channel_processor.py
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+    def process_message(self, message: Message):
+        logger.info("Processing message %s", message.message)
+
+        hashed_locations, is_activated, is_deactivated = self.parse_message(message)
+
+        if not is_activated and not is_deactivated:
+            logger.error("Can't parse %s, skipping...", message.message)
+            return
+
+        for hashed_location in hashed_locations:
+            oblast_name, raion_name, hromada_name, level = self.hash_states_by_name[hashed_location]
+
+            if is_activated:
+                if current_alert := self.active_alerts_by_location.get(hashed_location):
+                    # Looks like it was started some time ago, but there are no message when alert was completed
+                    more_than_3_hours_difference = (message.date - current_alert.started_at) > datetime.timedelta(hours=3)
+                    if more_than_3_hours_difference:
+                        # Looks like it was not marked as completed, but another alert was started
+                        # otherwise just rewrite this alert
+                        current_alert.finished_at = current_alert.started_at + datetime.timedelta(hours=1)
+                        self.completed_alerts.append(current_alert)
+
+                alert = OfficialAirRaidAlertChannelAlert(
+                    started_at=message.date,
+                    oblast=oblast_name,
+                    raion=raion_name,
+                    hromada=hromada_name,
+                    level=level,
+                )
+                self.active_alerts_by_location[hashed_location] = alert
+
+            if is_deactivated:
+                if alert := self.active_alerts_by_location.get(hashed_location):
+                    alert.finished_at = message.date
+                    self.completed_alerts.append(alert)
+
+                    del self.active_alerts_by_location[hashed_location]
+
+    @staticmethod
+```
+
+</details>
+
+### Assistant (2026-10-12 17:42:37 UTC)
+
+I found a second parser problem while checking this. Measuring how often it happens before answering.
+
+<details><summary>Tool call: Bash</summary>
+
+Count imputed and truncated alert records
+
+```
+cat > /tmp/aaf_scripts/parser_artifacts.py <<'EOF'
+import sys
+import pandas as pd
+off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+off["dur"] = off.finished_at - off.started_at
+exact_1h = off.dur == pd.Timedelta(hours=1)
+print(f"rows with duration exactly 1 h (the parser's imputed end): {exact_1h.sum()} of {len(off)} ({exact_1h.mean():.2%})")
+print(off[exact_1h].groupby("level").size().to_dict())
+era = off[off.started_at >= "2025-11-01"]
+print("\nmedian duration (min) by level since 2025-11:", (era.groupby("level").dur.median().dt.total_seconds() / 60).round(1).to_dict())
+for key in ["Zaporizhzhia", "m. Kharkiv", "Nikopol", "Marhanets", "Pokrovska"]:
+    d = era[era.hromada.fillna("").str.contains(key)].dur.dt.total_seconds() / 60
+    print(f"{key:13s} n={len(d):5d}  median={d.median():6.1f} min  share under 10 min={(d < 10).mean():.0%}")
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/parser_artifacts.py /tmp/aaf_peek/official_data_en.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+rows with duration exactly 1 h (the parser's imputed end): 360 of 299275 (0.12%)
+{'hromada': 118, 'oblast': 117, 'raion': 125}
+
+median duration (min) by level since 2025-11: {'hromada': 62.2, 'oblast': 31.2, 'raion': 52.2}
+Zaporizhzhia  n= 1842  median=  60.0 min  share under 10 min=3%
+m. Kharkiv    n= 2671  median=  53.0 min  share under 10 min=3%
+Nikopol       n= 1946  median=  81.9 min  share under 10 min=4%
+Marhanets     n=  882  median=  64.9 min  share under 10 min=2%
+Pokrovska     n= 1161  median=  67.4 min  share under 10 min=8%
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Commit the design doc and scaffolding
+
+```
+git add -A && git status --short && git commit -q -F - <<'EOF'
+Add design doc, glossary, ADRs and alerts.in.ua snapshot script
+
+- docs/DESIGN.md: product overview, pipeline, evaluation protocol,
+  decision log, data-source findings and open questions Q1-Q16
+- docs/adr/0001-0004: as-of data model, one main forecast spec,
+  one alert source per spec, Telegram via the official API
+- CONTEXT.md: glossary of project terms
+- scripts/fetch_alerts_in_ua.py: saves raw alerts.in.ua history before
+  it leaves the API's one-month window
+- .gitignore and .env.example so secrets and data stay out of git
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+A  .env.example
+A  .gitignore
+A  CONTEXT.md
+M  README.md
+A  docs/DESIGN.md
+A  docs/adr/0001-as-of-data-model.md
+A  docs/adr/0002-one-main-spec.md
+A  docs/adr/0003-one-alert-source-per-spec.md
+A  docs/adr/0004-telegram-via-api.md
+A  scripts/fetch_alerts_in_ua.py
+8634f26 Add design doc, glossary, ADRs and alerts.in.ua snapshot script
+176c5fe first commit
+```
+
+</details>
+
+### Assistant (2026-10-12 17:42:50 UTC)
+
+Committed. Next I'm correcting the Zaporizhzhia finding in the design doc and recording the second parser problem.
+
+<details><summary>Tool call: Bash</summary>
+
+Locate the hromada finding and Q15/Q16 lines
+
+```
+grep -n "Hromada-level records are not all\|Zaporizhzhia city\|Nikopol, Marhanets\|Pokrovsk, Vovchansk\|Kharkiv city: real\|The official dataset's parser counts\|City zone vs raion\|Q15\|(a) Re-parse\|(b) Keep the official\|Proposal: (a)\|Q16\|Kharkiv city, for example\|Depends on Q15" docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+122:- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:
+123:  - Kharkiv city: real air raid alerts (its own alert zone).
+124:  - Zaporizhzhia city: "Загроза ударних БпЛА" (heightened strike-drone threat), issued only during a raion alert.
+125:  - Nikopol, Marhanets: "Загроза артобстрілу" (artillery shelling threat).
+126:  - Pokrovsk, Vovchansk, Lypetska: urban-fighting warnings.
+128:  The official dataset's parser counts every message starting with 🔴 as an alert start, and the CSV has no column for the message type. So these warnings appear as air raid alerts. This is why Nikopol raion looked like it was on alert in 99.9% of hours. alerts.in.ua does provide an `alert_type` field.
+129:- **City zone vs raion:** Kharkiv city's own alerts mostly fall inside Kharkivskyi raion alerts. The city is on alert while the raion is not in 0.5% of the time; the raion is on alert while the city is not in 11.7% (June–September 2026).
+149:- **Q15. How do we keep only real air raid alerts in the labels?** (See "Hromada-level records" in section 5.)
+150:  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download) and keep each message's type. Vadimkin's MIT-licensed parser is the starting point. This also lets us check his parsing elsewhere.
+151:  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus hromada zones checked by hand to be real air raid alerts (Kharkiv city). It is cheaper, but it relies on a sample showing that raion-level messages are air raid alerts only.
+153:  - Proposal: (a).
+169:- **Q16. Should city zones with their own air raid alerts be units?**
+170:  - Kharkiv city, for example, has its own alerts. They mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
+172:  - Depends on Q15, which determines which hromada zones carry real air raid alerts.
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 122,
+  "limit": 8
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+122	- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:
+123	  - Kharkiv city: real air raid alerts (its own alert zone).
+124	  - Zaporizhzhia city: "Загроза ударних БпЛА" (heightened strike-drone threat), issued only during a raion alert.
+125	  - Nikopol, Marhanets: "Загроза артобстрілу" (artillery shelling threat).
+126	  - Pokrovsk, Vovchansk, Lypetska: urban-fighting warnings.
+127	
+128	  The official dataset's parser counts every message starting with 🔴 as an alert start, and the CSV has no column for the message type. So these warnings appear as air raid alerts. This is why Nikopol raion looked like it was on alert in 99.9% of hours. alerts.in.ua does provide an `alert_type` field.
+129	- **City zone vs raion:** Kharkiv city's own alerts mostly fall inside Kharkivskyi raion alerts. The city is on alert while the raion is not in 0.5% of the time; the raion is on alert while the city is not in 11.7% (June–September 2026).
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 149,
+  "limit": 5
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+149	- **Q15. How do we keep only real air raid alerts in the labels?** (See "Hromada-level records" in section 5.)
+150	  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download) and keep each message's type. Vadimkin's MIT-licensed parser is the starting point. This also lets us check his parsing elsewhere.
+151	  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus hromada zones checked by hand to be real air raid alerts (Kharkiv city). It is cheaper, but it relies on a sample showing that raion-level messages are air raid alerts only.
+152	  - Either way, alerts.in.ua is filtered to `alert_type = air_raid`, so training and test share one definition (ADR-0003).
+153	  - Proposal: (a).
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:\n  - Kharkiv city: real air raid alerts (its own alert zone).\n  - Zaporizhzhia city: \"Загроза ударних БпЛА\" (heightened strike-drone threat), issued only during a raion alert.\n  - Nikopol, Marhanets: \"Загроза артобстрілу\" (artillery shelling threat).\n  - Pokrovsk, Vovchansk, Lypetska: urban-fighting warnings.\n\n  The official dataset's parser counts every message starting with 🔴 as an alert start, and the CSV has no column for the message type. So these warnings appear as air raid alerts. This is why Nikopol raion looked like it was on alert in 99.9% of hours. alerts.in.ua does provide an `alert_type` field.",
+  "new_string": "- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:\n  - **Kharkiv and Zaporizhzhia cities:** their own air raid alert zones (\"Повітряна тривога в м. …\"). During an alert, extra 🔴🔴 escalation messages follow: \"Загроза ударних БпЛА\" (strike drones), \"Загроза керованих авіабомб\" (guided bombs), \"Ракетна загроза\" (missiles).\n  - **Nikopol, Marhanets:** \"Загроза артобстрілу\" (artillery shelling threat), ended by \"Відбій загрози артобстрілу\". These are not air raid alerts.\n  - **Pokrovsk, Vovchansk, Lypetska:** urban-fighting warnings. These are not air raid alerts.\n- **The official dataset's parser** ([source](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset/blob/main/processors/official_channel_processor.py)) has two problems. The CSV keeps no message type, so neither can be undone from the CSV alone.\n  1. **Every 🔴 message counts as an alert start**, and every 🟢 message as an end. The only message it ignores is \"Тестовий Регіон\". So artillery and urban-fighting warnings are recorded as air raid alerts.\n     - Row-level check: the CSV rows for Nikopol on 2026-09-06, 16:12:07–16:44:22 and 18:57:14–03:59:44 UTC, match the \"Загроза артобстрілу\" → \"Відбій загрози артобстрілу\" messages to the second.\n     - This is why Nikopol raion looked like it was on alert in 99.9% of hours.\n  2. **A repeated 🔴 message for a location that is already on alert overwrites the alert's start time.** If the previous start was more than 3 h earlier, the parser instead closes the earlier alert with an imputed end at start + 1 h.\n     - Example: the Zaporizhzhia city alert from 21:00 to 23:48 UTC on 2026-09-06 (2 h 48 min) is recorded as 23:44:35–23:48:49 (4 min), because escalation messages kept resetting its start.\n     - Only 0.12% of all rows have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.\n- **Scope of these checks:** they cover the latest ~20 messages per search on the channel's public web preview (early September 2026), plus row-level matches for Nikopol, Kharkiv and Zaporizhzhia. We know the mechanisms exist; we have not measured how many rows they affect across the full history.\n- **alerts.in.ua types its alerts:** it has an `alert_type` field with values such as `air_raid`, `artillery_shelling` and `urban_fights` (per its Python client docs)."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Q15. How do we keep only real air raid alerts in the labels?** (See \"Hromada-level records\" in section 5.)\n  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download) and keep each message's type. Vadimkin's MIT-licensed parser is the starting point. This also lets us check his parsing elsewhere.\n  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus hromada zones checked by hand to be real air raid alerts (Kharkiv city). It is cheaper, but it relies on a sample showing that raion-level messages are air raid alerts only.",
+  "new_string": "- **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See \"Hromada-level records\" and \"The official dataset's parser\" in section 5.)\n  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download).\n    - Keep each message's type.\n    - Treat 🔴🔴 escalation messages as escalations, not as new starts.\n    - Vadimkin's MIT-licensed parser is the starting point.\n    - This also measures how many CSV rows the two parser problems affected.\n  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus the hromada zones checked by hand to be air raid zones (Kharkiv and Zaporizhzhia cities).\n    - Cheaper.\n    - It relies on a sample showing that raion-level messages are air raid alerts only.\n    - It keeps the overwritten start times wherever escalation messages occurred."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Update the city-zone question with the corrected finding
+
+```
+sed -i '' 's/  - Kharkiv city, for example, has its own alerts. They mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time./  - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time./' docs/DESIGN.md && grep -n "Kharkiv and Zaporizhzhia cities have" docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+183:  - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Commit the corrected findings
+
+```
+git add docs/DESIGN.md && git commit -q -F - <<'EOF'
+Correct hromada findings and record a second parser problem
+
+Row-level checks against the original channel messages showed that
+Zaporizhzhia city has its own air raid alerts (escalation messages are
+layered on top), and that the dataset's parser overwrites an alert's
+start time when a repeated alert message arrives. Q15 now covers both
+problems.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -3
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/commit-as-we-go.md`
+
+```
+---
+name: commit-as-we-go
+description: User wants work committed to main in small steps as it happens, because git history is part of the record
+metadata:
+  type: feedback
+---
+
+Commit to `main` as we go, in small logical commits. Don't batch up a whole session.
+
+**Why:** The user said "commit as we go; we need the history" (2026-10-12). The repo is submitted to KSE graders, and the history shows how the work evolved. Corrections should appear as their own commits rather than being squashed away. See [[kse-stage2-task]].
+
+**How to apply:** After each meaningful step (doc update, new script, finding corrected), commit with a descriptive message plus the Co-Authored-By trailer. Never commit `.env`, `data/` or `*.session`.
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+1950e31 Correct hromada findings and record a second parser problem
+8634f26 Add design doc, glossary, ADRs and alerts.in.ua snapshot script
+176c5fe first commit
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/commit-as-we-go.md
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Index the new memory and fix the Zaporizhzhia note
+
+```
+cd /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory && printf '%s\n' "- [Commit as we go](commit-as-we-go.md) — small commits to main after each step; history is part of the submission" >> MEMORY.md && sed -i '' 's/  - Zaporizhzhia city: strike-drone threat escalation./  - Zaporizhzhia city: its own air raid zone, plus 🔴🔴 escalation messages that the parser treats as new starts (start-time overwrite bug)./' data-sources.md && cat MEMORY.md && grep -n "Zaporizhzhia" data-sources.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+- [KSE Stage 2 task](kse-stage2-task.md) — what this repo is for, no-leakage rules, submission = repo + full AI chat export, agreed plan
+- [Data sources](data-sources.md) — alert datasets and Telegram channels found 2026-10-12: freshness, granularity, gotchas
+- [Commit as we go](commit-as-we-go.md) — small commits to main after each step; history is part of the submission
+25:  - Zaporizhzhia city: its own air raid zone, plus 🔴🔴 escalation messages that the parser treats as new starts (start-time overwrite bug).
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 17:43:39 UTC)
+
+I confirmed it with four separate checks, but only on a recent sample, not the full history. Rechecking also showed that one of my earlier claims was wrong.
+
+## How I confirmed it
+
+1. **The message text says what it is.** In the channel's public web preview, the Nikopol messages read "🔴 19:12 **Загроза артобстрілу!** Зараз у м. Нікополь … **артилерійський обстріл**. Пройдіть в укриття!" and end with "🟢 **Відбій загрози артобстрілу**". Air raid alerts use different wording: "Повітряна тривога в …" and "Відбій тривоги в …". Urban-fighting messages also name their threat.
+2. **I matched dataset rows to those messages to the second.** The dataset has two Nikopol rows on 2026-09-06:
+
+   | Dataset row (UTC) | Channel messages (Kyiv time, UTC+3) |
+   |---|---|
+   | 16:12:07 → 16:44:22 | "Загроза артобстрілу" at 19:12 → "Відбій загрози артобстрілу" at 19:44 |
+   | 18:57:14 → 03:59:44 | "Загроза артобстрілу" at 21:57 → "Відбій загрози артобстрілу" at 06:59 |
+
+   So those specific rows are artillery warnings, not air raid alerts.
+3. **I read the dataset's parser code.** It treats any message whose first line has 🔴 (or "Повітряна") as an alert start, and 🟢 (or "Відбій") as an end. The only message it ignores is "Тестовий Регіон", and it stores no message type. Artillery and urban-fighting messages start with 🔴, so they become "alerts".
+4. **alerts.in.ua treats them as separate types.** Its Python client documents `alert_type` values `air_raid`, `artillery_shelling` and `urban_fights`. An independent aggregator of the same official feeds doesn't count artillery as an air raid alert.
+
+**What I did not verify:**
+- I only looked at about 20 recent messages per search, from early September 2026, plus a few rows matched one by one.
+- "1,946 Nikopol records are artillery" is an inference: some of them may be real air raid alerts.
+
+**So:** the problem certainly exists, but how many rows it affects is unknown.
+
+## A correction
+
+I said Zaporizhzhia city's records were "a drone-threat escalation, not an alert." **That was wrong.** Looking at more messages, Zaporizhzhia city does have its own real alerts ("Повітряна тривога в м. Запоріжжя"), like Kharkiv. The "Загроза ударних БпЛА / керованих авіабомб / Ракетна загроза" messages are 🔴🔴 escalations sent *during* those alerts.
+
+## A second parser problem
+
+Those escalation messages led to another issue. When a 🔴 message arrives for a location that's already on alert, the parser **overwrites the alert's start time**. If the alert started more than 3 hours earlier, it instead closes the old one with an invented end time one hour after its start.
+
+Concrete case:
+
+| | Start (UTC) | End (UTC) | Duration |
+|---|---|---|---|
+| Channel: Zaporizhzhia city alert on 2026-09-06 | 21:00 | 23:48 | 2 h 48 min |
+| Dataset row | 23:44:35 | 23:48:49 | 4 min |
+
+The escalation messages kept resetting the start. The invented one-hour ends are rare (360 rows, 0.12%). I can't measure how often start times were overwritten without the raw messages.
+
+## What this means for a/b
+
+Both problems tilt things toward **(a): re-parse the channel ourselves**.
+- **(b)** can drop the artillery and urban-fighting hromadas, but it **can't repair overwritten start times**: the dataset has no record of which messages were escalations.
+- **(a)** keeps every message's type, treats escalations as escalations, and also measures how much of the dataset was affected. That measurement is a good paragraph for the write-up.
+
+## Commits
+
+Both are on `main`:
+- `8634f26` adds the design doc, glossary, decision records and download script.
+- `1950e31` corrects the hromada findings and records the second parser problem. It's a separate commit so the correction stays visible in the history.
+
+I'll keep committing after each step.
+
+**Still waiting on you:**
+- the alerts.in.ua token in `.env` (then say "go");
+- your a/b decision;
+- if (a), the Telegram API credentials.
+
+---
+
+## User (2026-10-12 17:49:18 UTC)
+
+So, a) will fix the issue with time overwrites and keep the type of the threat? What types of threats will we have/support and how should we handle them?
+
+<details><summary>Tool call: Bash</summary>
+
+List alert types known to the alerts.in.ua client
+
+```
+cd /tmp/aaf_peek/pkg2/alerts_in_ua-0.3.2 && grep -n "def get_.*alerts\|alert_type ==\|'[a-z_]*'" alerts_in_ua/alerts.py | head -30; grep -n -i "chemical\|nuclear\|threat" -r alerts_in_ua PKG-INFO | head
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+9:        self.alerts = [Alert(alert) for alert in data.get('alerts')]
+10:        meta = data.get('meta')
+11:        self.last_updated_at = UaDateParser.parse_date(meta.get('last_updated_at'),"%Y/%m/%d %H:%M:%S %z")
+12:        self.disclaimer = data.get('disclaimer')
+20:    def get_oblast_alerts(self) -> List[Alert]:
+21:        return self.get_alerts_by_alert_type('oblast')
+23:    def get_raion_alerts(self) -> List[Alert]:
+24:        return self.get_alerts_by_alert_type('raion')
+26:    def get_hromada_alerts(self) -> List[Alert]:
+27:        return self.get_alerts_by_alert_type('hromada')
+29:    def get_city_alerts(self) -> List[Alert]:
+30:        return self.get_alerts_by_alert_type('city')
+32:    def get_alerts_by_alert_type(self, alert_type: str) -> List[Alert]:
+33:        return self.filter('alert_type',alert_type)
+35:    def get_alerts_by_location_title(self, location_title: str) -> List[Alert]:
+36:        return self.filter('location_title',location_title)
+38:    def get_alerts_by_location_type(self, location_type: str) -> List[Alert]:
+39:        return self.filter('location_type',location_type)
+41:    def get_alerts_by_oblast(self, oblast_title: str) -> List[Alert]:
+42:        return self.filter('location_oblast',oblast_title)
+44:    def get_alerts_by_oblast_uid(self, oblast_uid: str) -> List[Alert]:
+45:        return self.filter('location_oblast_uid',oblast_uid)
+47:    def get_alerts_by_location_uid(self, location_uid: str) -> List[Alert]:
+48:        return self.filter('location_uid',location_uid)
+50:    def get_air_raid_alerts(self) -> List[Alert]:
+51:        return self.get_alerts_by_alert_type('air_raid')
+53:    def get_artillery_shelling_alerts(self) -> List[Alert]:
+54:        return self.get_alerts_by_alert_type('artillery_shelling')
+56:    def get_urban_fights_alerts(self) -> List[Alert]:
+57:        return self.get_alerts_by_alert_type('urban_fights')
+alerts_in_ua/alerts.py:59:    def get_nuclear_alerts(self) -> List[Alert]:
+alerts_in_ua/alerts.py:60:        return self.get_alerts_by_alert_type('nuclear')
+alerts_in_ua/alerts.py:62:    def get_chemical_alerts(self) -> List[Alert]:
+alerts_in_ua/alerts.py:63:        return self.get_alerts_by_alert_type('chemical')
+PKG-INFO:29:A comprehensive Python library for accessing the [alerts.in.ua](https://alerts.in.ua) API service. Provides real-time information about air raid alerts and other potential threats across Ukraine.
+PKG-INFO:231:nuclear_alerts = alerts.get_nuclear_alerts()
+PKG-INFO:232:chemical_alerts = alerts.get_chemical_alerts()
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 17:49:53 UTC)
+
+I'm sampling the official channel's history to see which message types actually occur. That takes about 100 polite page loads of the public preview.
+
+<details><summary>Tool call: Bash</summary>
+
+Sample 100 pages of the official alert channel history
+
+```
+mkdir -p /tmp/aaf_peek/survey && cat > /tmp/aaf_scripts/survey_channel.py <<'EOF'
+"""Sample @air_alert_ua web-preview pages evenly across the message-ID range and save messages as JSONL."""
+import html, json, re, sys, time, urllib.request
+
+out_path, last_id, pages = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+
+def fetch(before):
+    req = urllib.request.Request(f"https://t.me/s/air_alert_ua?before={before}", headers={"User-Agent": "Mozilla/5.0"})
+    return urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+
+def messages(page):
+    for block in page.split('class="tgme_widget_message_wrap')[1:]:
+        mid = re.search(r'data-post="air_alert_ua/(\d+)"', block)
+        dt = re.search(r'datetime="([^"]+)"', block)
+        tx = re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', block, re.S)
+        if mid and dt and tx:
+            text = re.sub(r"<br\s*/?>", "\n", tx.group(1))
+            text = html.unescape(re.sub(r"<[^>]+>", "", text))
+            yield {"id": int(mid.group(1)), "date": dt.group(1), "text": text}
+
+seen = set()
+with open(out_path, "w") as f:
+    for i in range(pages):
+        before = 25 + (last_id - 25) * i // (pages - 1)
+        try:
+            for m in messages(fetch(before)):
+                if m["id"] not in seen:
+                    seen.add(m["id"]); f.write(json.dumps(m, ensure_ascii=False) + "\n")
+        except Exception as e:
+            print("page", before, "failed:", e, file=sys.stderr)
+        time.sleep(1.5)
+print("messages:", len(seen))
+EOF
+python3 -I /tmp/aaf_scripts/survey_channel.py /tmp/aaf_peek/survey/sample.jsonl 338380 100
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+messages: 2000
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Classify sampled messages by type and era
+
+```
+cat > /tmp/aaf_scripts/classify_sample.py <<'EOF'
+import collections, json, re, sys
+
+rules = [  # (type, regex on the first line, after the time stamp)
+    ("air_raid_start",        r"^Повітряна тривога"),
+    ("air_raid_end",          r"^Відбій тривоги"),
+    ("artillery_start",       r"^Загроза артобстрілу|^Артилерійськ"),
+    ("artillery_end",         r"^Відбій загрози артобстрілу"),
+    ("urban_fights_start",    r"вуличних боїв"),
+    ("escalation_drones",     r"^Загроза ударних БпЛА"),
+    ("escalation_missiles",   r"^Ракетна загроза"),
+    ("escalation_kab",        r"керованих авіабомб"),
+    ("escalation_ballistic",  r"балістичн"),
+    ("chemical",              r"хімічн"),
+    ("radiation",             r"радіац|ядерн"),
+]
+msgs = [json.loads(l) for l in open(sys.argv[1])]
+counts = collections.Counter(); first_seen = {}; years = collections.defaultdict(collections.Counter); other = collections.Counter()
+for m in msgs:
+    lines = [l.strip() for l in m["text"].split("\n") if l.strip()]
+    first = lines[0] if lines else ""
+    emojis = "".join(ch for ch in first[:6] if ch in "🔴🟢🟡⚪️🔵")
+    body = re.sub(r"^[^\wА-Яа-яІіЇїЄєҐґ]*\d{1,2}:\d{2}\s*", "", first)  # drop emoji + time
+    kind = next((k for k, rx in rules if re.search(rx, body, re.I)), None)
+    if kind is None:
+        kind = "OTHER"; other[(emojis, body[:70])] += 1
+    key = f"{kind} [{emojis}]"
+    counts[key] += 1; years[m["date"][:4]][kind] += 1
+    first_seen.setdefault(key, m["date"][:10])
+print(f"{len(msgs)} sampled messages, {min(m['date'] for m in msgs)[:10]} .. {max(m['date'] for m in msgs)[:10]}\n")
+for k, n in counts.most_common():
+    print(f"{n:5d}  {k:38s} first seen in sample {first_seen[k]}")
+print("\nby year:", {y: dict(c) for y, c in sorted(years.items())})
+print("\nunclassified first lines:")
+for (e, b), n in other.most_common(25):
+    print(f"{n:4d}  {e} {b}")
+EOF
+python3 -I /tmp/aaf_scripts/classify_sample.py /tmp/aaf_peek/survey/sample.jsonl
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2000 sampled messages, 2022-03-14 .. 2026-09-07
+
+  966  air_raid_start [🔴]                     first seen in sample 2022-03-15
+  672  air_raid_end [🟢]                       first seen in sample 2022-03-15
+   94  air_raid_end [🟡]                       first seen in sample 2022-04-01
+   71  OTHER []                               first seen in sample 2022-03-14
+   67  artillery_start [🔴]                    first seen in sample 2022-10-01
+   59  artillery_end [🟢]                      first seen in sample 2023-08-14
+   24  OTHER [🟢]                              first seen in sample 2024-10-11
+   12  artillery_end [🟡]                      first seen in sample 2024-03-09
+   11  escalation_drones []                   first seen in sample 2025-01-30
+   10  OTHER [🟡]                              first seen in sample 2025-01-30
+    9  escalation_drones [🔴🔴]                 first seen in sample 2026-06-28
+    2  escalation_kab [🔴🔴]                    first seen in sample 2026-07-29
+    1  radiation [🔴]                          first seen in sample 2025-09-21
+    1  radiation [🟢]                          first seen in sample 2025-09-21
+    1  escalation_missiles [🔴🔴]               first seen in sample 2026-08-20
+
+by year: {'2022': {'OTHER': 1, 'air_raid_end': 93, 'air_raid_start': 123, 'artillery_start': 3}, '2023': {'air_raid_end': 76, 'air_raid_start': 112, 'artillery_start': 6, 'artillery_end': 6}, '2024': {'air_raid_start': 139, 'air_raid_end': 114, 'artillery_end': 24, 'artillery_start': 21, 'OTHER': 2}, '2025': {'artillery_start': 26, 'air_raid_start': 243, 'air_raid_end': 209, 'OTHER': 41, 'escalation_drones': 5, 'artillery_end': 34, 'radiation': 2}, '2026': {'air_raid_start': 349, 'air_raid_end': 274, 'artillery_end': 7, 'artillery_start': 11, 'OTHER': 61, 'escalation_drones': 15, 'escalation_kab': 2, 'escalation_missiles': 1}}
+
+unclassified first lines:
+  22   Атака дронів-камікадзе
+  12   УВАГА!!!
+   8  🟢 Відбій загрози ударних БпЛА
+   7   БЕЗКОШТОВНА ЕВАКУАЦІЯ
+   6   Загроза застосування КАБ
+   6   Увага!
+   6  🟢 Відбій атаки дронів-камікадзе
+   6   Атака дронів-камікадзе типу Молнія
+   5   УВАГА !!!
+   3  🟢 Увага!
+   3  🟡 Відбій атаки дронів-камікадзе
+   3  🟡 Відбій загрози застосування керованих авіаційних бомб (КАБів).
+   2  🟡 Відбій загрози ударних БПЛА
+   2  🟢 Відбій загрози застосування КАБ
+   2  🟢 Відбій загрози застосування керованих авіаційних бомб (КАБів).
+   1   Channel created
+   1   УВАГА !!! у Запорізька область
+   1  🟢 1 у Запорізька область.
+   1  🟡 УВАГА !!!
+   1   Атака дронів-камікадзе триває
+   1   Атака дронів-камікадзе на оптоволокні
+   1  🟢 увага
+   1   загроза КАБів
+   1  🟡 Відбій загроза КАБів
+   1  🟢 УВАГА !!!
+```
+
+</details>
+
+### Assistant (2026-10-12 17:53:48 UTC)
+
+The sample covers 2,000 messages from March 2022 to September 2026, and there are more message types than I expected. Adding the classification to the design doc now.
+
+<details><summary>Tool call: Bash</summary>
+
+Find insertion points in the design doc
+
+```
+grep -n "^- \*\*alerts.in.ua types its alerts\|^## 6\|^- \*\*Q16\|^### Evaluation\|Depends on Q15" docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+134:- **alerts.in.ua types its alerts:** it has an `alert_type` field with values such as `air_raid`, `artillery_shelling` and `urban_fights` (per its Python client docs).
+138:## 6. Open questions (to answer before building)
+182:- **Q16. Should city zones with their own air raid alerts be units?**
+185:  - Depends on Q15, which determines which hromada zones carry real air raid alerts.
+187:### Evaluation
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 130,
+  "limit": 10
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+130	  2. **A repeated 🔴 message for a location that is already on alert overwrites the alert's start time.** If the previous start was more than 3 h earlier, the parser instead closes the earlier alert with an imputed end at start + 1 h.
+131	     - Example: the Zaporizhzhia city alert from 21:00 to 23:48 UTC on 2026-09-06 (2 h 48 min) is recorded as 23:44:35–23:48:49 (4 min), because escalation messages kept resetting its start.
+132	     - Only 0.12% of all rows have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.
+133	- **Scope of these checks:** they cover the latest ~20 messages per search on the channel's public web preview (early September 2026), plus row-level matches for Nikopol, Kharkiv and Zaporizhzhia. We know the mechanisms exist; we have not measured how many rows they affect across the full history.
+134	- **alerts.in.ua types its alerts:** it has an `alert_type` field with values such as `air_raid`, `artillery_shelling` and `urban_fights` (per its Python client docs).
+135	- **City zone vs raion:** Kharkiv city's own alerts mostly fall inside Kharkivskyi raion alerts. The city is on alert while the raion is not in 0.5% of the time; the raion is on alert while the city is not in 11.7% (June–September 2026).
+136	- **Telegram volume grows:** posting on `@kpszsu` grew a lot over time, from about 2k posts by October 2022 to about 86k by October 2026, so the meaning of Telegram features changes over time.
+137	
+138	## 6. Open questions (to answer before building)
+139	
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 180,
+  "limit": 7
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+180	  - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
+181	  - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
+182	- **Q16. Should city zones with their own air raid alerts be units?**
+183	  - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
+184	  - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
+185	  - Depends on Q15, which determines which hromada zones carry real air raid alerts.
+186	
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **alerts.in.ua types its alerts:** it has an `alert_type` field with values such as `air_raid`, `artillery_shelling` and `urban_fights` (per its Python client docs).",
+  "new_string": "- **alerts.in.ua types its alerts:** its `alert_type` field takes one of five values: `air_raid`, `artillery_shelling`, `urban_fights`, `chemical`, `nuclear` (per its Python client). There is no type for in-alert escalations or kamikaze-drone attacks.\n\n### Message types in `@air_alert_ua`\n\nSample: 2,000 messages from 100 web-preview pages spread evenly over the message IDs, 2022-03-14 → 2026-09-07. Shares are approximate. The proposed handling is part of Q15/Q17.\n\n| Type | First line looks like | Share of sample | Since | Proposed handling |\n|---|---|---|---|---|\n| Air raid alert | 🔴 \"Повітряна тривога в …\" / 🟢 \"Відбій тривоги в …\" | ~82% | 2022 | **The target.** Each alert runs from start to all-clear. |\n| Partial all-clear | 🟡 \"Відбій тривоги в … область (тривога ще триває у якомусь районі)\" | ~5% | 2022 | Closes the oblast-wide alert. Raion alerts that are still open stay open. |\n| In-alert escalation | 🔴🔴 \"Загроза ударних БпЛА\" (strike drones) / \"Загроза застосування КАБ\" (guided bombs) / \"Ракетна загроза\" (missiles), ended by \"Відбій загрози …\" | ~2% | 2025 | Not a new alert: it never changes the alert's start or end. Stored as an event. |\n| Artillery shelling threat | 🔴 \"Загроза артобстрілу\" / 🟢🟡 \"Відбій загрози артобстрілу\" | ~7% | Oct 2022 | Not in the target. Stored. alerts.in.ua also has this type, so it could become a feature. |\n| Kamikaze-drone attack (front-line FPV, incl. \"типу Молнія\", \"на оптоволокні\") | \"Атака дронів-камікадзе\" / \"Відбій атаки дронів-камікадзе\" | ~2% | 2025 | Not in the target. Stored. |\n| Urban fighting | \"… вуличних боїв …\" | <0.5% (not in sample; found by search) | — | Not in the target. Stored. |\n| Radiation / chemical | \"Радіаційна загроза …\" | ~0.1% | 2025 | Not in the target. Stored. |\n| Service / info | \"УВАГА!!!\", \"БЕЗКОШТОВНА ЕВАКУАЦІЯ\", \"Channel created\" | ~2% | — | Ignored, but counted. |\n\n- **Formats change over time.** For example, 2025 escalations have no 🔴 in the first line, while 2026 ones start with 🔴🔴. Some service messages start with 🟢 or 🟡, so the old \"emoji = start/end\" rule mis-reads them. Our parser classifies by wording, not emoji.\n- **Unknown messages:** any message the parser can't recognise is logged and counted, and is never treated as an alert."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "  - Depends on Q15, which determines which hromada zones carry real air raid alerts.\n",
+  "new_string": "  - Depends on Q15, which determines which hromada zones carry real air raid alerts.\n- **Q17. Parsing rules if Q15 = (a).** (See \"Message types\" in section 5.)\n  - **Repeated start for a location that is already on alert:** keep the original start. Proposal: yes. This is exactly what fixes the overwrite problem.\n  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Proposal: close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. The alternative is an invented end, like the old parser's start + 1 h.\n  - **Escalation with no open alert:** e.g. \"Загроза керованих авіабомб\" arrives when no \"Повітряна тривога\" is open for that location. Proposal: open an implied air raid alert and flag it, then count how often this happens.\n  - **Non-target types as features:** only types that also exist in the test period can be features. After 2026-09-07 the only alert source is alerts.in.ua. It has artillery shelling and urban fighting, but no escalations or kamikaze-drone attacks. So escalations can be used for exploratory analysis and the write-up, but not as model inputs. Telegram threat posts (`@kpszsu`, `@deraketaua`) cover that information in both periods.\n"
+}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Commit the message-type survey
+
+```
+git add docs/DESIGN.md && git commit -q -F - <<'EOF'
+Document message types in the official alert channel
+
+A sample of 2,000 @air_alert_ua messages (2022-03 to 2026-09) shows
+air raid alerts, partial all-clears, in-alert escalations, artillery,
+kamikaze-drone, urban-fighting, radiation and service messages. Adds a
+proposed handling for each type and Q17 on parsing rules.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -2
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+eeec24a Document message types in the official alert channel
+1950e31 Correct hromada findings and record a second parser problem
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check first-seen dates of rarer message types
+
+```
+python3 -I -c "
+import json
+ms=[json.loads(l) for l in open('/tmp/aaf_peek/survey/sample.jsonl')]
+for kw in ['дронів-камікадзе','КАБ','ударних БпЛА','Радіац']:
+    d=sorted(m['date'][:10] for m in ms if kw.lower() in m['text'].lower())
+    print(kw, len(d), d[:1], d[-1:])
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+дронів-камікадзе 47 ['2025-04-30'] ['2026-08-14']
+КАБ 37 ['2024-10-11'] ['2026-09-02']
+ударних БпЛА 31 ['2025-01-30'] ['2026-09-07']
+Радіац 2 ['2025-09-21'] ['2025-09-21']
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fix escalation first-seen date and amend the commit
+
+```
+sed -i '' 's/| ~2% | 2025 | Not a new alert: it never changes/| ~2% | Oct 2024 | Not a new alert: it never changes/' docs/DESIGN.md && grep -c "Oct 2024 | Not a new alert" docs/DESIGN.md && git add docs/DESIGN.md && git commit -q --amend --no-edit && git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+1
+98efb1c Document message types in the official alert channel
+```
+
+</details>
+
+### Assistant (2026-10-12 17:54:45 UTC)
+
+Yes to both. Seeing every message in order fixes the overwritten start times and lets us keep each message's type. There are two limits, covered at the end.
+
+## How (a) fixes the start-time overwrites
+
+For each location, the parser tracks one state, open or closed:
+- **"Повітряна тривога"** opens an alert. If one is already open, the original start time is kept.
+- **"Відбій тривоги"** closes it.
+- **Escalation messages** (🔴🔴 drones, guided bombs, missiles) are recorded as separate events and never change the alert's start or end.
+
+Messages are classified by their **wording, not their emoji**. That matters because the formats changed over time:
+- 2025 escalation messages have no 🔴 in the first line, while 2026 ones start with 🔴🔴.
+- Some announcement messages ("Увага!") start with 🟢 or 🟡, which the old parser would read as an all-clear.
+
+## Which message types exist
+
+I sampled **2,000 messages** from the official channel, spread evenly from March 2022 to September 2026:
+
+| Type | Example | Share | Since | Handling |
+|---|---|---|---|---|
+| **Air raid alert** | "Повітряна тривога в …" → "Відбій тривоги в …" | ~82% | 2022 | **The target** |
+| Partial all-clear 🟡 | "Відбій тривоги в … область (тривога ще триває у якомусь районі)" | ~5% | 2022 | Closes the oblast-wide alert; raion alerts still open stay open |
+| In-alert escalation | "Загроза ударних БпЛА" / "…КАБ" / "Ракетна загроза" | ~2% | Oct 2024 | Stored as an event, never a new alert |
+| Artillery shelling threat | "Загроза артобстрілу" | ~7% | Oct 2022 | Not in the target; stored |
+| Kamikaze-drone attack (front-line FPV, incl. fibre-optic) | "Атака дронів-камікадзе" | ~2% | 2025 | Not in the target; stored |
+| Urban fighting | "…вуличних боїв…" | <0.5% | — | Not in the target; stored |
+| Radiation / chemical | "Радіаційна загроза" | ~0.1% | 2025 | Not in the target; stored |
+| Announcements | "УВАГА!!!", "БЕЗКОШТОВНА ЕВАКУАЦІЯ" | ~2% | — | Ignored, but counted |
+
+About 18% of messages aren't air raid starts or ends, and the old parser turned many of those into "alerts".
+
+## How we handle them
+
+1. **Target = air raid alerts only.** An alert runs from "Повітряна тривога" to "Відбій тривоги" for one location. That matches alerts.in.ua's `air_raid` type, so training and test share one definition.
+2. **Keep everything else with its type.** Nothing is thrown away, so other types stay available for analysis.
+3. **A type can feed the model only if it also exists in the test period.** After 7 September our only alert source is alerts.in.ua. It has five types: `air_raid`, `artillery_shelling`, `urban_fights`, `chemical`, `nuclear`.
+   - **Artillery and urban fighting:** they exist in both periods, so they could become features if they prove consistent across sources.
+   - **Escalations and kamikaze-drone attacks:** they don't exist after 7 September. A model that learned to rely on them would lose them exactly in the test period. So they're for exploratory analysis and the write-up only. The "what's flying where" information comes from the Telegram threat posts (`@kpszsu`, `@deraketaua`), which cover both periods.
+4. **Unknown messages never count as alerts.** They're logged and counted, and we review them.
+
+## Edge cases that need rules (Q17)
+
+| Case | Proposal | Alternative |
+|---|---|---|
+| A start arrives while the location is already on alert | Keep the original start | — |
+| An all-clear was never posted, and a new start comes hours later | End the alert at its last known message and mark the gap as **unknown**, excluded from training and scoring | Invent an end time, as the old parser does (start + 1 h) |
+| An escalation arrives with no open alert (e.g. "Загроза керованих авіабомб" out of nowhere) | Open an *implied* air raid alert, flag it, and count how often it happens | — |
+
+## Limits of (a)
+
+1. It can't recover messages that were never posted, hence the "unknown" rule above.
+2. It only covers up to 2026-09-07, when the channel went silent. After that we rely on alerts.in.ua and its own types, so the Q2 consistency check still matters.
+
+The message-type table and Q17 are in `docs/DESIGN.md`, committed as `98efb1c`.
+
+**Your decisions:** is it (a) for Q15, and do you agree with the three Q17 proposals? If yes, I'll record them as decided.
+
+**Still blocking the downloads:** the alerts.in.ua token in `.env`, and the Telegram API credentials, which (a) needs.
+
+---
+
+## User (2026-10-12 18:03:01 UTC)
+
+I agree with a) and q17 proposals; they look logical. One more question: starting from the 4th of September (I just googled it; maybe not the exact date), we have separate levels of alerts. Yellow for drones and red for ballistics (go and find info about that on the web; I can't provide many details). Do we cover this in our parser? How are we working with that now? Could it be the reason for the data stop on 7th of september?
+
+### Assistant (2026-10-12 18:03:08 UTC)
+
+Recording your decisions first. Then I'll look up the new alert levels.
+
+<details><summary>Tool call: Bash</summary>
+
+Find Q15 and Q17 lines to mark decided
+
+```
+grep -n "Q15. How do we keep\|Q17. Parsing rules\|Repeated start for a location\|Missing all-clear\|Escalation with no open alert\|Non-target types as features" docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "жовта червона повітряна тривога дрони балістика нова система вересень 2026",
+  "mode": "extended"
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "Ukraine new air raid alert levels yellow red drones ballistic missiles September 2026",
+  "mode": "extended"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+173:- **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
+204:- **Q17. Parsing rules if Q15 = (a).** (See "Message types" in section 5.)
+205:  - **Repeated start for a location that is already on alert:** keep the original start. Proposal: yes. This is exactly what fixes the overwrite problem.
+206:  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Proposal: close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. The alternative is an invented end, like the old parser's start + 1 h.
+207:  - **Escalation with no open alert:** e.g. "Загроза керованих авіабомб" arrives when no "Повітряна тривога" is open for that location. Proposal: open an implied air raid alert and flag it, then count how often this happens.
+208:  - **Non-target types as features:** only types that also exist in the test period can be features. After 2026-09-07 the only alert source is alerts.in.ua. It has artillery shelling and urban fighting, but no escalations or kamikaze-drone attacks. So escalations can be used for exploratory analysis and the write-up, but not as model inputs. Telegram threat posts (`@kpszsu`, `@deraketaua`) cover that information in both periods.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "Ukraine new air raid alert levels yellow red drones ballistic missiles September 2026"
+
+Links: [{"title":"Ukraine Struggling to Counter Russian Jet-Powered Drone Campaign - Jamestown","url":"https://jamestown.org/ukraine-struggling-to-counter-russian-jet-powered-drone-campaign/"},{"title":"Ukraine to introduce ‘yellow’ and ‘red’ air threat levels","url":"https://www.ukrinform.net/rubric-society/4160207-ukraine-to-introduce-yellow-and-red-air-threat-levels-zelensky.html"},{"title":"Ukraine to Introduce Two-Level Air Raid Alert System as Drone Attacks Disrupt Daily Life","url":"https://www.kyivpost.com/post/83730"},{"title":"Ukraine Plans Two Air Raid Alert Levels to Distinguish Drone and Missile Threats","url":"https://mezha.net/eng/news/1889ae04_ukraine_plans_two/"},{"title":"Yellow and red levels of air raid alerts to be introduced in Ukraine: what they will mean","url":"https://unn.ua/en/news/yellow-and-red-air-raid-alert-levels-will-be-introduced-in-ukraine-what-they-will-mean"},{"title":"Ukraine Will Introduce Two Threat Levels For Air Raid Alerts - Belarusian News - Charter'97","url":"https://charter97.org/en/news/2026/9/2/697034"},{"title":"Kyiv strikes (2022%E2%80%93present)","url":"https://en.wikipedia.org/wiki/Kyiv_strikes_(2022%E2%80%93present)"},{"title":"Ukraine Will Introduce Yellow and Red Air Raid Alert Levels","url":"https://ua.news/en/ukraine/v-ukrayini-zaprovadiat-zhovtii-i-chervonii-rivni-povitrianoyi-trivogi"},{"title":"Ukraine changes air raid alert system for drone and missile attacks","url":"https://swedenherald.com/article/ukraine-changes-air-raid-alert-system-for-drone-and-missile-attacks"}]
+
+Ukraine announced a two-level air raid alert system in early September 2026. Yellow covers drone threats and red covers missile threats.
+
+- **Announcement:** Zelensky announced the plan on September 2, saying two levels for indicating specific threats will be introduced—yellow and red.
+- **Yellow:** It is the basic signal for drone raids. A drone raid will trigger the yellow level.
+- **Red:** It covers missile threats, including the threat of ballistic attacks, as well as large-scale attacks.
+- **Sirens:** Alert sounds are changing by level, and the all-clear siren has been dropped. The siren will now sound only while the alert is in effect.
+- **Activity rules:** Under yellow, businesses can keep operating if they follow safety rules, and Prime Minister Serhii Koretskyi announced this on September 3. Jamestown reports that only after a red alert is declared are citizens expected to stop their activities and take shelter.
+- **Start date:** Jamestown says the system was implemented in Kyiv on September 6. Its sources differ on the exact start date, so confirm that date before relying on it.
+- **Open details:** Officials set the threat assignments weekly. The General Staff, the Air Force, the government, and other agencies will determine each week which threats correspond to the yellow and red alert levels. One report notes that the final criteria for each level have yet to be determined.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "жовта червона повітряна тривога дрони балістика нова система вересень 2026"
+
+Links: [{"title":"Зеленський: В Україні будуть \"жовта\" і \"червона\" тривоги. Вони звучатимуть по-різному","url":"https://www.pravda.com.ua/news/2026/09/02/8051557/"},{"title":"Жовтий — для дронів, червоний — для балістики. В Україні будуть нові позначення повітряної загрози","url":"https://galka.if.ua/zhovtyy-dlia-droniv-chervonyy-dlia-balistyky-v-ukraini-budut-novi-poznachennia-povitrianoi-zahrozy/"},{"title":"Повітряна тривога в Києві","url":"https://www.pravda.com.ua/articles/2026/09/16/8053762/"},{"title":"У Києві відсьогодні діятиме диференційоване оповіщення про повітряні загрози","url":"https://lb.ua/society/2026/09/06/764092_kiievi_vidsogodni_diyatime.html"},{"title":"В Україні готують нову систему оповіщення про повітряні тривоги (що зміниться)","url":"https://nashreporter.com/suspilstvo/v-ukrayini-gotuyut-novu-systemu-opovishhennya-pro-povitryani-tryvogy-shho-zminytsya-331582"},{"title":"Дрони — жовтий, ракети — червоний: у Києві запрацювала нова система оповіщення про тривогу","url":"https://enovosty.com/uk/news-ukr/news_society-ukr/full/droni-zhovtij-raketi-chervonij-u-kiyevi-zapracyuvala-nova-sistema-opovishhennya-pro-trivogu"},{"title":"В Україні змінили систему повітряних тривог: що означають червоний і жовтий рівні -","url":"https://zolochiv.net/chervonyi-zhovtyi-rivni-povitrianoi-tryvohy/"},{"title":"Жовта чи червона? В Україні змінили правила повітряних тривог — що це означатиме для Вінниччини","url":"https://vinnychany.info/war/zhovta-chy-chervona-v-ukraini-zminyly-pravyla-povitrianykh-tryvoh-shcho-tse-oznachatyme-dlia-vinnychchyny/"},{"title":"Оновлення системи оповіщення про повітряну загрозу. Що означають жовтий та червоний рівні тривоги?","url":"https://www.radiokor.com.ua/2026/09/14/opovihthennya/"}]
+
+Пошук показав, що в Україні у вересні 2026 року запровадили нову систему повітряних тривог із двома рівнями: жовтим і червоним.
+
+- **Запуск і правові підстави:** Зеленський оголосив про зміну на початку вересня. Відповідні зміни передбачені постановою Кабінету Міністрів України №1092, яка набрала чинності 4 вересня 2026 року.
+- **Жовтий рівень:** він стосується дронів. За даними одного з джерел, у КМДА пояснили, що жовтий рівень означає, коли Києву загрожують приблизно один-два «Шахеди» (у КМДА підтвердили, що жовтий рівень – це коли Києву загрожують умовно 1–2 звичайні "Шахеди".).
+- **Червоний рівень:** він охоплює ракетні, ракетно-дронові та масовані дронові атаки. Червоний рівень означатиме ракетну, ракетно-дронову або масовану дронову загрозу, а також можливість балістичних атак. У цьому випадку необхідно негайно перейти до укриття.
+- **Режим роботи:** за жовтого рівня бізнес, транспорт і соціальні об'єкти можуть працювати за визначеними критеріями безпеки. У Києві від 6 вересня немає необхідності в окремому проміжному «відбої», а нове сповіщення просто замінює попереднє.
+- **Контекст:** Росія змінила тактику атак на Україну, нарощуючи використання саме реактивних БпЛА. Про це повідомляє УП.
+
+Джерела розходяться в деталях. Наприклад, у одних пишуть, що конкретний рівень оголошують Збройні сили, а в постанові, за словами УП, не вказано, скільки дронів має летіти на район, щоб оголосили жовтий рівень небезпеки. Також варто перевіряти поточні офіційні повідомлення, бо правила могли змінюватися після публікацій.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://lb.ua/society/2026/09/06/764092_kiievi_vidsogodni_diyatime.html",
+  "prompt": "Extract all specifics: start date and where (Kyiv only or nationwide), what yellow and red mean, how alerts are communicated (app 'Повітряна тривога', Telegram channel, sirens), whether there is an all-clear between levels, how levels switch, whether the official Telegram channel @air_alert_ua or the app changed. Quote key sentences."
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebFetch</summary>
+
+```
+{
+  "url": "https://www.pravda.com.ua/articles/2026/09/16/8053762/",
+  "prompt": "Extract specifics about how air raid alerts now work after the yellow/red levels were introduced: rollout dates by region, how they are communicated (app, Telegram channels, sirens), problems reported, whether the official 'Повітряна тривога' Telegram channel stopped or changed, and any data/API changes. Quote key sentences."
+}
+```
+
+</details>
+
+<details><summary>Tool call: WebSearch</summary>
+
+```
+{
+  "query": "телеграм канал \"Повітряна тривога\" air_alert_ua перестав публікувати жовтий червоний рівень застосунок оновлення вересень 2026",
+  "mode": "extended"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The server returned HTTP 403 Forbidden.
+
+The response body was not retrieved. If this URL requires authentication, use an authenticated tool (e.g. `gh` for GitHub, or an MCP-provided fetch tool) instead of WebFetch.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Web search results for query: "телеграм канал "Повітряна тривога" air_alert_ua перестав публікувати жовтий червоний рівень застосунок оновлення вересень 2026"
+
+Links: [{"title":"Повітряна Тривога","url":"https://t.me/s/air_alert_ua"},{"title":"Alerts.in.ua","url":"https://en.wikipedia.org/wiki/Alerts.in.ua"},{"title":"«Безпечний простір» і нові таблички з 18 вересня 2026 року: уряд оновив правила реагування на повітряні загрози","url":"https://7eminar.ua/news/24453-bezpecnii-prostir-i-novi-tablicki-z-18-veresnya-2026-roku"},{"title":"Жовтий і червоний рівні: в Україні змінять систему оповіщення про повітряні загрози","url":"https://armyinform.com.ua/2026/09/02/zhovtyj-i-chervonyj-rivni-v-ukrayini-zminyat-systemu-opovishhennya-pro-povitryani-zagrozy/"},{"title":"Чи зупиняються потяги під час повітряної тривоги - НетФрідом","url":"https://netfreedom.org.ua/chy-zupyniaiutsia-potiahy-pid-chas-povitrianoi-tryvohy/"},{"title":"В Україні запровадили два рівні повітряної загрози: що означають «жовтий» і «червоний»","url":"https://tenews.org.ua/post/show/v-ukrayini-zaprovadyly-dva-rivni-povitryanoyi-zahrozy-shcho-oznachayut-zhovtyy-i-chervonyy/"},{"title":"Нова система повітряних тривог в Україні: що означають жовтий і червоний рівні. - UA.NEWS","url":"https://uazmi.org/news/post/15a94624e8b004f190536702564f3a27"},{"title":"В Україні змінять систему повітряних тривог: з'являться жовтий і червоний рівень - ТехноФан","url":"https://tehnofan.com.ua/2026/09/03/v-ukrayini-zminyat%CA%B9-systemu-povitryanykh-tryvoh-zyavlyat%CA%B9sya-zhovtyy-i-chervonyy-riven%CA%B9/"},{"title":"Повітряні тривоги в Україні оголошуватимуть по-новому: що зміниться і як працюватимуть \"жовтий\" та \"червоний\" рівні","url":"https://news.telegraf.com.ua/ukr/ukraina/5949096-povitryani-trivogi-v-ukraini-ogoloshuvatimut-po-novomu-shcho-zminitsya-i-yak-pratsyuvatimut-zhovtiy-ta-chervoniy-rivni"}]
+
+Я не нашёл подтверждений, что канал @air_alert_ua перестал публиковать сигналы «жовтий» и «червоний» или что приложение «Повітряна тривога» перестало работать.
+
+**Что найдено про сам канал:** страница t.me/s/air_alert_ua в выдаче описывает официальный канал, который сообщает о тревогах по всей Украине, и советует установить приложение. Но дата этой страницы в выдаче указана как 573 дня назад, поэтому она может быть устаревшей и не отражать состояние канала в сентябре 2026 года.
+
+**Что известно про новую систему уровней:**
+- Два уровня, жёлтый и красный, появились в начале сентября 2026 года. По данным одного из источников, опубликовано 9 сентября 2026 года.
+- Президент Зеленский объявил об изменениях 2 сентября, а Генштаб и Воздушные силы будут еженедельно определять критерии для каждого уровня.
+- Сообщается, что для будущего приложения на базе «Дії» планируется информирование о тревогах, движении «шахедов» и ракетах. Из этого не следует, что старое приложение или канал закрыты.
+- Один из источников говорит, что с 18 сентября 2026 года вводятся новые требования к звуковым сигналам и табличкам, а для жёлтого уровня предусмотрена длительность 30 секунд.
+
+**Вывод:** поиск не дал ни одного сообщения о прекращении публикаций в канале air_alert_ua или о выходе обновления приложения, которое бы убрало эти уровни. Чтобы проверить, стоит открыть сам канал в Telegram и посмотреть, есть ли в нём сообщения с жёлтым или красным уровнем после начала сентября, а также проверить официальные сообщения правительства.
+
+
+REMINDER: You MUST include the sources above in your response to the user using markdown hyperlinks.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+**Start and scope**
+- Kyiv only. The article says: "Із 6:00 6 вересня за рішенням Уряду в Києві запроваджено диференційоване оповіщення про повітряні загрози." Launch date: 6 September 2026, 06:00.
+- Coverage is uneven within the city. The system works in all Kyiv districts except Pechersk. In Holosiivskyi and Svyatoshynskyi it works only partly, because differentiation is technically impossible in some areas.
+
+**Alert levels**
+- Yellow: "Дронова небезпека" (drone danger).
+- Red: "Масована дронова загроза", "Ракетна загроза", "Ракетно-дронова загроза" (massed drone, missile, and combined missile-drone threats).
+- Green: "Відбій" (all-clear), meaning no listed threat is currently recorded for the city.
+- The article says that under the government's 3 September decisions, red means stopping work and moving people into shelter. It also recommends keeping the Kyiv metro running during yellow.
+
+**How alerts are delivered**
+- The Kyiv City State Administration announced the change on Telegram. The article links to its post but does not name a channel handle.
+- The photo caption credits the "Повітряна тривога" app (photo: Digital Transformation Ministry), but the text does not say how alerts are pushed through it.
+- Where differentiation is not possible, the usual siren applies: "у разі виникнення будь-якої повітряної небезпеки або загрози подається звичайний сигнал сирени" (a standard siren for any air danger or threat). In those areas there is no separate all-clear sound.
+- A future state app on Diia is planned to inform about air threats. It is not yet launched.
+
+**All-clear between levels and switching**
+- No separate all-clear is issued between threat types: "Окремий "Відбій" між різними видами загроз не оголошується."
+- Each new message shows the current threat and level and replaces the previous one. For example, a rocket threat message after a drone message means the rocket threat is now active.
+- "Відбій" means no listed air threat is recorded for the city at that moment.
+
+**Changes to the app or @air_alert_ua**
+- The article does not mention @air_alert_ua at all, so I can't confirm any change to it.
+- It does not say the "Повітряна тривога" app changed. It only mentions the app in the photo caption and says a new state app is planned.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Search the channel for level-style messages after Sept 3
+
+```
+for q in "м. Київ" "Дронова небезпека" "Ракетно-дронова" "Масована дронова" "рівень"; do echo "== $q"; curl -s -G "https://t.me/s/air_alert_ua" --data-urlencode "q=$q" | python3 -I -c "
+import sys,re,html
+s=sys.stdin.read()
+for block in s.split('class=\"tgme_widget_message_wrap')[1:]:
+    dt=re.search(r'datetime=\"([^\"]+)\"', block); tx=re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', block, re.S)
+    if dt and tx:
+        t=html.unescape(re.sub(r'<[^>]+>',' ',re.sub(r'<br\s*/?>',' | ',tx.group(1))))
+        if dt.group(1) >= '2026-09-03': print(dt.group(1)[:16], ' '.join(t.split())[:170])
+" | tail -8; sleep 1.5; done
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+== м. Київ
+2026-09-05T02:51 🔴 05:51 Повітряна тривога в м . Київ | Слідкуйте за подальшими повідомленнями. | #м_Київ
+2026-09-05T02:55 🟢 05:55 Відбій тривоги в м . Київ . | Слідкуйте за подальшими повідомленнями. | #м_Київ
+2026-09-05T03:53 🔴 06:53 Повітряна тривога в м . Київ | Слідкуйте за подальшими повідомленнями. | #м_Київ
+2026-09-05T06:52 🟢 09:52 Відбій тривоги в м . Київ . | Слідкуйте за подальшими повідомленнями. | #м_Київ
+2026-09-05T12:03 🔴 15:03 Повітряна тривога в м . Київ | Слідкуйте за подальшими повідомленнями. | #м_Київ
+2026-09-05T14:26 🟢 17:26 Відбій тривоги в м . Київ . | Слідкуйте за подальшими повідомленнями. | #м_Київ
+2026-09-05T23:22 🔴 02:22 Повітряна тривога в м . Київ | Слідкуйте за подальшими повідомленнями. | #м_Київ
+2026-09-05T23:44 🟢 02:44 Відбій тривоги в м . Київ . | Слідкуйте за подальшими повідомленнями. | #м_Київ
+== Дронова небезпека
+== Ракетно-дронова
+== Масована дронова
+== рівень
+2026-09-07T03:31 🔴 🔴 06:31 Ракетна загроза в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_Запоріз
+2026-09-07T05:18 🔴 🔴 08:18 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_За
+2026-09-07T05:28 🔴 🔴 08:28 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_За
+2026-09-07T05:32 🔴 🔴 08:32 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_За
+2026-09-07T05:38 🔴 🔴 08:38 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_За
+2026-09-07T05:50 🔴 🔴 08:50 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_За
+2026-09-07T05:55 🔴 🔴 08:55 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_За
+2026-09-07T06:01 🔴 🔴 09:01 Загроза ударних БпЛА в м. Запоріжжя та Запорізька територіальна громада! | Увага! Підвищений рівень небезпеки! Пройдіть у найближче укриття | #м_Запоріжжя_та_За
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check Kyiv alerts and weekly alert volume around the switch
+
+```
+cd /tmp/aaf_peek && curl -sL -o volunteer_data_en.csv https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/datasets/volunteer_data_en.csv && cat > /tmp/aaf_scripts/regime_check.py <<'EOF'
+import sys
+import pandas as pd
+vol = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+k = vol[(vol.region == "Kyiv City") & (vol.started_at >= "2026-09-04") & (vol.started_at < "2026-09-09")]
+print("Volunteer data, Kyiv City alerts 2026-09-04..08 (UTC):")
+print(k[["started_at", "finished_at", "naive"]].to_string(index=False))
+v = vol[(vol.started_at >= "2026-08-01") & (vol.started_at < "2026-10-12")].copy()
+v["hours"] = (v.finished_at - v.started_at).dt.total_seconds() / 3600
+v["week"] = v.started_at.dt.tz_convert("Europe/Kyiv").dt.to_period("W-SUN").dt.start_time.dt.date
+w = v.groupby("week").agg(alerts=("region", "size"), alert_hours=("hours", "sum"), median_min=("hours", lambda s: 60 * s.median()), naive_share=("naive", "mean"))
+print("\nVolunteer data, all oblasts, per week (Kyiv time):")
+print(w.round(2).to_string())
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/regime_check.py /tmp/aaf_peek/volunteer_data_en.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+/tmp/aaf_scripts/regime_check.py:9: UserWarning: Converting to PeriodArray/Index representation will drop timezone information.
+  v["week"] = v.started_at.dt.tz_convert("Europe/Kyiv").dt.to_period("W-SUN").dt.start_time.dt.date
+Volunteer data, Kyiv City alerts 2026-09-04..08 (UTC):
+               started_at               finished_at  naive
+2026-09-04 02:03:05+00:00 2026-09-04 02:33:05+00:00   True
+2026-09-04 06:30:00+00:00 2026-09-04 08:23:50+00:00  False
+2026-09-04 10:24:19+00:00 2026-09-04 10:28:30+00:00  False
+2026-09-04 12:30:28+00:00 2026-09-04 12:30:50+00:00  False
+2026-09-04 16:34:48+00:00 2026-09-04 17:11:30+00:00  False
+2026-09-04 19:16:51+00:00 2026-09-04 19:21:50+00:00  False
+2026-09-04 21:12:55+00:00 2026-09-04 21:27:10+00:00  False
+2026-09-05 02:51:30+00:00 2026-09-05 02:56:10+00:00  False
+2026-09-05 03:54:10+00:00 2026-09-05 06:53:10+00:00  False
+2026-09-05 13:57:28+00:00 2026-09-05 14:26:50+00:00  False
+2026-09-05 23:29:08+00:00 2026-09-05 23:47:16+00:00  False
+2026-09-06 20:30:58+00:00 2026-09-06 21:00:58+00:00   True
+2026-09-07 09:08:34+00:00 2026-09-07 09:38:34+00:00   True
+2026-09-07 14:56:14+00:00 2026-09-07 16:05:20+00:00  False
+2026-09-08 02:40:20+00:00 2026-09-08 02:41:00+00:00  False
+2026-09-08 07:36:42+00:00 2026-09-08 07:37:30+00:00  False
+2026-09-08 16:46:32+00:00 2026-09-08 17:16:32+00:00   True
+
+Volunteer data, all oblasts, per week (Kyiv time):
+            alerts  alert_hours  median_min  naive_share
+week                                                    
+2026-07-27     221        98.49       21.33         0.04
+2026-08-03     746       467.48       21.22         0.05
+2026-08-10     817       370.13       17.88         0.05
+2026-08-17     870       403.29       20.28         0.06
+2026-08-24    1080       579.83       19.00         0.03
+2026-08-31    1076       501.02       19.62         0.05
+2026-09-07     926       453.75       19.83         0.07
+2026-09-14    1005       557.35       18.90         0.06
+2026-09-21    1155       504.91       18.33         0.07
+2026-09-28    1005       444.55       17.73         0.09
+2026-10-05    1179       510.40       18.47         0.10
+2026-10-12      26         7.44       13.98         0.12
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 18:04:47 UTC)
+
+The channel never published the new levels, and the timing strongly suggests the switch is why it went silent. Recording this and your decisions in the design doc.
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/docs/adr/0005-rebuild-alert-history-from-channel.md`
+
+```
+---
+status: accepted
+---
+
+# The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV
+
+The published official CSV has two problems, and the CSV alone cannot undo them because it keeps no message type:
+- Its parser treats every 🔴 message as an alert start, so artillery, urban-fighting and kamikaze-drone warnings become "air raid alerts".
+- A repeated 🔴 message for a location already on alert overwrites the alert's start time.
+
+We therefore download the channel's messages ourselves through Telethon and rebuild the alerts, keeping each message's type.
+
+Parsing rules:
+- **Messages are classified by wording, not emoji.**
+- **Only "Повітряна тривога" → "Відбій тривоги" periods are air raid alerts.**
+- **A repeated start keeps the original start time.**
+- **Escalations never change an alert's start or end.**
+- **A missing all-clear leaves an unknown period.** It is not trained on or scored, and no end time is invented.
+- **An escalation with no open alert opens a flagged, implied alert.**
+- **Unrecognised messages are logged and counted, never treated as alerts.**
+
+## Considered options
+
+- **Filter the CSV** (raion- and oblast-level rows only, plus hand-checked city zones): cheaper, but it keeps the overwritten start times.
+
+## Consequences
+
+- Telegram API credentials are needed before any alert labels can be built.
+- The parser is checked against the CSV on rows where both should agree. The differences show how many CSV rows the two problems affected.
+
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 173,
+  "limit": 36
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/docs/adr/0005-rebuild-alert-history-from-channel.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+173	- **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
+174	  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download).
+175	    - Keep each message's type.
+176	    - Treat 🔴🔴 escalation messages as escalations, not as new starts.
+177	    - Vadimkin's MIT-licensed parser is the starting point.
+178	    - This also measures how many CSV rows the two parser problems affected.
+179	  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus the hromada zones checked by hand to be air raid zones (Kharkiv and Zaporizhzhia cities).
+180	    - Cheaper.
+181	    - It relies on a sample showing that raion-level messages are air raid alerts only.
+182	    - It keeps the overwritten start times wherever escalation messages occurred.
+183	  - Either way, alerts.in.ua is filtered to `alert_type = air_raid`, so training and test share one definition (ADR-0003).
+184	  - Proposal: (a).
+185	
+186	### Target
+187	
+188	- **Q5. Main spec.** *Decided 2026-10-12* ([ADR-0002](adr/0002-one-main-spec.md)):
+189	  - Main: raion × 1 h × Active, horizons 1–24, provided Q2 passes.
+190	  - Secondary: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).
+191	- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+192	  - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
+193	- **Q7. Label rules.**
+194	  - How much overlap makes a slot Active: any overlap, or at least 1 minute?
+195	  - Are alerts separated by a short gap merged when counting onsets? If so, how short is "short"?
+196	  - What to do with volunteer "naive" alerts, whose end time is imputed as start + 30 min?
+197	- **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
+198	  - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
+199	  - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
+200	- **Q16. Should city zones with their own air raid alerts be units?**
+201	  - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
+202	  - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
+203	  - Depends on Q15, which determines which hromada zones carry real air raid alerts.
+204	- **Q17. Parsing rules if Q15 = (a).** (See "Message types" in section 5.)
+205	  - **Repeated start for a location that is already on alert:** keep the original start. Proposal: yes. This is exactly what fixes the overwrite problem.
+206	  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Proposal: close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. The alternative is an invented end, like the old parser's start + 1 h.
+207	  - **Escalation with no open alert:** e.g. "Загроза керованих авіабомб" arrives when no "Повітряна тривога" is open for that location. Proposal: open an implied air raid alert and flag it, then count how often this happens.
+208	  - **Non-target types as features:** only types that also exist in the test period can be features. After 2026-09-07 the only alert source is alerts.in.ua. It has artillery shelling and urban fighting, but no escalations or kamikaze-drone attacks. So escalations can be used for exploratory analysis and the write-up, but not as model inputs. Telegram threat posts (`@kpszsu`, `@deraketaua`) cover that information in both periods.
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "  - Either way, alerts.in.ua is filtered to `alert_type = air_raid`, so training and test share one definition (ADR-0003).\n  - Proposal: (a).",
+  "new_string": "  - Either way, alerts.in.ua is filtered to `alert_type = air_raid`, so training and test share one definition (ADR-0003).\n  - *Decided 2026-10-12: (a)* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md))."
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "- **Q17. Parsing rules if Q15 = (a).** (See \"Message types\" in section 5.)\n  - **Repeated start for a location that is already on alert:** keep the original start. Proposal: yes. This is exactly what fixes the overwrite problem.\n  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Proposal: close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. The alternative is an invented end, like the old parser's start + 1 h.\n  - **Escalation with no open alert:** e.g. \"Загроза керованих авіабомб\" arrives when no \"Повітряна тривога\" is open for that location. Proposal: open an implied air raid alert and flag it, then count how often this happens.\n  - **Non-target types as features:**",
+  "new_string": "- **Q17. Parsing rules.** *Decided 2026-10-12: all three proposals accepted* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)). (See \"Message types\" in section 5.)\n  - **Repeated start for a location that is already on alert:** keep the original start. This is exactly what fixes the overwrite problem.\n  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. No end time is invented (the old parser used start + 1 h).\n  - **Escalation with no open alert:** e.g. \"Загроза керованих авіабомб\" arrives when no \"Повітряна тривога\" is open for that location. Open an implied air raid alert, flag it, and count how often this happens.\n  - **Non-target types as features:**"
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "  - Depends on Q15, which determines which hromada zones carry real air raid alerts.\n",
+  "new_string": "  - Depends on Q15, which determines which hromada zones carry real air raid alerts.\n- **Q18. What counts as an air raid alert under the yellow/red system?** (See \"Yellow and red alert levels\" in section 5.)\n  - **The problem:** every training alert comes from the old single-level system. The whole test period, about 2026-09-14 → 2026-10-11, falls under the new one. The definition changes exactly at the train/test boundary.\n  - **Proposal: target = an alert of either level (yellow or red).** The old \"Повітряна тривога\" covered drones and missiles alike, so \"either level\" is the closest match to the old definition. Store the level as an attribute.\n  - **Red-only as the target:** not possible. There is no red-level history to train on.\n  - **Level as a feature:** not now, because it doesn't exist before September 2026 (same rule as escalations in Q17).\n  - **Checks:**\n    - Does alerts.in.ua history carry `alert_level`?\n    - Where and when did each region switch? Rollout is regional, and Kyiv switched on 2026-09-06.\n    - Do alert counts and durations per raion jump at the switch? Extends Q2.\n  - **Reporting:** the switch is reported as a limitation. Test results may also be shown per week, to see whether weekly retraining adapts to the new system.\n"
+}
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "old_string": "### Message types in `@air_alert_ua`",
+  "new_string": "### Yellow and red alert levels (September 2026)\n\n- **What changed:** air threats now have two levels.\n  - **Yellow:** \"Дронова небезпека\" (drone danger, e.g. 1–2 Shaheds). Businesses and transport may keep working.\n  - **Red:** massed-drone, missile or missile-drone threat, including ballistic missiles. People must go to shelter.\n- **No all-clear between levels:** a new message replaces the previous one, and \"Відбій\" (green) means no threat at all.\n- **Dates:**\n  - Announced 2026-09-02.\n  - Cabinet resolution №1092 in force from 2026-09-04.\n  - Kyiv switched on 2026-09-06 at 06:00 Kyiv time, in all districts except Pechersk, and only partly in Holosiivskyi and Svyatoshynskyi.\n  - Where differentiation is technically impossible, the ordinary siren is still used.\n  - The General Staff, Air Force and government reassign threats to levels weekly.\n  - Sources: [Ukrinform](https://www.ukrinform.net/rubric-society/4160207-ukraine-to-introduce-yellow-and-red-air-threat-levels-zelensky.html), [LB.ua](https://lb.ua/society/2026/09/06/764092_kiievi_vidsogodni_diyatime.html), [Ukrainska Pravda](https://www.pravda.com.ua/news/2026/09/02/8051557/).\n- **The channel never published levels.** Searches of `@air_alert_ua` find no \"Дронова небезпека\" or other level messages. Its message format has only one kind of alert.\n- **Kyiv dropped out of the channel just before Kyiv switched.**\n  - The last Kyiv message is \"Відбій тривоги\" at 2026-09-05 23:44 UTC, about 3 h before the switch.\n  - Volunteer data still shows Kyiv alerts on 2026-09-06 and 2026-09-07.\n  - The channel then went silent everywhere at 2026-09-07 06:09 UTC.\n  - **Likely, not confirmed:** the switch to levels is why the channel stopped. No official statement has been found.\n- **Alert volume didn't jump, but missing all-clears rose.**\n  - Volunteer data shows no jump in weekly alert counts or alert-hours around the switch: about 900–1,180 alerts and 450–560 alert-hours per week, August–October 2026.\n  - The share of volunteer alerts with no end message rose from about 5% before to 7–10% after the switch. This fits \"no all-clear between levels\".\n- **alerts.in.ua describes levels:** its API docs give an `alert_level` (red or yellow) on active alerts. Whether its history endpoint carries the level too will be checked in the first snapshot.\n\n### Message types in `@air_alert_ua`"
+}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Add ADR-0005 to the index and commit
+
+```
+python3 - <<'EOF'
+import re, pathlib
+p = pathlib.Path("docs/DESIGN.md"); s = p.read_text()
+row = "| [0004](adr/0004-telegram-via-api.md) | Telegram posts are downloaded through the official API (Telethon) | accepted |"
+assert row in s
+s = s.replace(row, row + "\n| [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | accepted |")
+p.write_text(s)
+EOF
+grep -n "0005" docs/DESIGN.md | head; git add -A && git commit -q -F - <<'EOF'
+Record Q15/Q17 decisions and the new yellow/red alert levels
+
+- ADR-0005: rebuild the alert history from @air_alert_ua messages with
+  type-aware parsing rules (Q15 = a, Q17 proposals accepted)
+- Document the September 2026 two-level alert system, the evidence that
+  the official channel stopped around the switch, and Q18 on what counts
+  as an air raid alert after the switch
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -2
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/docs/DESIGN.md has been updated successfully.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+88:| [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | accepted |
+209:  - *Decided 2026-10-12: (a)* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)).
+239:- **Q17. Parsing rules.** *Decided 2026-10-12: all three proposals accepted* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)). (See "Message types" in section 5.)
+b2cf8d8 Record Q15/Q17 decisions and the new yellow/red alert levels
+98efb1c Document message types in the official alert channel
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "- alerts.in.ua UIDs:",
+  "new_string": "- Yellow/red alert levels came into force on 2026-09-04 (resolution №1092); Kyiv switched 2026-09-06 06:00.\n  - @air_alert_ua never posted levels. Its last Kyiv message was 2026-09-05 23:44 UTC, and it went fully silent 2026-09-07. The switch is the likely cause (unconfirmed).\n  - The test period is entirely in the new system. Q18 in DESIGN.md proposes the target = alert of either level.\n- alerts.in.ua UIDs:"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+### Assistant (2026-10-12 18:05:32 UTC)
+
+Your date is right. The Cabinet resolution took effect on **4 September 2026**, and Kyiv switched on 6 September. Our parser doesn't cover the levels yet, and the channel we're rebuilding the history from never published them. The switch is very likely why the channel went silent, but I couldn't find an official confirmation.
+
+## What changed
+
+- **Yellow:** "Дронова небезпека" (drone danger, e.g. 1–2 Shaheds). Businesses and transport may keep working.
+- **Red:** a massed drone attack, missiles or ballistic missiles. Go to shelter.
+- **No all-clear between levels:** a new message simply replaces the previous one. "Відбій" (green) means no threat at all.
+- **Timeline:**
+  - announced 2 September;
+  - Cabinet resolution №1092 in force from 4 September;
+  - **Kyiv switched at 06:00 on 6 September**, in all districts except Pechersk, and only partly in Holosiivskyi and Svyatoshynskyi.
+- **Not a single switch-over:** where the new signals aren't technically possible, the ordinary siren stays. The General Staff, Air Force and government also reassign threats to levels every week.
+
+## Do we cover it? No.
+
+- **Training data has no levels.** I searched the official channel for "Дронова небезпека" and other new-level wording and found nothing. Up to its last message it only posted one kind of alert, "Повітряна тривога". So every alert in our history is single-level.
+- **The test period is entirely under the new system.** The latest period (about 14 Sep – 11 Oct) comes from alerts.in.ua, whose API documents an `alert_level` field (red/yellow). The definition of "alert" changes exactly at the train/test boundary, which is the worst possible place.
+
+I added this as **Q18** in the design doc. My proposal:
+- **Target = an alert of either level, yellow or red.** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match. The level is stored as an extra attribute.
+- **Red-only can't be the target:** there's no red-level history to train on.
+- **The level can't be a model input either:** it doesn't exist before September. This is the same rule as for escalations.
+- **Checks once we have the alerts.in.ua data:**
+  - Does its history include the level?
+  - When did each region switch?
+  - Do alert counts and durations per raion jump at the switch?
+- **The switch goes in the write-up as a limitation.** We can also show test results week by week, to see whether weekly retraining adapts.
+
+## Is it why the data stops on 7 September? Probably.
+
+The evidence:
+1. **Kyiv dropped out of the channel first.** Its last Kyiv message is an all-clear at 23:44 UTC on 5 September, about 3 hours before Kyiv switched. After that there are no Kyiv messages at all, in any wording.
+2. **Alerts in Kyiv didn't stop.** The volunteer data shows Kyiv alerts on 6 and 7 September, so the alerts continued and only the channel stopped carrying them.
+3. **The rest of the channel went silent 27 hours later**, at 06:09 UTC on 7 September, three days after the resolution took effect.
+4. **The channel's format can't express levels,** and the new rule drops the all-clear between levels. In the volunteer data, the share of alerts with no end message rose from about 5% before the switch to 7–10% after. That fits a message-based pipeline struggling with the new format.
+
+Against it: I found no official statement, and the weekly alert volume in the volunteer data didn't jump at the switch. If you open `@air_alert_ua` in the Telegram app, a pinned post might explain it.
+
+## Recorded
+
+- **ADR-0005:** rebuild the alert history from the channel's messages, using the Q17 rules.
+- **Q15 and Q17** are marked decided.
+- **New section** on the yellow/red system with its sources.
+- **Q18** added.
+- Committed as `b2cf8d8`.
+
+**Your decision:** do you agree with the Q18 proposal (target = alert of either level)?
+
+**Still blocking downloads:** the alerts.in.ua token in `.env`, and the Telegram API credentials.
+
+---
+
+## User (2026-10-12 18:11:59 UTC)
+
+Check the volunteer_data set from ukrainian-air-raid-sirens-dataset; it updates every day, even after 7th of September. Has the data format changed since then? Maybe we should focus on it if it's stable?
+
+### Assistant (2026-10-12 18:12:16 UTC)
+
+I'll check this in four parts: the parser's code, the file's change history, the source channel, and the data's stability over time.
+
+<details><summary>Tool call: Bash</summary>
+
+Read the volunteer dataset's parser structure
+
+```
+curl -s https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/volunteer_etryvoga_processor.py > /tmp/aaf_peek/volunteer_processor.py; wc -l /tmp/aaf_peek/volunteer_processor.py; grep -n "channel\|def \|naive\|timedelta\|in first_line\|in message\|startswith\|split\|re\.\|class " /tmp/aaf_peek/volunteer_processor.py | head -60
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check when the volunteer parser last changed
+
+```
+curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/commits?path=processors/volunteer_etryvoga_processor.py&per_page=10" | python3 -c "import sys,json; [print(c['commit']['committer']['date'][:10], c['commit']['message'][:90]) for c in json.load(sys.stdin)]"; echo ----; curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/commits?path=processors&since=2026-08-01T00:00:00Z&per_page=20" | python3 -c "import sys,json; [print(c['commit']['committer']['date'][:10], c['commit']['message'][:90]) for c in json.load(sys.stdin)]"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+     324 /tmp/aaf_peek/volunteer_processor.py
+150:class VolunteerEtryvogaProcessor:
+151:    channel_name = "UkraineAlarmSignal"
+158:    def __init__(self, client):
+164:    async def process(self):
+167:        logging.info("Starting processing volunteer channel messages from %s", self.last_processed_id)
+170:        async for message in self.client.iter_messages(self.channel_name, reverse=True, min_id=self.last_processed_id):
+182:        logging.info("Finished processing volunteer channel messages at %s", self.last_processed_id)
+185:    def load_active_alerts(self):
+192:    def dump_active_alerts(self):
+196:    def load_last_processed_id(self):
+203:    def dump_last_processed_id(self):
+207:    def write(self):
+216:    def write_to_file(self, lang: str = "uk"):
+221:            fieldnames = ["region", "started_at", "finished_at", "naive"]
+230:    def process_message(self, message: Message):
+239:                more_than_3_hours_difference = (message.date - current_alert.started_at) > datetime.timedelta(hours=3)
+243:                    current_alert.finished_at = current_alert.started_at + datetime.timedelta(minutes=30)
+244:                    current_alert.naive = True
+261:    def is_ignored_message(message: Message) -> bool:
+271:        return "триває" in message_normalized
+273:    def parse_message(self, message: Message) -> tuple[Optional[str], Optional[bool]]:
+295:    def guess_region(message: Message) -> Optional[str]:
+305:            if any(keyword.lower() in message_normalized for keyword in keywords):
+311:    def guess_air_raid_state(message: Message) -> Optional[bool]:
+321:            if keyword.lower() in message_normalized:
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2024-06-01 Add mode
+2024-06-01 Add mode
+2024-06-01 Dump pickle state between parsing
+2023-02-16 Refactor volunteer processor to make processors easier to extend
+----
+2026-10-12 Add new data
+2026-10-11 Add new data
+2026-10-10 Add new data
+2026-10-09 Add new data
+2026-10-08 Add new data
+2026-10-07 Add new data
+2026-10-06 Add new data
+2026-10-05 Add new data
+2026-10-04 Add new data
+2026-10-03 Add new data
+2026-10-02 Add new data
+2026-10-01 Add new data
+2026-09-30 Add new data
+2026-09-29 Add new data
+2026-09-28 Add new data
+2026-09-27 Add new data
+2026-09-26 Add new data
+2026-09-25 Add new data
+2026-09-24 Add new data
+2026-09-23 Add new data
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read the volunteer parser's keywords and state logic
+
+```
+sed -n 1,149p /tmp/aaf_peek/volunteer_processor.py | grep -v "^\s*$" | head -150 | cut -c1-160 | sed -n 1,40p; echo ...; sed -n 230,324p /tmp/aaf_peek/volunteer_processor.py
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+import csv
+import datetime
+import logging
+import os
+import pathlib
+import pickle
+from typing import Optional
+from telethon.tl.types import Message
+from .tg_dataclasses import ETryvogaChannelAlert
+logging.basicConfig()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+# UK means ukrainian language code, not United Kingdom :)
+data_uk_file_path = pathlib.Path(__file__).parent.resolve() / "../datasets/volunteer_data_uk.csv"
+data_en_file_path = pathlib.Path(__file__).parent.resolve() / "../datasets/volunteer_data_en.csv"
+last_processed_id_path = pathlib.Path(__file__).parent.resolve() / "pkl" / "volunteer_last_processed_id.txt"
+pkl_file_path = pathlib.Path(__file__).parent.resolve() / "pkl" / "volunteer_active_alerts.pkl"
+# Order matters (Київська > Київ)
+city_keywords = {
+    "Київська область": {
+        "Київській",
+        "Київської",
+        "Київська",
+        "Ірпінь",
+        "️Біла Церква",
+        "Борщагівка",
+    },
+    "Київ": {"Київ", "Києві", "Киев", "Kyiv"},
+    "Чернівецька область": {
+        "Чернівці",
+        "Чернівцях",
+        "Чернівців",
+        "Чернівців",
+        "Чернівецька",
+    },
+    "Львівська область": {
+        "Львів",
+        "Львові",
+        "Львіва",
+        "Львівська",
+...
+    def process_message(self, message: Message):
+        region_name, is_activated = self.parse_message(message)
+
+        if region_name is None:
+            return
+
+        if is_activated:
+            if current_alert := self.active_alerts_by_location.get(region_name):
+                # Looks like it was started some time ago, but there are no message when alert was completed
+                more_than_3_hours_difference = (message.date - current_alert.started_at) > datetime.timedelta(hours=3)
+                if more_than_3_hours_difference:
+                    # Looks like it was not marked as completed, but another alert was started
+                    # otherwise just rewrite this alert
+                    current_alert.finished_at = current_alert.started_at + datetime.timedelta(minutes=30)
+                    current_alert.naive = True
+                    self.completed_alerts.append(current_alert)
+
+            alert = ETryvogaChannelAlert(
+                started_at=message.date,
+                region=region_name,
+            )
+            self.active_alerts_by_location[region_name] = alert
+
+        else:
+            if alert := self.active_alerts_by_location.get(region_name):
+                alert.finished_at = message.date
+                self.completed_alerts.append(alert)
+
+                del self.active_alerts_by_location[region_name]
+
+    @staticmethod
+    def is_ignored_message(message: Message) -> bool:
+        """
+        Returns True if it needed to skip this message from processing.
+        Usually it's more like notifications than air raid siren is still active.
+
+        :param message: Message to process
+        :return: Bool is it needed to process or not
+        """
+        message_normalized = message.message.lower()
+
+        return "триває" in message_normalized
+
+    def parse_message(self, message: Message) -> tuple[Optional[str], Optional[bool]]:
+        """
+        :return: tuple (region name, is_enabled)
+        """
+        if self.is_ignored_message(message):
+            logger.error("Message %s (%s) is ignored", message.message, message.date)
+            return None, None
+
+        region = self.guess_region(message)
+
+        if not region:
+            logger.error("Can't parse region from %s (%s)", message.message, message.date)
+            return None, None
+
+        is_air_raid_enabled = self.guess_air_raid_state(message)
+        if is_air_raid_enabled is None:
+            logger.error("Can't parse siren state %s (%s)", message.message, message.date)
+            return None, None
+
+        return region, is_air_raid_enabled
+
+    @staticmethod
+    def guess_region(message: Message) -> Optional[str]:
+        """
+        Returns region name of related region name.
+
+        :param message: Message object to process
+        :return: Region name or None if can't be determined
+        """
+        message_normalized = message.message.lower()
+
+        for city, keywords in city_keywords.items():
+            if any(keyword.lower() in message_normalized for keyword in keywords):
+                return city
+
+        return None
+
+    @staticmethod
+    def guess_air_raid_state(message: Message) -> Optional[bool]:
+        """
+        Returns air raid siren state based on message and keywords.
+
+        :param message: Message object to parse
+        :return: Bool if enabled/disabled, None if can't be determined
+        """
+        message_normalized = message.message.lower()
+
+        for keyword, is_enabled in air_raid_keywords.items():
+            if keyword.lower() in message_normalized:
+                return is_enabled
+
+        return None
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Show alert-state keywords and region list
+
+```
+grep -n -A20 "^air_raid_keywords" /tmp/aaf_peek/volunteer_processor.py; echo ----; grep -c '": {' /tmp/aaf_peek/volunteer_processor.py; grep -n '": {' /tmp/aaf_peek/volunteer_processor.py | head -30
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Read recent messages from the volunteer source channel
+
+```
+curl -s "https://t.me/s/UkraineAlarmSignal" | python3 -I -c "
+import sys,re,html
+s=sys.stdin.read()
+m=re.search(r'tgme_channel_info_counter\"><span class=\"counter_value\">([^<]+)</span> <span class=\"counter_type\">subscribers', s); print('subscribers:', m.group(1) if m else '?')
+for block in s.split('class=\"tgme_widget_message_wrap')[1:]:
+    mid=re.search(r'data-post=\"[^/]+/(\d+)\"', block); dt=re.search(r'datetime=\"([^\"]+)\"', block); tx=re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', block, re.S)
+    if dt and tx:
+        t=html.unescape(re.sub(r'<[^>]+>',' ',re.sub(r'<br\s*/?>',' | ',tx.group(1))))
+        print(mid.group(1) if mid else '?', dt.group(1)[:16], ' '.join(t.split())[:150])
+" | tail -22
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+129:air_raid_keywords = {
+130-    # keyword: is air raid enabled
+131-    # Order matters: from high to lower priority
+132-    "відбій": False,
+133-    "відміна": False,
+134-    "кінець": False,
+135-    "знято": False,
+136-    "тривога": True,
+137-    "тривоги": True,
+138-    "тривогу": True,
+139-    "тревога": True,
+140-    "загроза": True,
+141-    "сирена": True,
+142-    "сирени": True,
+143-    "загроза ракетного удару": True,
+144-    "небезпека": True,
+145-    "до укриттів": True,
+146-    "в укриття": True,
+147-}
+148-
+149-
+----
+25
+26:    "Київська область": {
+34:    "Київ": {"Київ", "Києві", "Киев", "Kyiv"},
+35:    "Чернівецька область": {
+42:    "Львівська область": {
+53:    "Вінницька область": {"Вінниця", "Вінниці", "Вінницькій", "Вінницька"},
+54:    "Волинська область": {
+62:    "Дніпропетровська область": {
+69:    "Донецька область": {"Донецьк", "Донецької", "Донецька", "Маріуполь", "Маріуполь"},
+70:    "Житомирська область": {
+77:    "Чернігівська область": {"Чернігів", "Чернігові", "Чернігівська", "️Ніжин"},
+78:    "Закарпатська область": {"Закарпаття", "Закарпатської", "Закарпатська"},
+79:    "Запорізька область": {"Запоріжжя", "Запорізька", "Запоріжжі", "️Енергодар"},
+80:    "Івано-Франківська область": {
+88:    "Кіровоградська область": {
+96:    "Луганська область": {"Луганськ", "Луганської", "Луганська", "Луганщина"},
+97:    "Миколаївська область": {
+104:    "Одеська область": {"Одеса", "Одесі", "Одеська", "Одеської", "Одещині"},
+105:    "Полтавська область": {
+113:    "Рівненська область": {"Рівне", "Рівненської", "Рівненська"},
+114:    "Черкаська область": {
+122:    "Харківська область": {"Харків", "Харківська", "Харкові", "Балаклія"},
+123:    "Херсонська область": {"Херсон", "Херсонська", "Херсонській"},
+124:    "Хмельницька область": {"Хмельницьк", "Хмельницька", "Хмельницький"},
+125:    "Сумська область": {"Суми", "Сумська", "Охтир", "Киріківка"},
+126:    "Тернопільська область": {"Тернопіль", "Тернопільська"},
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+subscribers: 84.4K
+654208 2026-10-12T17:43 🔴 Криворізький район (Дніпропетровська обл.) | Червоний рівень тривоги. Прямуйте в укриття!
+654209 2026-10-12T17:45 🟡 Коростенський район (Житомирська обл.) | Жовтий рівень тривоги. Прямуйте в укриття!
+654210 2026-10-12T17:46 🟡 Жовтий рівень тривоги | • Вараський район (Рівненська обл.) | • Сарненський район (Рівненська обл.)
+654211 2026-10-12T17:47 🛸 Шепетівка (Хмельницька обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+654212 2026-10-12T17:48 🛸 Костопіль (Рівненська обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+654213 2026-10-12T17:48 🛸 Рівне (Рівненська обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+654214 2026-10-12T17:48 🟡 Жовтий рівень тривоги | • Бердянський район (Запорізька обл.) | • Василівський район (Запорізька обл.) | • Мелітопольський район (Запорізька обл.) |
+654215 2026-10-12T17:49 🔴 Синельниківський район (Дніпропетровська обл.) | Червоний рівень тривоги. Прямуйте в укриття!
+654216 2026-10-12T17:49 🟡 Жовтий рівень тривоги | • Камінь-Каширський район (Волинська обл.) | • Луцький район (Волинська обл.)
+654217 2026-10-12T17:51 🔴 Червоний рівень тривоги | • Бердянський район (Запорізька обл.) | • Василівський район (Запорізька обл.) | • Запорізький район (Запорізька обл.) | •
+654218 2026-10-12T17:53 🟡 Шосткинський район (Сумська обл.) | Жовтий рівень тривоги. Прямуйте в укриття!
+654219 2026-10-12T17:58 🛸 Старокостянтинів (Хмельницька обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+654220 2026-10-12T17:59 🛸 Долинська (Кіровоградська обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+654221 2026-10-12T17:59 🛸 Овруч (Житомирська обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+654222 2026-10-12T17:59 🔴 Червоний рівень тривоги | • Миколаївський район (Миколаївська обл.) | • Одеський район (Одеська обл.) | • Херсонський район (Херсонська обл.)
+654223 2026-10-12T18:00 Мапа тривог станом на 21:00 – 12 жовтня: | | 🔴 Червона тривога у 22 районах | 🟡 Жовта тривога у 29 районах | | мапа тривог | застосунок | канал
+654224 2026-10-12T18:01 🟡 Харківський район (Харківська обл.) | Жовтий рівень тривоги. Прямуйте в укриття!
+654225 2026-10-12T18:01 🟢 Відбій тривоги | • Голованівський район (Кіровоградська обл.) | • Звенигородський район (Черкаська обл.) | • Уманський район (Черкаська обл.)
+654226 2026-10-12T18:04 🟡 Новгород-Сіверський район (Чернігівська обл.) | Жовтий рівень тривоги. Прямуйте в укриття!
+654227 2026-10-12T18:04 🟢 Відбій тривоги | • Житомирський район (Житомирська обл.) | • Білоцерківський район (Київська обл.)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Sample 100 pages across the volunteer channel's history
+
+```
+sed -i '' 's#https://t.me/s/air_alert_ua?before={before}#https://t.me/s/{channel}?before={before}#; s#out_path, last_id, pages = sys.argv\[1\], int(sys.argv\[2\]), int(sys.argv\[3\])#out_path, last_id, pages, channel = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]#; s#data-post="air_alert_ua/(\\d+)"#data-post="[^/]+/(\\d+)"#' /tmp/aaf_scripts/survey_channel.py && grep -n "channel\|data-post" /tmp/aaf_scripts/survey_channel.py && python3 -I /tmp/aaf_scripts/survey_channel.py /tmp/aaf_peek/survey/etryvoga_sample.jsonl 654227 100 UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+4:out_path, last_id, pages, channel = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+7:    req = urllib.request.Request(f"https://t.me/s/{channel}?before={before}", headers={"User-Agent": "Mozilla/5.0"})
+12:        mid = re.search(r'data-post="[^/]+/(\d+)"', block)
+messages: 1998
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Classify volunteer channel messages by type and year
+
+```
+cat > /tmp/aaf_scripts/classify_etryvoga.py <<'EOF'
+import collections, json, re, sys
+msgs = sorted((json.loads(l) for l in open(sys.argv[1])), key=lambda m: m["id"])
+def kind(text):
+    t = " ".join(text.split()).lower()
+    first = text.strip().split("\n")[0]
+    has_raion = "район" in t
+    if "мапа тривог" in t: return "map summary"
+    if "жовтий рівень" in t or "жовта тривога" in t: return "YELLOW level" + (" (raion)" if has_raion else "")
+    if "червоний рівень" in t or "червона тривога" in t: return "RED level" + (" (raion)" if has_raion else "")
+    if "🛸" in first or "бпла" in t or "шахед" in t or "дрон" in t: return "drone threat"
+    if "ракет" in t or "балістик" in t: return "missile threat"
+    if "відбій" in t: return "all-clear" + (" (raion)" if has_raion else "")
+    if "тривог" in t: return "alert" + (" (raion)" if has_raion else "")
+    if "артобстріл" in t or "обстріл" in t: return "shelling"
+    return "other"
+by_year = collections.defaultdict(collections.Counter)
+examples = {}
+for m in msgs:
+    k = kind(m["text"]); y = m["date"][:4]
+    by_year[y][k] += 1
+    examples.setdefault((y, k), " ".join(m["text"].split())[:120])
+print("sample date range:", msgs[0]["date"][:10], "..", msgs[-1]["date"][:10], "| messages:", len(msgs))
+kinds = sorted({k for c in by_year.values() for k in c})
+print(f"{'type':22s}" + "".join(f"{y:>7s}" for y in sorted(by_year)))
+for k in kinds:
+    print(f"{k:22s}" + "".join(f"{by_year[y][k]:7d}" for y in sorted(by_year)))
+print()
+for (y, k), ex in sorted(examples.items()):
+    if y in ("2022", "2024", "2026") or k.startswith(("YELLOW", "RED")):
+        print(y, f"{k:20s}", ex)
+EOF
+python3 -I /tmp/aaf_scripts/classify_etryvoga.py /tmp/aaf_peek/survey/etryvoga_sample.jsonl
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+sample date range: 2022-02-25 .. 2026-10-12 | messages: 1998
+type                     2022   2023   2024   2025   2026
+RED level                   0      0      0      0      4
+RED level (raion)           0      0      0      0      9
+YELLOW level (raion)        0      0      0      0     38
+alert                      57     40     87     52      7
+alert (raion)               1      0      0    108    215
+all-clear                  70     77     60     53      8
+all-clear (raion)           0      1      2     53    216
+drone threat                0      0     50    170    251
+map summary                 0      0      0      0      2
+missile threat              0      2      0      0      0
+other                      16     26     26     65     60
+shelling                   14     34     75     39     10
+
+2022 alert                Канал створено для публікації виключно новин про сигнали тривоги в містах/регіонах. Одна новина - про один сигнал тривог
+2022 alert (raion)        🚨В деяких районах Харкова повідомляють про сигнал тривоги.
+2022 all-clear            Київ Відбій тривоги - будьте обережні
+2022 other                Channel created
+2022 shelling             💥 Білопілля Загроза артилерійського обстрілу! Перейдіть в укриття!
+2024 alert                🚨 Київ Повітряна тривога. Прямуйте в укриття!
+2024 all-clear            🟢 Нікополь (Дніпропетровська обл.) Відбій загрози обстрілу. Будьте обережні!
+2024 all-clear (raion)    🟢 Миколаївська обл. Відбій загрози обстрілу прибережних територій Миколаївського району. Будьте обережні!
+2024 drone threat         🛸 Нікополь (Дніпропетровська обл.) Загроза застосування БПЛА. Перейдіть в укриття!
+2024 other                ⚠️ Сумська обл. ЗМІ повідомляють про вибухи в Сумському районі. Будьте обережні!
+2024 shelling             💥 Херсон (Херсонська обл.) Загроза обстрілу! Перейдіть в укриття!
+2026 RED level            🔴 Київ Червоний рівень тривоги. Прямуйте в укриття!
+2026 RED level (raion)    🔴 Синельниківський район (Дніпропетровська обл.) Червоний рівень тривоги. Прямуйте в укриття!
+2026 YELLOW level (raion) 🟡 Жовтий рівень тривоги Сумський район (Сумська обл.) Охтирський район (Сумська обл.)
+2026 alert                🚨 Запоріжжя (Запорізька обл.) Повітряна тривога. Прямуйте в укриття!
+2026 alert (raion)        🚨 Шепетівський район (Хмельницька обл.) Повітряна тривога. Прямуйте в укриття!
+2026 all-clear            🟢 Київ Відбій тривоги. Будьте обережні!
+2026 all-clear (raion)    🟢 Куп'янський район (Харківська обл.) Відбій тривоги. Будьте обережні!
+2026 drone threat         🛸 Шалигине (Сумська обл.) Загроза застосування БПЛА. Перейдіть в укриття!
+2026 map summary          Мапа тривог станом на 19:00 – 24 вересня: 🔴 Червона тривога у 1 районі 🟡 Жовта тривога у 27 районах мапа тривог | застос
+2026 other                ⚠️ Слов'янськ (Донецька обл.) ЗМІ повідомляють про вибухи. Будьте обережні!
+2026 shelling             💥 Марганець (Дніпропетровська обл.) Загроза обстрілу! Перейдіть в укриття!
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fetch volunteer channel messages for a 6-hour overlap window
+
+```
+cat > /tmp/aaf_scripts/fetch_window.py <<'EOF'
+"""Fetch web-preview messages of a channel between two UTC timestamps (binary search on message id)."""
+import html, json, re, sys, time, urllib.request
+channel, start, end, out_path, hi = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+def page(before):
+    req = urllib.request.Request(f"https://t.me/s/{channel}?before={before}", headers={"User-Agent": "Mozilla/5.0"})
+    s = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace"); time.sleep(1.2)
+    out = []
+    for block in s.split('class="tgme_widget_message_wrap')[1:]:
+        mid = re.search(r'data-post="[^/]+/(\d+)"', block); dt = re.search(r'datetime="([^"]+)"', block)
+        tx = re.search(r'tgme_widget_message_text[^>]*>(.*?)</div>', block, re.S)
+        if mid and dt and tx:
+            t = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", tx.group(1))))
+            out.append({"id": int(mid.group(1)), "date": dt.group(1), "text": t})
+    return out
+lo = 1
+while hi - lo > 20:  # find an id whose page starts at or just before `start`
+    mid = (lo + hi) // 2
+    msgs = page(mid)
+    if msgs and msgs[-1]["date"] < start: lo = mid
+    else: hi = mid
+cursor, got = lo + 20, {}
+while True:
+    msgs = page(cursor)
+    for m in msgs: got[m["id"]] = m
+    if not msgs or msgs[-1]["date"] > end: break
+    cursor = msgs[-1]["id"] + 21
+with open(out_path, "w") as f:
+    for m in sorted(got.values(), key=lambda m: m["id"]):
+        if start <= m["date"] <= end: f.write(json.dumps(m, ensure_ascii=False) + "\n")
+print("saved", sum(1 for m in got.values() if start <= m["date"] <= end), "messages")
+EOF
+python3 -I /tmp/aaf_scripts/fetch_window.py UkraineAlarmSignal 2026-09-06T12:00 2026-09-06T18:00 /tmp/aaf_peek/survey/etryvoga_0906.jsonl 654227
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+saved 213 messages
+```
+
+</details>
+
+### Assistant (2026-10-12 18:17:16 UTC)
+
+Running the side-by-side comparison now: the volunteer channel's raion alerts against the official record, 12:00–18:00 UTC on 6 September.
+
+<details><summary>Tool call: Bash</summary>
+
+Match volunteer channel raion alerts against official rows
+
+```
+cd /tmp/aaf_peek && curl -sL -o official_data_uk.csv https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/datasets/official_data_uk.csv && head -2 official_data_uk.csv && cat > /tmp/aaf_scripts/compare_window.py <<'EOF'
+import json, re, sys
+import pandas as pd
+msgs = [json.loads(l) for l in open(sys.argv[1])]
+off = pd.read_csv(sys.argv[2], parse_dates=["started_at", "finished_at"])
+w0, w1 = pd.Timestamp("2026-09-06 12:00", tz="UTC"), pd.Timestamp("2026-09-06 18:00", tz="UTC")
+events, kinds = [], {}
+for m in msgs:
+    text = m["text"]; low = text.lower(); t = pd.Timestamp(m["date"])
+    if "відбій тривоги" in low: kind = "end"
+    elif "повітряна тривога" in low or "рівень тривоги" in low: kind = "start"
+    else:
+        kinds[text.split("\n")[0][:40]] = kinds.get(text.split("\n")[0][:40], 0) + 1; continue
+    for raion in re.findall(r"([А-ЯІЇЄҐ][\w'’-]+ район)", text):
+        events.append((t, kind, raion))
+ev = pd.DataFrame(events, columns=["t", "kind", "raion"])
+print(f"volunteer channel: {len(msgs)} messages, {len(ev)} raion start/end events; other message kinds (top):", sorted(kinds.items(), key=lambda x: -x[1])[:6])
+o = off[(off.level == "raion") & (((off.started_at >= w0) & (off.started_at <= w1)) | ((off.finished_at >= w0) & (off.finished_at <= w1)))]
+ostarts = o[(o.started_at >= w0) & (o.started_at <= w1)][["raion", "started_at"]].rename(columns={"started_at": "t"})
+oends = o[(o.finished_at >= w0) & (o.finished_at <= w1)][["raion", "finished_at"]].rename(columns={"finished_at": "t"})
+def match(a, b, tol="3min"):
+    hits, diffs = 0, []
+    for r in a.itertuples():
+        c = b[(b.raion == r.raion) & ((b.t - r.t).abs() <= pd.Timedelta(tol))]
+        if len(c): hits += 1; diffs.append(((c.t - r.t).abs().min()).total_seconds())
+    return hits, len(a), (pd.Series(diffs).median() if diffs else None)
+for kind, oset in (("start", ostarts), ("end", oends)):
+    v = ev[ev.kind == kind][["raion", "t"]]
+    h1, n1, d1 = match(oset, v); h2, n2, d2 = match(v, oset)
+    print(f"{kind:5s}: official events found in volunteer channel {h1}/{n1}; volunteer events found in official {h2}/{n2}; median time difference {d1} s")
+missing = [r for r in ostarts.itertuples() if not len(ev[(ev.raion == r.raion) & (ev.kind == "start") & ((ev.t - r.t).abs() <= pd.Timedelta("3min"))])]
+print("examples of official starts not in volunteer channel:", [(r.raion, str(r.t)[11:19]) for r in missing[:6]])
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/compare_window.py /tmp/aaf_peek/survey/etryvoga_0906.jsonl /tmp/aaf_peek/official_data_uk.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+oblast,raion,hromada,level,started_at,finished_at,source
+Вінницька область,,,oblast,2022-03-15 16:10:34+00:00,2022-03-15 16:50:07+00:00,official
+volunteer channel: 213 messages, 249 raion start/end events; other message kinds (top): [('🛸 Марганець (Дніпропетровська обл.)', 5), ('🛸 Нікополь (Дніпропетровська обл.)', 5), ('🛸 Суми (Сумська обл.)', 3), ('🛸 Харків (Харківська обл.)', 3), ('🛸 Херсон (Херсонська обл.)', 3), ('🛸 Ізюм (Харківська обл.)', 3)]
+start: official events found in volunteer channel 83/88; volunteer events found in official 87/124; median time difference 17.0 s
+end  : official events found in volunteer channel 95/102; volunteer events found in official 99/125; median time difference 24.0 s
+examples of official starts not in volunteer channel: [('Кам’янський район', '12:34:31'), ('Красноградський район', '15:52:52'), ('Кам’янський район', '17:22:53'), ('Куп’янський район', '17:23:04'), ('Красноградський район', '17:23:15')]
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Normalise raion names and re-run the comparison
+
+```
+cd /tmp/aaf_scripts && python3 - <<'EOF'
+import re, pathlib
+p = pathlib.Path("compare_window.py"); s = p.read_text()
+s = s.replace('events.append((t, kind, raion))', 'events.append((t, kind, norm(raion)))')
+s = s.replace('events, kinds = [], {}', 'RENAMED = {"Красноградський район": "Берестинський район", "Новомосковський район": "Самарівський район"}\ndef norm(r):\n    r = r.replace("’", "\'").replace("ʼ", "\'")\n    return RENAMED.get(r, r)\nevents, kinds = [], {}')
+s = s.replace('o = off[(off.level == "raion")', 'off["raion"] = off.raion.fillna("").map(norm)\no = off[(off.level == "raion")')
+s += '''
+extra = [r for r in ev[ev.kind == "start"].itertuples() if not len(ostarts[(ostarts.raion == r.raion) & ((ostarts.t - r.t).abs() <= pd.Timedelta("3min"))])]
+print("examples of volunteer starts not in official:", [(r.raion, str(r.t)[11:19]) for r in extra[:8]])
+'''
+p.write_text(s)
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/compare_window.py /tmp/aaf_peek/survey/etryvoga_0906.jsonl /tmp/aaf_peek/official_data_uk.csv; grep -n "12:3[0-9]\|Чугуїв" /tmp/aaf_peek/survey/etryvoga_0906.jsonl | head -0; python3 -I -c "
+import json
+for l in open('/tmp/aaf_peek/survey/etryvoga_0906.jsonl'):
+    m=json.loads(l)
+    if '2026-09-06T13:0' <= m['date'] <= '2026-09-06T13:20': print(m['date'][11:19], ' | '.join(m['text'].split(chr(10)))[:140])
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+volunteer channel: 213 messages, 249 raion start/end events; other message kinds (top): [('🛸 Марганець (Дніпропетровська обл.)', 5), ('🛸 Нікополь (Дніпропетровська обл.)', 5), ('🛸 Суми (Сумська обл.)', 3), ('🛸 Харків (Харківська обл.)', 3), ('🛸 Херсон (Херсонська обл.)', 3), ('🛸 Ізюм (Харківська обл.)', 3)]
+start: official events found in volunteer channel 88/88; volunteer events found in official 92/124; median time difference 17.0 s
+end  : official events found in volunteer channel 102/102; volunteer events found in official 106/125; median time difference 25.0 s
+examples of official starts not in volunteer channel: []
+examples of volunteer starts not in official: [("Куп'янський район", '12:15:10'), ('Чугуївський район', '12:15:10'), ('Берестинський район', '12:15:10'), ('Лозівський район', '12:15:10'), ('Павлоградський район', '12:15:10'), ('Шосткинський район', '12:52:30'), ('Конотопський район', '12:52:30'), ('Синельниківський район', '13:19:40')]
+head: illegal line count -- 0
+13:00:49 🛸 Житлоселище (Херсон, Херсонська обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+13:01:34 💣 Юнаківка (Сумська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:02:15 💣 Ямпіль (Сумська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:04:02 💣 Суми (Сумська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:05:40 💣 Межова (Дніпропетровська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:06:46 🛸 Вільнянськ (Запорізька обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+13:08:20 🟢 Відбій тривоги | Баштанський район (Миколаївська обл.) | Вознесенський район (Миколаївська обл.) | Миколаївський район (Миколаївська обл.)
+13:10:45 💣 Хотінь (Сумська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:10:45 💣 Юнаківка (Сумська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:11:07 💣 Краснопілля (Сумська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:11:30 🟢 Відбій тривоги | Одеський район (Одеська обл.) | Березівський район (Одеська обл.)
+13:12:10 🟢 Подільський район (Одеська обл.) | Відбій тривоги. Будьте обережні!
+13:12:20 🟢 Роздільнянський район (Одеська обл.) | Відбій тривоги. Будьте обережні!
+13:13:00 🟢 Нікополь (Дніпропетровська обл.) | Відбій тривоги. Будьте обережні!
+13:15:16 💣 Суми (Сумська обл.) | Загроза застосування КАБів. Негайно прямуйте в укриття!
+13:15:40 🟢 Відбій тривоги | Дніпровський район (Дніпропетровська обл.) | Самарівський район (Дніпропетровська обл.) | Кам'янський район (Дніпропетров
+13:16:20 🟢 Павлоградський район (Дніпропетровська обл.) | Відбій тривоги. Будьте обережні!
+13:17:38 🛸 Златопіль (Харківська обл.) | Загроза застосування БПЛА. Перейдіть в укриття!
+13:18:10 🟢 Синельниківський район (Дніпропетровська обл.) | Відбій тривоги. Будьте обережні!
+13:19:40 🔴 Синельниківський район (Дніпропетровська обл.) | Червоний рівень тривоги. Прямуйте в укриття!
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 18:18:12 UTC)
+
+The 6-hour overlap check came back clean: once raion names are normalised, every official alert start and end in that window also appears in the volunteer channel. Recording this in the design doc.
+
+<details><summary>Tool call: Bash</summary>
+
+Find insertion points for the volunteer-channel findings
+
+```
+grep -n "^| Volunteer (eTryvoga, same repo)\|^- \*\*Q2\. \|^- \*\*Q18\. \|^### Yellow and red alert levels\|^### Message types\|^- \*\*Q4\. " docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+113:| Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Cross-check reference |
+137:### Yellow and red alert levels (September 2026)
+161:### Message types in `@air_alert_ua`
+190:- **Q2. Is alerts.in.ua consistent with the official record?** No overlap period exists, so we check indirectly:
+196:- **Q4. Keeping the latest period current.**
+229:- **Q18. What counts as an air raid alert under the yellow/red system?** (See "Yellow and red alert levels" in section 5.)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Add volunteer-channel findings and Q19, then commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("docs/DESIGN.md"); s = p.read_text()
+
+old_row = "| Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Cross-check reference |"
+new_rows = (old_row.replace("Cross-check reference", "Not used for labels: its meaning drifted (see below)") + "\n"
+    "| Telegram `@UkraineAlarmSignal` (eTryvoga, 84k subscribers; the source behind the volunteer CSV) | 2022-02-25 → now, live | City/oblast until 2024; raion-level alerts from 2025; yellow/red levels from Sept 2026 | Candidate label source after 2026-09-07 (Q19) |")
+assert old_row in s; s = s.replace(old_row, new_rows)
+
+section = """### The volunteer CSV and its source channel `@UkraineAlarmSignal`
+
+- **The CSV's format never changed:** its columns are `region, started_at, finished_at, naive`, as in 2022.
+- **Its meaning changed several times.** Its parser ([source](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset/blob/main/processors/volunteer_etryvoga_processor.py)) was last changed in June 2024. It reads the channel by keyword:
+  - **Region:** the first oblast keyword found anywhere in the message.
+  - **Start:** any of "тривога", "загроза", "небезпека", "в укриття"…
+  - **End:** "відбій"…
+  - The output is oblast-level only.
+- **Meanwhile, the channel's content changed:**
+  - **2024:** city-level warnings start ("🛸 Загроза застосування БПЛА", "💣 Загроза застосування КАБів", "💥 Загроза обстрілу").
+  - **2025:** raion-level alerts start.
+  - **September 2026:** yellow/red levels and messages listing several raions.
+- **What that does to the CSV:**
+  - City drone, guided-bomb and shelling warnings are counted as oblast air raid alerts. This explains Volyn: official data has 81 alerts and 41 h under alert, volunteer data has 355 alerts and 405 h.
+  - A message listing raions in several oblasts is credited to one oblast only.
+  - One raion's all-clear ends the whole oblast's alert.
+  - A yellow→red change counts as a new start, which overwrites the start time.
+- **Conclusion:** the CSV's format is stable, but its meaning is not, so it is not used for labels.
+- **The channel itself mirrors the official raion alerts.** Check window: 2026-09-06 12:00–18:00 UTC.
+  - Every official raion-level start (88/88) and end (102/102) also appears in the channel, within 3 minutes. The median delay is 17 s for starts and 25 s for ends.
+  - This holds after normalising apostrophes (ʼ/’/') and one renamed raion (Красноградський → Берестинський).
+  - The channel has extra starts that aren't in the official data (32 of 124). In the examples checked, these are messages listing several raions and level changes.
+  - The channel also carries its own city-level warnings (🛸 drones, 💣 guided bombs, 💥 shelling, ⚠️ "ЗМІ повідомляють про вибухи"). These are not air raid alerts.
+  - It already posted "Червоний рівень тривоги" for Dnipropetrovsk raions on 2026-09-06. At the same time, `@air_alert_ua` still posted plain "Повітряна тривога".
+
+"""
+anchor = "### Message types in `@air_alert_ua`"
+assert anchor in s; s = s.replace(anchor, section + anchor)
+
+q19 = """- **Q19. Which source covers the period after 2026-09-07?** (See "The volunteer CSV and its source channel" in section 5.)
+  - **Proposal:** parse `@UkraineAlarmSignal` ourselves, with the same type-aware rules as ADR-0005.
+    - Air raid alerts only: "Повітряна тривога", the yellow/red levels, and "Відбій тривоги".
+    - Its 🛸/💣/💥/⚠️ warnings are dropped from the labels.
+  - **Why:**
+    - It is live and raion-level, and it covers the 2026-09-07 → 09-12 gap.
+    - It carries the levels (Q18).
+    - It gives the overlap with the official record that alerts.in.ua cannot (ADR-0003).
+  - **Before accepting it:** confirm the 6-hour check over the whole overlap month (August 2026 → 2026-09-07), using a Telethon download of both channels.
+  - **alerts.in.ua:** becomes an independent cross-check for the latest period, which turns Q2 into a three-way check.
+  - **Open sub-question:** use the channel only after 2026-09-07, or for the whole raion era (2025 →), so that one source covers training and test.
+"""
+anchor2 = "- **Q4. Keeping the latest period current.**"
+assert anchor2 in s; s = s.replace(anchor2, q19 + anchor2)
+p.write_text(s)
+EOF
+git add docs/DESIGN.md && git commit -q -F - <<'EOF'
+Document the volunteer CSV's drift and its source channel (Q19)
+
+The volunteer CSV keeps the same columns, but its keyword parser turns
+city drone/guided-bomb/shelling warnings into oblast alerts, so its
+meaning drifted. Its source channel @UkraineAlarmSignal is live,
+raion-level and carries the yellow/red levels. In a 6-hour overlap on
+2026-09-06 it matched every official raion start and end (median delay
+17-25 s). Q19 proposes it as the label source after 2026-09-07.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "- alerts.in.ua UIDs:",
+  "new_string": "- The volunteer CSV comes from Telegram @UkraineAlarmSignal (eTryvoga). Its keyword parser is unchanged since 2024-06, so the CSV's meaning drifted (city drone/KAB/shelling warnings count as alerts). Not usable for labels.\n  - The channel itself is live, raion-level since 2025, and has yellow/red levels since 2026-09.\n  - On 2026-09-06 12–18 UTC it matched 88/88 official raion starts and 102/102 ends (median 17–25 s) after apostrophe and rename normalisation.\n  - Q19 proposes it as the label source after 2026-09-07.\n- alerts.in.ua UIDs:"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+129aab0 Document the volunteer CSV's drift and its source channel (Q19)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+### Assistant (2026-10-12 18:18:49 UTC)
+
+The volunteer CSV's columns haven't changed, but what the rows mean has drifted a lot, so I wouldn't use the CSV for labels. The Telegram channel it's built from is the best source we've found for the period after 7 September, so I'd focus on that channel instead.
+
+## The CSV: same columns, different meaning
+
+The columns are the same as in 2022 (`region, started_at, finished_at, naive`). But the CSV is produced by a keyword parser that hasn't changed since June 2024, while the channel it reads (`@UkraineAlarmSignal`, run by eTryvoga) changed a lot:
+
+| Period | What the channel posts | What the CSV makes of it |
+|---|---|---|
+| 2022–2023 | City/oblast alerts ("Київ Повітряна тривога") | Roughly correct |
+| 2024 → | Its own city-level warnings: 🛸 drones, 💣 guided bombs, 💥 shelling | Counted as **oblast air raid alerts**, because they contain "загроза" or "в укриття" |
+| 2025 → | Raion-level alerts | Collapsed to oblast. One raion's all-clear ends the whole oblast's alert. |
+| Sept 2026 → | Yellow/red levels, and messages listing raions in several oblasts | Only the first oblast named gets the alert. A yellow→red change counts as a new start and overwrites the start time. |
+
+That explains the Volyn mismatch we couldn't account for earlier: 355 volunteer alerts against 81 official. Most are city drone warnings, not air raid alerts. It also explains the rise in alerts with no end message after the switch.
+
+## The channel itself is the best source we've found
+
+`@UkraineAlarmSignal` has 84k subscribers and is posting right now, for example:
+
+```
+🔴 Криворізький район (Дніпропетровська обл.) | Червоний рівень тривоги. Прямуйте в укриття!
+🟡 Жовтий рівень тривоги | • Вараський район (Рівненська обл.) | • Сарненський район (Рівненська обл.)
+🟢 Відбій тривоги | • Житомирський район (Житомирська обл.) | • Білоцерківський район (Київська обл.)
+```
+
+It's raion-level, current through today, and it includes the yellow/red levels.
+
+**Does it match the official record?** I compared it with the official data for 12:00–18:00 UTC on 6 September:
+
+| | Found in the channel | Median delay |
+|---|---|---|
+| Official raion-level starts | **88/88** | 17 s |
+| Official raion-level ends | **102/102** | 25 s |
+
+This holds after normalising apostrophes (ʼ/’/') and one renamed raion (Красноградський → Берестинський).
+- **Extra starts:** the channel has some starts the official data doesn't (32 of 124). The ones I looked at were messages listing several raions and yellow→red changes. Our Q17 rule ("a repeated start keeps the original start") already handles those.
+- **Levels arrived earlier than the official channel showed them:** on 6 September the channel was already posting "Червоний рівень тривоги" for Dnipropetrovsk raions, while the official channel still posted a plain "Повітряна тривога" for them.
+
+## Proposal (Q19 in the design doc)
+
+**Parse `@UkraineAlarmSignal` ourselves** with the same type-aware rules as the official channel:
+- **Keep as alert messages:** "Повітряна тривога", the yellow/red levels and "Відбій тривоги".
+- **Drop from the labels:** its own 🛸/💣/💥/⚠️ warnings.
+
+It solves three open problems at once:
+1. **The 7–12 September gap is covered.** The channel never stopped.
+2. **Q18 gets its level data:** the channel carries yellow/red.
+3. **We get a real overlap check with the official record** (ADR-0003), which alerts.in.ua couldn't give us. alerts.in.ua becomes an independent cross-check for the latest period.
+
+**Before accepting it:** the 6-hour check is promising but small. Once we have Telegram access, I'd repeat it over the whole overlap month (August → 7 September), downloading both channels with Telethon.
+
+**One sub-question for you:** use this channel only after 7 September, or for the whole raion-level era (2025 onward), so that one source covers both training and test? I lean towards the second: one source means no switch at the train/test boundary. But it depends on the month-long check.
+
+Committed as `129aab0`. **Telegram API credentials** are now the main blocker, since both channels need them. The alerts.in.ua token is still useful for the cross-check.
+
+---
+
+## User (2026-10-12 18:30:45 UTC)
+
+When did this channel start posting information about the alerts? Maybe we should use it for all the data? And one question about Q17: should we combine them since we will only predict alerts, and now the level of it (red/yellow), since there is not much data?
+
+### Assistant (2026-10-12 18:31:08 UTC)
+
+Checking the channel's early history to see when it started and what it posted in each period.
+
+<details><summary>Tool call: Bash</summary>
+
+Find when the channel started and how alert formats evolved
+
+```
+python3 -I - <<'EOF'
+import json, re, collections
+ms = sorted((json.loads(l) for l in open('/tmp/aaf_peek/survey/etryvoga_sample.jsonl')), key=lambda m: m['id'])
+print("first sampled messages:")
+for m in ms[:4]: print(" ", m['date'][:16], ' | '.join(m['text'].split('\n'))[:150])
+alerts = [m for m in ms if re.search(r'повітряна тривога|відбій тривоги|рівень тривоги', m['text'].lower())]
+raion = [m for m in alerts if 'район' in m['text']]
+print("\nfirst raion-level alert in sample:", raion[0]['date'][:10], '|', ' '.join(raion[0]['text'].split())[:120])
+per_half = collections.Counter(); per_half_r = collections.Counter()
+for m in alerts:
+    h = m['date'][:4] + ('H1' if m['date'][5:7] <= '06' else 'H2')
+    per_half[h] += 1; per_half_r[h] += 'район' in m['text']
+print("\nalert/all-clear messages in sample, share naming a raion, per half-year:")
+for h in sorted(per_half): print(f"  {h}: {per_half[h]:4d} msgs, raion {per_half_r[h]/per_half[h]:.0%}")
+print("\nexample alert messages by year:")
+seen = collections.Counter()
+for m in alerts:
+    y = m['date'][:4]
+    if seen[y] < 4: seen[y] += 1; print(" ", m['date'][:16], ' | '.join(m['text'].split('\n'))[:110])
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+first sampled messages:
+  2022-02-25T16:11 Channel created
+  2022-02-25T16:18 Канал створено для публікації виключно новин про сигнали тривоги в містах/регіонах.  |  | Одна новина - про один сигнал тривоги або про його відміну. 
+  2022-02-25T16:18 єТривога pinned «Канал створено для публікації виключно новин про сигнали тривоги в містах/регіонах.   Одна новина - про один сигнал тривоги або про й
+  2022-02-25T16:36 Тривога в Києві
+
+first raion-level alert in sample: 2025-02-01 | 🚨 Житомирський район (Житомирська обл.) Повітряна тривога. Прямуйте в укриття!
+
+alert/all-clear messages in sample, share naming a raion, per half-year:
+  2022H1:   47 msgs, raion 0%
+  2022H2:   21 msgs, raion 0%
+  2023H1:   35 msgs, raion 0%
+  2023H2:   40 msgs, raion 0%
+  2024H1:   61 msgs, raion 0%
+  2024H2:   74 msgs, raion 0%
+  2025H1:   72 msgs, raion 14%
+  2025H2:  190 msgs, raion 79%
+  2026H1:  326 msgs, raion 97%
+  2026H2:  170 msgs, raion 95%
+
+example alert messages by year:
+  2022-02-25T18:24 🚨 Запоріжжя. Повітряна тривога.
+  2022-02-25T18:25 🚨 Вінниця. Повітряна тривога
+  2022-03-22T06:17 Київ | Відбій тривоги - будьте обережні
+  2022-03-22T06:17 Вінницька обл. | Відбій тривоги - будьте обережні
+  2023-02-16T21:45 🟢 Харківська обл. | Відбій тривоги - будьте обережні
+  2023-02-16T22:22 🟢 Дніпропетровська обл. | Відбій тривоги - будьте обережні
+  2023-02-16T22:23 🟢 Донецька обл. | Відбій тривоги - будьте обережні
+  2023-02-16T22:23 🟢 Харківська обл. | Відбій тривоги - будьте обережні
+  2024-01-22T12:59 🚨 Київ | Повітряна тривога. Прямуйте в укриття!
+  2024-01-22T12:59 🚨 Черкаська обл. | Повітряна тривога. Прямуйте в укриття!
+  2024-01-22T12:59 🚨 Житомирська обл. | Повітряна тривога. Прямуйте в укриття!
+  2024-01-22T12:59 🚨 Київська обл. | Повітряна тривога. Прямуйте в укриття!
+  2025-01-10T01:42 🟢 Дніпропетровська обл. | Відбій тривоги. Будьте обережні!
+  2025-01-10T01:43 🟢 Сумська обл. | Відбій тривоги. Будьте обережні!
+  2025-01-10T01:43 🟢 Запорізька обл. | Відбій тривоги. Будьте обережні!
+  2025-01-10T01:44 🚨 Вінницька обл. | Повітряна тривога. Прямуйте в укриття!
+  2026-01-05T00:16 🚨 Шепетівський район (Хмельницька обл.) | Повітряна тривога. Прямуйте в укриття!
+  2026-01-05T00:17 🚨 Чугуївський район (Харківська обл.) | Повітряна тривога. Прямуйте в укриття!
+  2026-01-05T00:17 🚨 Пологівський район (Запорізька обл.) | Повітряна тривога. Прямуйте в укриття!
+  2026-01-05T00:17 🚨 Запоріжжя (Запорізька обл.) | Повітряна тривога. Прямуйте в укриття!
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fetch four 12-hour volunteer-channel windows across 2022-2025
+
+```
+cd /tmp/aaf_peek/survey && for w in "2022-06-15T00:00 2022-06-15T12:00 w2022" "2023-06-15T00:00 2023-06-15T12:00 w2023" "2024-06-15T00:00 2024-06-15T12:00 w2024" "2025-06-15T00:00 2025-06-15T12:00 w2025"; do set -- $w; python3 -I /tmp/aaf_scripts/fetch_window.py UkraineAlarmSignal $1 $2 /tmp/aaf_peek/survey/etryvoga_$3.jsonl 654227; done; python3 -I -c "
+import csv
+names=set(r['oblast'] for r in csv.DictReader(open('/tmp/aaf_peek/official_data_uk.csv')))
+print(sorted(names))"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Traceback (most recent call last):
+  File "/tmp/aaf_scripts/fetch_window.py", line 3, in <module>
+    channel, start, end, out_path, hi = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+                                                                                                ~~~~~~~~^^^
+IndexError: list index out of range
+Traceback (most recent call last):
+  File "/tmp/aaf_scripts/fetch_window.py", line 3, in <module>
+    channel, start, end, out_path, hi = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+                                                                                                ~~~~~~~~^^^
+IndexError: list index out of range
+Traceback (most recent call last):
+  File "/tmp/aaf_scripts/fetch_window.py", line 3, in <module>
+    channel, start, end, out_path, hi = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+                                                                                                ~~~~~~~~^^^
+IndexError: list index out of range
+Traceback (most recent call last):
+  File "/tmp/aaf_scripts/fetch_window.py", line 3, in <module>
+    channel, start, end, out_path, hi = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], int(sys.argv[5])
+                                                                                                ~~~~~~~~^^^
+IndexError: list index out of range
+['Івано-Франківська область', 'Волинська область', 'Вінницька область', 'Дніпропетровська область', 'Донецька область', 'Житомирська область', 'Закарпатська область', 'Запорізька область', 'Київська область', 'Кіровоградська область', 'Луганська область', 'Львівська область', 'Миколаївська область', 'Одеська область', 'Полтавська область', 'Рівненська область', 'Сумська область', 'Тернопільська область', 'Харківська область', 'Херсонська область', 'Хмельницька область', 'Черкаська область', 'Чернівецька область', 'Чернігівська область', 'м. Київ']
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fetch four 12-hour volunteer-channel windows across 2022-2025
+
+```
+F=/tmp/aaf_scripts/fetch_window.py; D=/tmp/aaf_peek/survey; python3 -I $F UkraineAlarmSignal 2022-06-15T00:00 2022-06-15T12:00 $D/etryvoga_w2022.jsonl 654227 && python3 -I $F UkraineAlarmSignal 2023-06-15T00:00 2023-06-15T12:00 $D/etryvoga_w2023.jsonl 654227 && python3 -I $F UkraineAlarmSignal 2024-06-15T00:00 2024-06-15T12:00 $D/etryvoga_w2024.jsonl 654227 && python3 -I $F UkraineAlarmSignal 2025-06-15T00:00 2025-06-15T12:00 $D/etryvoga_w2025.jsonl 654227
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+saved 26 messages
+saved 88 messages
+saved 119 messages
+saved 95 messages
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Compare channel and official alerts in 2022-2025 windows
+
+```
+cat > /tmp/aaf_scripts/compare_eras.py <<'EOF'
+import json, re, sys
+import pandas as pd
+off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"])
+RENAMED = {"Красноградський район": "Берестинський район", "Новомосковський район": "Самарівський район"}
+def norm(r): r = r.replace("’", "'").replace("ʼ", "'"); return RENAMED.get(r, r)
+off["key"] = [("raion", norm(r)) if l == "raion" else ("oblast", o) if l == "oblast" else None
+              for l, o, r in zip(off.level, off.oblast, off.raion.fillna(""))]
+RAION = re.compile(r"([А-ЯІЇЄҐ][\w'’ʼ-]+ район) \(")
+OBLAST = re.compile(r"(?<!\()\b([А-ЯІЇЄҐ][\w'’ʼ-]+(?:-[А-ЯІЇЄҐ][\w'’ʼ-]+)?) обл\.(?!\))")
+def events(path):
+    out = []
+    for l in open(path):
+        m = json.loads(l); text = m["text"]; low = text.lower(); t = pd.Timestamp(m["date"])
+        if "відбій тривоги" in low: kind = "end"
+        elif "повітряна тривога" in low or "рівень тривоги" in low: kind = "start"
+        else: continue
+        for r in RAION.findall(text): out.append((t, kind, ("raion", norm(r))))
+        stripped = re.sub(r"\([^)]*\)", "", text)
+        for o in OBLAST.findall(stripped): out.append((t, kind, ("oblast", f"{o} область")))
+        if re.match(r"\W*Київ\b", text.strip()): out.append((t, kind, ("oblast", "м. Київ")))
+    return pd.DataFrame(out, columns=["t", "kind", "key"])
+for path, w0, w1 in [(sys.argv[2], "2022-06-15 00:00", "2022-06-15 12:00"), (sys.argv[3], "2023-06-15 00:00", "2023-06-15 12:00"),
+                     (sys.argv[4], "2024-06-15 00:00", "2024-06-15 12:00"), (sys.argv[5], "2025-06-15 00:00", "2025-06-15 12:00")]:
+    w0, w1 = pd.Timestamp(w0, tz="UTC"), pd.Timestamp(w1, tz="UTC")
+    ev = events(path)
+    o = off[off.key.notna()]
+    res = []
+    for kind, col in (("start", "started_at"), ("end", "finished_at")):
+        oe = o[(o[col] >= w0) & (o[col] <= w1)][["key", col]].rename(columns={col: "t"})
+        ve = ev[ev.kind == kind]
+        def found(a, b):
+            hits, d = 0, []
+            for r in a.itertuples():
+                c = b[(b.key == r.key) & ((b.t - r.t).abs() <= pd.Timedelta("5min"))]
+                if len(c): hits += 1; d.append((c.t - r.t).abs().min().total_seconds())
+            return hits, len(a), (int(pd.Series(d).median()) if d else None)
+        h1, n1, d1 = found(oe, ve); h2, n2, _ = found(ve, oe)
+        res.append(f"{kind}: official→channel {h1}/{n1}, channel→official {h2}/{n2}, median {d1}s")
+    lv = ev.key.map(lambda k: k[0]).value_counts().to_dict()
+    print(str(w0.date()), "| channel events by level:", lv, "|", "; ".join(res))
+EOF
+D=/tmp/aaf_peek/survey; uv run -q --with pandas python -I /tmp/aaf_scripts/compare_eras.py /tmp/aaf_peek/official_data_uk.csv $D/etryvoga_w2022.jsonl $D/etryvoga_w2023.jsonl $D/etryvoga_w2024.jsonl $D/etryvoga_w2025.jsonl; python3 -I -c "
+import json
+for l in open('/tmp/aaf_peek/survey/etryvoga_w2022.jsonl'): m=json.loads(l); print(m['date'][11:16], ' | '.join(m['text'].split(chr(10)))[:90])" | head -12
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2022-06-15 | channel events by level: {'oblast': 7} | start: official→channel 0/14, channel→official 0/0, median Nones; end: official→channel 12/18, channel→official 6/7, median 27s
+2023-06-15 | channel events by level: {'oblast': 24} | start: official→channel 0/34, channel→official 0/0, median Nones; end: official→channel 48/48, channel→official 24/24, median 28s
+2024-06-15 | channel events by level: {'oblast': 82} | start: official→channel 70/70, channel→official 35/35, median 41s; end: official→channel 94/94, channel→official 47/47, median 33s
+2025-06-15 | channel events by level: {'oblast': 32, 'raion': 14} | start: official→channel 46/48, channel→official 23/23, median 7s; end: official→channel 46/48, channel→official 23/23, median 5s
+00:00 🚨 Харківська обл. | Тривога - Усі в укриття
+00:00 🚨 Запорізька обл. | Тривога - Усі в укриття
+00:01 🚨 Сумська обл. | Тривога - Усі в укриття
+00:02 🚨 Черкаська обл. | Тривога - Усі в укриття
+00:28 🟢 Дніпропетровська обл. | Відбій тривоги - будьте обережні
+00:28 🟢 Полтавська обл. | Відбій тривоги - будьте обережні
+00:29 🟢 Запорізька обл. | Відбій тривоги - будьте обережні
+00:30 🟢 Харківська обл. | Відбій тривоги - будьте обережні
+00:30 🟢 Сумська обл. | Відбій тривоги - будьте обережні
+00:32 🟢 Світловодськ | Відбій тривоги - будьте обережні
+03:12 🟢 Черкаська обл. | Відбій тривоги - будьте обережні
+03:14 🚨 Бахмут | Тривога - Усі в укриття
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fix start pattern and check official data for duplicate rows
+
+```
+cd /tmp/aaf_scripts && sed -i '' 's/elif "повітряна тривога" in low or "рівень тривоги" in low: kind = "start"/elif "тривога" in low or "рівень тривоги" in low: kind = "start"/' compare_eras.py && uv run -q --with pandas python -I - <<'EOF'
+import pandas as pd
+off = pd.read_csv("/tmp/aaf_peek/official_data_uk.csv")
+d = off.duplicated(subset=["oblast", "raion", "hromada", "level", "started_at", "finished_at"]).sum()
+print("exact duplicate rows in official_data_uk.csv:", d, "of", len(off))
+w = off[(off.started_at >= "2024-06-15") & (off.started_at < "2024-06-15 12:00") & (off.level == "oblast")]
+print(w.groupby(["oblast", "started_at"]).size().value_counts().to_dict())
+print(w.head(6).to_string())
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+exact duplicate rows in official_data_uk.csv: 113845 of 299275
+{2: 35}
+                         oblast raion hromada   level                 started_at                finished_at    source
+47551          Донецька область   NaN     NaN  oblast  2024-06-15 06:08:14+00:00  2024-06-15 09:16:09+00:00  official
+47552        Полтавська область   NaN     NaN  oblast  2024-06-15 06:21:36+00:00  2024-06-15 06:37:57+00:00  official
+47553           Сумська область   NaN     NaN  oblast  2024-06-15 06:21:38+00:00  2024-06-15 06:38:29+00:00  official
+47554         Черкаська область   NaN     NaN  oblast  2024-06-15 06:21:38+00:00  2024-06-15 06:38:32+00:00  official
+47555          Київська область   NaN     NaN  oblast  2024-06-15 06:21:41+00:00  2024-06-15 06:39:24+00:00  official
+47556  Дніпропетровська область   NaN     NaN  oblast  2024-06-15 06:21:42+00:00  2024-06-15 06:38:21+00:00  official
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 18:34:02 UTC)
+
+The official CSV turns out to contain exact duplicate rows. I'm measuring how widespread they are, because they would inflate some counts I gave you earlier.
+
+<details><summary>Tool call: Bash</summary>
+
+Count duplicate rows in both official CSVs by year
+
+```
+uv run -q --with pandas python -I - <<'EOF'
+import pandas as pd
+for f in ("official_data_en.csv", "official_data_uk.csv"):
+    off = pd.read_csv(f"/tmp/aaf_peek/{f}")
+    dup = off.duplicated(subset=["oblast", "raion", "hromada", "level", "started_at", "finished_at"])
+    off["year"] = off.started_at.str[:4]
+    print(f, "duplicates:", dup.sum(), "of", len(off), "| by year:", off[dup].year.value_counts().sort_index().to_dict())
+off = pd.read_csv("/tmp/aaf_peek/official_data_en.csv", parse_dates=["started_at"])
+vol = off[(off.oblast == "Volynska oblast") & (off.started_at >= "2026-06-01") & (off.started_at < "2026-09-07")]
+print("Volyn Jun-Sep 2026 rows:", len(vol), "unique:", len(vol.drop_duplicates()))
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+official_data_en.csv duplicates: 113845 of 299275 | by year: {'2022': 17493, '2023': 17362, '2024': 26135, '2025': 45901, '2026': 6954}
+official_data_uk.csv duplicates: 113845 of 299275 | by year: {'2022': 17493, '2023': 17362, '2024': 26135, '2025': 45901, '2026': 6954}
+Volyn Jun-Sep 2026 rows: 81 unique: 81
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Recompute key figures without duplicates and rerun era comparison
+
+```
+uv run -q --with pandas python -I - <<'EOF'
+import pandas as pd
+off = pd.read_csv("/tmp/aaf_peek/official_data_en.csv", parse_dates=["started_at", "finished_at"]).drop_duplicates()
+era = off[off.started_at >= "2025-11-01"]
+print("deduplicated rows:", len(off))
+print("level mix since 2025-11 (dedup):", era.level.value_counts(normalize=True).round(3).to_dict())
+print("rows with exactly 1 h duration (dedup):", ((off.finished_at - off.started_at) == pd.Timedelta(hours=1)).sum())
+EOF
+cd /tmp/aaf_scripts && D=/tmp/aaf_peek/survey && sed -i '' 's/off = pd.read_csv(sys.argv\[1\], parse_dates=\["started_at", "finished_at"\])/off = pd.read_csv(sys.argv[1], parse_dates=["started_at", "finished_at"]).drop_duplicates()/' compare_eras.py && uv run -q --with pandas python -I compare_eras.py /tmp/aaf_peek/official_data_uk.csv $D/etryvoga_w2022.jsonl $D/etryvoga_w2023.jsonl $D/etryvoga_w2024.jsonl $D/etryvoga_w2025.jsonl
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+deduplicated rows: 185430
+level mix since 2025-11 (dedup): {'raion': 0.922, 'hromada': 0.071, 'oblast': 0.007}
+rows with exactly 1 h duration (dedup): 255
+2022-06-15 | channel events by level: {'oblast': 12} | start: official→channel 5/7, channel→official 5/5, median 9s; end: official→channel 6/9, channel→official 6/7, median 27s
+2023-06-15 | channel events by level: {'oblast': 41} | start: official→channel 17/17, channel→official 17/17, median 22s; end: official→channel 24/24, channel→official 24/24, median 28s
+2024-06-15 | channel events by level: {'oblast': 82} | start: official→channel 35/35, channel→official 35/35, median 41s; end: official→channel 47/47, channel→official 47/47, median 33s
+2025-06-15 | channel events by level: {'oblast': 32, 'raion': 14} | start: official→channel 23/24, channel→official 23/23, median 7s; end: official→channel 23/24, channel→official 23/23, median 5s
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Locate lines to update in the design doc
+
+```
+grep -n "about 90% raion since Nov 2025\|Only 0.12% of all rows\|about 7% of records since November 2025\|^- \*\*Q18\. \|^  - \*\*Proposal: target = an alert of either level\|^- \*\*Q19\. \|Open sub-question: use the channel only after\|^  - \*\*Before accepting it:\*\*" docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+111:| Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; about 90% raion since Nov 2025 | Main alert history |
+124:- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:
+134:     - Only 0.12% of all rows have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.
+222:- **Q19. Which source covers the period after 2026-09-07?** (See "The volunteer CSV and its source channel" in section 5.)
+230:  - **Before accepting it:** confirm the 6-hour check over the whole overlap month (August 2026 → 2026-09-07), using a Telethon download of both channels.
+266:- **Q18. What counts as an air raid alert under the yellow/red system?** (See "Yellow and red alert levels" in section 5.)
+268:  - **Proposal: target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. Store the level as an attribute.
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 222,
+  "limit": 12
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+222	- **Q19. Which source covers the period after 2026-09-07?** (See "The volunteer CSV and its source channel" in section 5.)
+223	  - **Proposal:** parse `@UkraineAlarmSignal` ourselves, with the same type-aware rules as ADR-0005.
+224	    - Air raid alerts only: "Повітряна тривога", the yellow/red levels, and "Відбій тривоги".
+225	    - Its 🛸/💣/💥/⚠️ warnings are dropped from the labels.
+226	  - **Why:**
+227	    - It is live and raion-level, and it covers the 2026-09-07 → 09-12 gap.
+228	    - It carries the levels (Q18).
+229	    - It gives the overlap with the official record that alerts.in.ua cannot (ADR-0003).
+230	  - **Before accepting it:** confirm the 6-hour check over the whole overlap month (August 2026 → 2026-09-07), using a Telethon download of both channels.
+231	  - **alerts.in.ua:** becomes an independent cross-check for the latest period, which turns Q2 into a three-way check.
+232	  - **Open sub-question:** use the channel only after 2026-09-07, or for the whole raion era (2025 →), so that one source covers training and test.
+233	- **Q4. Keeping the latest period current.**
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/Users/david/proj/air-alert-forecast/docs/DESIGN.md",
+  "offset": 266,
+  "limit": 12
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+266	- **Q18. What counts as an air raid alert under the yellow/red system?** (See "Yellow and red alert levels" in section 5.)
+267	  - **The problem:** every training alert comes from the old single-level system. The whole test period, about 2026-09-14 → 2026-10-11, falls under the new one. The definition changes exactly at the train/test boundary.
+268	  - **Proposal: target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. Store the level as an attribute.
+269	  - **Red-only as the target:** not possible. There is no red-level history to train on.
+270	  - **Level as a feature:** not now, because it doesn't exist before September 2026 (same rule as escalations in Q17).
+271	  - **Checks:**
+272	    - Does alerts.in.ua history carry `alert_level`?
+273	    - Where and when did each region switch? Rollout is regional, and Kyiv switched on 2026-09-06.
+274	    - Do alert counts and durations per raion jump at the switch? Extends Q2.
+275	  - **Reporting:** the switch is reported as a limitation. Test results may also be shown per week, to see whether weekly retraining adapts to the new system.
+276	- **Q17. Parsing rules.** *Decided 2026-10-12: all three proposals accepted* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)). (See "Message types" in section 5.)
+277	  - **Repeated start for a location that is already on alert:** keep the original start. This is exactly what fixes the overwrite problem.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Update Q18/Q19 and duplicate finding, then commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("docs/DESIGN.md"); s = p.read_text()
+def rep(old, new):
+    global s
+    assert old in s, old[:60]; s = s.replace(old, new)
+
+rep("oblast / raion / hromada; about 90% raion since Nov 2025 |", "oblast / raion / hromada; 92% raion since Nov 2025 |")
+rep("     - Only 0.12% of all rows have the imputed 1 h duration.", "     - Only 255 unique rows (0.14%) have the imputed 1 h duration.")
+rep("- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025).",
+    "- **The official CSV has exact duplicate rows:** 113,845 of 299,275 rows (38%), spread over every year (2026: 6,954). Shares of time under alert are not affected, because overlapping intervals merge. Earlier counts of rows were checked again without the duplicates: level mix since November 2025 is 92% raion / 7% hromada / 1% oblast, and the Volyn counts are unchanged.\n"
+    "- **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025).")
+
+rep("""- **Q19. Which source covers the period after 2026-09-07?** (See "The volunteer CSV and its source channel" in section 5.)
+  - **Proposal:** parse `@UkraineAlarmSignal` ourselves, with the same type-aware rules as ADR-0005.""",
+"""- **Q19. Which source do the labels come from?** (See "The volunteer CSV and its source channel" in section 5.)
+  - **Channel history:**
+    - Created 2022-02-25 at 16:11 UTC; its first alert was "Тривога в Києві" at 16:36. That is 18 days before the official record starts.
+    - Formats:
+      - 2022–2024: oblast-level messages ("Харківська обл. | Тривога - Усі в укриття"), plus some city names in 2022.
+      - 2025: raion-level messages phase in (about 14% of alert messages in H1 2025, 79% in H2, about 96% in 2026).
+      - September 2026: yellow/red levels.
+  - **Agreement with the official record.** Spot checks after removing duplicates, with a ±5 min match window:
+
+    | Window (UTC) | Level | Official starts found in channel | Official ends found in channel | Median delay |
+    |---|---|---|---|---|
+    | 2022-06-15 00–12 | oblast | 5/7 | 6/9 | 9–27 s |
+    | 2023-06-15 00–12 | oblast | 17/17 | 24/24 | 22–28 s |
+    | 2024-06-15 00–12 | oblast | 35/35 | 47/47 | 33–41 s |
+    | 2025-06-15 00–12 | oblast + raion | 23/24 | 23/24 | 5–7 s |
+    | 2026-09-06 12–18 | raion | 88/88 | 102/102 | 17–25 s |
+
+    In the other direction, almost every channel alert also appears in the official record. 2022 is weaker: some official alerts are missing, and some messages name cities instead of oblasts.
+  - **Proposal: `@UkraineAlarmSignal` is the label source for the whole history from 2023-01-01.**
+    - One source and one parser cover training and test, the strongest form of ADR-0003.
+    - The official channel (ADR-0005) becomes the validation reference rather than the label source.
+    - 2022 is left out: it is the weakest period for this channel and an early-war regime anyway. The main spec is raion-level, so it starts in 2025 regardless.
+  - **Parsing:** our own type-aware rules, as in ADR-0005.""")
+
+rep("""  - **Before accepting it:** confirm the 6-hour check over the whole overlap month (August 2026 → 2026-09-07), using a Telethon download of both channels.""",
+"""  - **Before accepting it:** repeat the spot checks over whole months, e.g. one month per year plus August 2026 → 2026-09-07, using a Telethon download of both channels.""")
+rep("""  - **Open sub-question:** use the channel only after 2026-09-07, or for the whole raion era (2025 →), so that one source covers training and test.
+""", "")
+
+rep("""- **Q18. What counts as an air raid alert under the yellow/red system?** (See "Yellow and red alert levels" in section 5.)""",
+"""- **Q18. What counts as an air raid alert under the yellow/red system?** *Decided 2026-10-12: an alert of either level.* (See "Yellow and red alert levels" in section 5.)""")
+rep("""  - **Proposal: target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. Store the level as an attribute.""",
+"""  - **Target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. There are only about 5 weeks of level data, and nearly all of it falls in the test period.
+  - **Parsing:** a yellow↔red change continues the same alert (the Q17 repeated-start rule). An alert ends only at "Відбій тривоги".
+  - **The level is stored as an attribute.** It is used for exploratory analysis and to split test results after the fact ("does the model catch red alerts as well as yellow ones?"). Using it only to group outcomes is not an input to the model, so there is no leakage.""")
+p.write_text(s)
+EOF
+git add docs/DESIGN.md && git commit -q -F - <<'EOF'
+Decide Q18 (either-level target), extend Q19 with channel history
+
+- Q18 decided: an alert of either level (yellow or red) is the target;
+  the level is kept for analysis and for splitting test results.
+- Q19: @UkraineAlarmSignal has posted alerts since 2022-02-25 and matches
+  the official record in spot checks from 2023 on. Proposal: use it as the
+  label source from 2023, with the official channel as the validation
+  reference.
+- Record the 38% exact duplicate rows in the official CSV and recompute
+  the affected counts.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "  - Q19 proposes it as the label source after 2026-09-07.",
+  "new_string": "  - It started 2022-02-25. Spot checks vs official: 2023, 2024 and 2025 matched about 100% (median delay < 45 s); 2022 was weaker (about 70%).\n  - Q19 proposes it as the label source for all data from 2023, with the official channel as the validation reference.\n- The official CSV has 113,845 exact duplicate rows (38%). Deduplicate before counting rows; time shares are unaffected.\n- Q18 decided 2026-10-12: target = alert of either level (yellow/red merged)."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+fac8846 Decide Q18 (either-level target), extend Q19 with channel history
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+### Assistant (2026-10-12 18:35:22 UTC)
+
+## When the channel started posting alerts
+
+`@UkraineAlarmSignal` was created at 16:11 UTC on **25 February 2022**, the second day of the full-scale invasion. Its first alert was "Тривога в Києві" at 16:36. That's 18 days before the official record begins. Its format changed in three stages:
+
+| Period | What it posts |
+|---|---|
+| 2022–2024 | Oblast-level ("Харківська обл. \| Тривога - Усі в укриття"). In 2022 some messages name only a city ("Бахмут"). |
+| 2025 | Raion-level messages phase in: about 14% in H1, 79% in H2, about 96% in 2026 |
+| Sept 2026 → | Yellow/red levels |
+
+To check how reliable it is, I took 12-hour windows across the years and matched its alerts against the official record (±5 min):
+
+| Window | Official starts found in channel | Official ends found in channel | Median delay |
+|---|---|---|---|
+| 2022-06-15 | 5/7 | 6/9 | 9–27 s |
+| 2023-06-15 | **17/17** | **24/24** | 22–28 s |
+| 2024-06-15 | **35/35** | **47/47** | 33–41 s |
+| 2025-06-15 | 23/24 | 23/24 | 5–7 s |
+| 2026-09-06 (raion) | **88/88** | **102/102** | 17–25 s |
+
+In the other direction, almost every channel alert also appears in the official record. From 2023 the two match almost exactly; 2022 is noticeably weaker.
+
+## Should we use it for all the data? Yes, from 2023.
+
+I updated Q19 with this proposal:
+- **One source and one parser for both training and test.** Nothing switches at the train/test boundary, which is the strongest form of our "one alert definition" rule. The channel is also live, so the latest period can run up to the day you submit.
+- **The official channel stays as the validation reference** rather than the label source. We still download it, to repeat these checks over whole months instead of 12-hour windows.
+- **Leave out 2022.** It's the channel's weakest period, and an early-war regime that differs from today anyway. The main raion-level configuration only starts in 2025, so it loses nothing.
+
+**A caveat:** five windows totalling 54 hours is a spot check, not proof. The month-long comparison needs the Telegram download. It's also one volunteer source, so alerts.in.ua remains the independent cross-check for the latest period.
+
+## Correction to my earlier numbers
+
+While checking, I found the official CSV has **113,845 exact duplicate rows (38%)**, across every year. Shares of time under alert, like the 80.6% agreement and the 99% frontline raions, aren't affected. Row counts were, and I recalculated them without duplicates:
+- Raion share since November 2025: 92%, not "about 90%".
+- Rows with the invented one-hour duration: 255, not 360.
+- The Volyn numbers are unchanged.
+
+## Merging yellow and red: yes, agreed
+
+(That's **Q18**; Q17 is the parsing rules.) I've marked it decided, with your reasoning as the main argument:
+- **Too little level data:** levels exist only since early September, about 5 weeks, and nearly all of it falls in the test period. There's nothing to train a level-specific model on without leakage.
+- **Same alert as before:** the old "Повітряна тривога" covered drones and missiles alike, so "either level" continues the same series.
+
+What that means in practice:
+- A yellow↔red change continues the same alert, and an alert ends only at "Відбій тривоги".
+- **The level is kept as a stored attribute.** We can still split test results after the fact, e.g. "does the model catch red alerts as well as yellow ones?" That's allowed because the level is used only to group outcomes, never as a model input.
+
+Committed as `fac8846`.
+
+**Your decision:** do you accept Q19, the channel as the label source from 2023? If yes, I'll turn it into an ADR and update ADR-0005 so the official channel's role becomes validation.
+
+**Blocking the downloads:** the Telegram API credentials. The alerts.in.ua token is still useful for the cross-check.
+
+---
+
+## User (2026-10-12 18:42:52 UTC)
+
+If the channel is very close to the official alerts since 23 and has a consistent history, then yes, use it from 2023. I have set up the .env file; it has all the fields from the example. But I'm downloading chat history from the desktop app, so do not start the full download yet. You can pull some data if you need to check something. And what are the questions do we still need to answer before the implementation?
+
+### Assistant (2026-10-12 18:43:18 UTC)
+
+Recording your Q19 decision first. Then I'll make one small alerts.in.ua request to confirm the token works and answer Q1. I won't start any Telegram download.
+
+<details><summary>Tool call: Bash</summary>
+
+Check which .env fields are filled without showing values
+
+```
+git check-ignore -q .env && echo ".env is git-ignored" && awk -F= '/^[A-Z_]+=/{ printf "%s: %s\n", $1, (length($2) > 0 ? "set" : "EMPTY") }' .env
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.env is git-ignored
+ALERTS_IN_UA_TOKEN: set
+TELEGRAM_API_ID: set
+TELEGRAM_API_HASH: set
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fetch one oblast's alerts.in.ua history to test the token
+
+```
+python3 -I scripts/fetch_alerts_in_ua.py --uids 9 2>&1 | sed -E 's/[A-Za-z0-9_-]{32,}/<redacted>/g'
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Fetching 1 locations, about 1 min (the API allows 2 history requests per minute)
+[1/1] uid 9: 2304 alerts
+Saved to /Users/david/proj/air-alert-forecast/data/raw/alerts_in_ua/2026-10-12T184322Z
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect fields, types and levels in the alerts.in.ua response
+
+```
+cat > /tmp/aaf_scripts/inspect_alerts_in_ua.py <<'EOF'
+import collections, json, sys
+d = json.load(open(sys.argv[1]))
+alerts = d["alerts"]
+print("top-level keys:", list(d.keys()), "| meta:", d.get("meta"))
+print("alert fields:", sorted(alerts[0].keys()))
+print("started_at range:", min(a["started_at"] for a in alerts), "..", max(a["started_at"] for a in alerts))
+for f in ("location_type", "alert_type", "alert_level", "calculated"):
+    print(f, dict(collections.Counter(str(a.get(f)) for a in alerts)))
+print("raions present:", len({a.get("location_raion") for a in alerts if a.get("location_type") == "raion"}))
+print("unfinished:", sum(1 for a in alerts if not a.get("finished_at")))
+print("notes examples:", [a.get("notes") for a in alerts if a.get("notes")][:5])
+by_day = collections.Counter(a["started_at"][:10] for a in alerts)
+print("alerts per day (first/last 3):", sorted(by_day.items())[:3], sorted(by_day.items())[-3:])
+for a in alerts[:2]: print(json.dumps({k: a[k] for k in a if k != "id"}, ensure_ascii=False))
+EOF
+python3 -I /tmp/aaf_scripts/inspect_alerts_in_ua.py /Users/david/proj/air-alert-forecast/data/raw/alerts_in_ua/2026-10-12T184322Z/9.json
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+top-level keys: ['alerts', 'meta', 'disclaimer'] | meta: {'last_updated_at': '2026/10/12 18:42:11 +0000', 'type': 'full'}
+alert fields: ['alert_level', 'alert_type', 'country', 'finished_at', 'id', 'location_oblast', 'location_oblast_uid', 'location_title', 'location_title_en', 'location_type', 'location_uid', 'notes', 'started_at', 'updated_at']
+started_at range: 2026-08-29T12:30:13.395Z .. 2026-10-12T18:25:14.086Z
+location_type {'raion': 1514, 'hromada': 397, 'city': 393}
+alert_type {'air_raid': 2020, 'artillery_shelling': 284}
+alert_level {'red': 1985, 'yellow': 319}
+calculated {'None': 2304}
+raions present: 1
+unfinished: 12
+notes examples: []
+alerts per day (first/last 3): [('2026-08-29', 1), ('2026-09-07', 1), ('2026-09-11', 4)] [('2026-10-10', 121), ('2026-10-11', 87), ('2026-10-12', 84)]
+{"location_title": "Павлоградський район", "location_type": "raion", "started_at": "2026-10-12T18:25:14.086Z", "finished_at": null, "updated_at": "2026-10-12T18:25:19.443Z", "alert_type": "air_raid", "location_oblast": "Дніпропетровська область", "location_uid": "45", "notes": null, "country": null, "alert_level": "red", "location_title_en": "Pavlohrad raion", "location_oblast_uid": 45}
+{"location_title": "Кам'янський район", "location_type": "raion", "started_at": "2026-10-12T18:16:59.406Z", "finished_at": "2026-10-12T18:41:23.000Z", "updated_at": "2026-10-12T18:41:34.495Z", "alert_type": "air_raid", "location_oblast": "Дніпропетровська область", "location_uid": "42", "notes": null, "country": null, "alert_level": "red", "location_title_en": "Kamianka raion", "location_oblast_uid": 42}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Break down alert level by date, type and location
+
+```
+python3 -I - <<'EOF'
+import collections, json
+alerts = json.load(open('/Users/david/proj/air-alert-forecast/data/raw/alerts_in_ua/2026-10-12T184322Z/9.json'))["alerts"]
+c = collections.Counter((a["started_at"][:7] if a["started_at"] < "2026-09-15" else "from 09-15", a["alert_type"], a["alert_level"]) for a in alerts)
+for k, n in sorted(c.items()): print(k, n)
+print("raion titles:", sorted({a["location_title"] for a in alerts if a["location_type"] == "raion"}))
+print("city/hromada titles:", collections.Counter(a["location_title"] for a in alerts if a["location_type"] != "raion").most_common(6))
+lv = collections.Counter((a["location_type"], a["alert_level"]) for a in alerts if a["alert_type"] == "air_raid"); print(lv)
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+('2026-08', 'artillery_shelling', 'red') 1
+('2026-09', 'air_raid', 'red') 96
+('2026-09', 'air_raid', 'yellow') 8
+('2026-09', 'artillery_shelling', 'red') 25
+('from 09-15', 'air_raid', 'red') 1610
+('from 09-15', 'air_raid', 'yellow') 306
+('from 09-15', 'artillery_shelling', 'red') 253
+('from 09-15', 'artillery_shelling', 'yellow') 5
+raion titles: ['Дніпровський район', "Кам'янський район", 'Криворізький район', 'Нікопольський район', 'Павлоградський район', 'Самарівський район', 'Синельниківський район']
+city/hromada titles: [('Криворізька територіальна громада', 204), ('м. Кривий Ріг', 204), ('Нікопольська територіальна громада', 170), ('м. Нікополь', 170), ('Марганецька територіальна громада', 16), ('м. Марганець', 16)]
+Counter({('raion', 'red'): 1265, ('raion', 'yellow'): 249, ('city', 'red'): 224, ('hromada', 'red'): 217, ('hromada', 'yellow'): 37, ('city', 'yellow'): 28})
+```
+
+</details>
+
+### Assistant (2026-10-12 18:43:51 UTC)
+
+The token works, and one request already answered Q1. Next I'm recording the Q19 decision and reviewing which open questions remain.
+
+<details><summary>Tool call: Bash</summary>
+
+List all open questions and their status
+
+```
+awk '/^## 6\./,0' docs/DESIGN.md | grep -n "^- \*\*Q\|^### " 
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+5:### Data
+7:- **Q1. Does an oblast-level alerts.in.ua history request return raion-level alerts?**
+10:- **Q2. Is alerts.in.ua consistent with the official record?** No overlap period exists, so we check indirectly:
+14:- **Q3. Fallback if Q2 fails.**
+16:- **Q19. Which source do the labels come from?** (See "The volunteer CSV and its source channel" in section 5.)
+47:- **Q4. Keeping the latest period current.**
+49:- **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
+62:### Target
+64:- **Q5. Main spec.** *Decided 2026-10-12* ([ADR-0002](adr/0002-one-main-spec.md)):
+67:- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+69:- **Q7. Label rules.**
+73:- **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
+76:- **Q16. Should city zones with their own air raid alerts be units?**
+80:- **Q18. What counts as an air raid alert under the yellow/red system?** *Decided 2026-10-12: an alert of either level.* (See "Yellow and red alert levels" in section 5.)
+92:- **Q17. Parsing rules.** *Decided 2026-10-12: all three proposals accepted* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)). (See "Message types" in section 5.)
+98:### Evaluation
+100:- **Q9. Periods.**
+105:- **Q10. Which horizons to train:** all of 1–24, or a subset (1, 2, 3, 6, 12, 24) to cut compute?
+107:### Features
+109:- **Q11. Neighbour map.**
+112:- **Q12. Telegram features.**
+119:- **Q13. One shared model or one per unit:** decided by an experiment on the validation period. Default: shared.
+121:### Product
+123:- **Q14. Deliverable form.**
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/docs/adr/0006-labels-from-volunteer-channel.md`
+
+```
+---
+status: accepted
+---
+
+# Alert labels come from `@UkraineAlarmSignal` from 2023; the official channel is the validation reference
+
+The official channel `@air_alert_ua` stopped posting on 2026-09-07, and it never carried the yellow/red levels. `@UkraineAlarmSignal` (eTryvoga) is live. It has posted alerts since 2022-02-25, at raion level since 2025 and with levels since September 2026.
+
+In spot checks (12-hour windows in 2023, 2024 and 2025, plus 6 hours on 2026-09-06), the channel contained practically every official alert start and end, with a median delay under 45 s.
+
+So labels come from this one channel for the whole history from 2023-01-01. One source and one parser cover training and test, with no switch at the boundary (ADR-0003).
+
+Supporting roles:
+- **`@air_alert_ua`:** rebuilt with the same parsing rules (ADR-0005) and used as the validation reference up to 2026-09-07.
+- **alerts.in.ua:** an independent cross-check for the latest month.
+
+## Considered options
+
+- **Official channel until 2026-09-07, then this channel or alerts.in.ua:** the alert source would change exactly at the train/test boundary.
+- **Including 2022:** the channel's 2022 messages miss some official alerts and sometimes name only a city, so 2022 is left out.
+
+## Consequences
+
+- The parser must handle the channel's changing formats: oblast-level messages (2023–2024), raion-level ones (2025 →), level messages, and messages listing several raions.
+- It must also drop the channel's own city-level warnings (🛸 drones, 💣 guided bombs, 💥 shelling, ⚠️ media reports).
+- The spot checks must be repeated over whole months before the labels are trusted.
+- Labels depend on a volunteer project. If the channel stops, alerts.in.ua is the fallback.
+
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Update ADRs and doc for Q19 and Q1, then commit
+
+```
+python3 - <<'EOF'
+import pathlib
+def rep(path, old, new):
+    p = pathlib.Path(path); s = p.read_text(); assert old in s, (path, old[:50]); p.write_text(s.replace(old, new, 1))
+
+# ADR-0005: the official channel is no longer the label source
+rep("docs/adr/0005-rebuild-alert-history-from-channel.md", "status: accepted", "status: superseded by ADR-0006 (its parsing rules still apply to both channels)")
+# ADR-0003: note the new source plan
+rep("docs/adr/0003-one-alert-source-per-spec.md", "## Considered options",
+    "**Update 2026-10-12:** the label source is now `@UkraineAlarmSignal` from 2023 onward, so no source change happens at the boundary ([ADR-0006](0006-labels-from-volunteer-channel.md)). The official record and alerts.in.ua are used only for validation.\n\n## Considered options")
+
+d = "docs/DESIGN.md"
+rep(d, "| [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | accepted |",
+       "| [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | superseded by 0006 (parsing rules still apply) |\n"
+       "| [0006](adr/0006-labels-from-volunteer-channel.md) | Alert labels come from `@UkraineAlarmSignal` from 2023; the official channel is the validation reference | accepted |")
+rep(d, "| Main alert history |", "| Validation reference up to 2026-09-07 (ADR-0006) |")
+rep(d, "| Fill the gap and cover the latest period. Snapshot it before the window moves on. |", "| Independent cross-check for the latest month |")
+rep(d, "| Candidate label source after 2026-09-07 (Q19) |", "| **Label source from 2023-01-01** (ADR-0006) |")
+
+rep(d, "- **Q1. Does an oblast-level alerts.in.ua history request return raion-level alerts?**",
+       "- **Q1. Does an oblast-level alerts.in.ua history request return raion-level alerts?** *Answered 2026-10-12: yes.*\n"
+       "  - A request for Dnipropetrovsk oblast returned 2,304 alerts at raion, city and hromada level, so 27 requests cover the country.\n"
+       "  - Each alert has `alert_type` (`air_raid`, `artillery_shelling`) and `alert_level` (`red`, `yellow`).\n"
+       "  - The history reaches back to about 2026-09-11.\n"
+       "  - Caveats: alerts from August are also `red`, so `red` may simply be the default. City and hromada alerts duplicate each other (e.g. \"м. Кривий Ріг\" and \"Криворізька територіальна громада\", 204 each).")
+rep(d, "- **Q2. Is alerts.in.ua consistent with the official record?**", "- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006).")
+rep(d, "- **Q3. Fallback if Q2 fails.**", "- **Q3. Fallback if Q2 fails.** *No longer needed: the label source is `@UkraineAlarmSignal` (ADR-0006).*")
+rep(d, "- **Q19. Which source do the labels come from?**", "- **Q19. Which source do the labels come from?** *Decided 2026-10-12: `@UkraineAlarmSignal` from 2023-01-01* ([ADR-0006](adr/0006-labels-from-volunteer-channel.md)).")
+EOF
+git add -A docs && git status --short && git commit -q -F - <<'EOF'
+Decide Q19: labels from @UkraineAlarmSignal from 2023 (ADR-0006)
+
+- ADR-0006 makes the volunteer channel the single label source from
+  2023-01-01; the official channel and alerts.in.ua become validation
+- ADR-0005 is superseded, but its parsing rules still apply
+- Q1 answered with a one-request alerts.in.ua check: oblast requests
+  include raion, city and hromada alerts, typed and with levels
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/docs/adr/0006-labels-from-volunteer-channel.md (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+M  docs/DESIGN.md
+M  docs/adr/0003-one-alert-source-per-spec.md
+M  docs/adr/0005-rebuild-alert-history-from-channel.md
+A  docs/adr/0006-labels-from-volunteer-channel.md
+058ea6a Decide Q19: labels from @UkraineAlarmSignal from 2023 (ADR-0006)
+```
+
+</details>
+
+<details><summary>Tool call: Edit</summary>
+
+```
+{
+  "replace_all": false,
+  "file_path": "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md",
+  "old_string": "  - Q19 proposes it as the label source for all data from 2023, with the official channel as the validation reference.",
+  "new_string": "  - DECIDED 2026-10-12 (ADR-0006): it is the label source for all data from 2023-01-01. @air_alert_ua is the validation reference; alerts.in.ua is a cross-check.\n- alerts.in.ua history (checked with uid 9):\n  - Oblast requests include raion, city and hromada alerts, so 27 requests cover the country.\n  - Fields include alert_type (air_raid / artillery_shelling) and alert_level (red / yellow; red may be the default).\n  - City and hromada records duplicate each other. History reaches back to about 2026-09-11.\n- The user is exporting Telegram history via the Desktop app (2026-10-12). Don't start Telegram API downloads until they say so."
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/memory/data-sources.md has been updated successfully.
+```
+
+</details>
+
+### Assistant (2026-10-12 18:45:06 UTC)
+
+I've recorded your decision as ADR-0006: labels come from `@UkraineAlarmSignal` from 2023. ADR-0005 is superseded, though its parsing rules still apply to both channels. Committed as `058ea6a`.
+
+## What one alerts.in.ua request showed
+
+The token works. I made a single request, for Dnipropetrovsk oblast, and started no Telegram download.
+
+- **Q1 answered:** an oblast request returns all raion, city and hromada alerts inside it. So 27 requests cover the whole country.
+- **Every alert has a type and a level.** Types are `air_raid` and `artillery_shelling`; levels are `red` and `yellow`.
+- **History starts around 11 September**, so it would fill most of the 7–12 September gap.
+- **Two caveats:**
+  - Alerts from August are also marked `red`, so `red` may just be the default value.
+  - City and hromada records duplicate each other ("м. Кривий Ріг" and "Криворізька територіальна громада", 204 each).
+
+## Two things to confirm
+
+1. **Telegram Desktop export.** Earlier we decided to download Telegram through the API (ADR-0004), because a script graders can rerun beats a manual export. Is your Desktop export a quick way to get the data now, or a replacement for the API? Either is workable. My suggestion is that the parser reads your Desktop export now, and the repo still contains the API downloader as the documented, rerunnable path. I'll check whether your export includes edit times; the leakage check needs them.
+2. **The full alerts.in.ua download** is 27 requests over about 14 minutes, with no Telegram involved. Since it's now only a cross-check it's less urgent, but each day of waiting still loses a day from the start of its history. Should I run it?
+
+## Questions still open before implementation
+
+My proposals are next to each, so you can reply "accept all" or change individual items.
+
+**Needed before the first code (reading data and building labels):**
+
+| # | Question | Proposal |
+|---|---|---|
+| Q7 | **Label rules:** when does an hour count as "alert active"? Should alerts with a short gap between them be merged? | Any overlap with the hour counts. For counting new alerts (onsets), merge alerts less than 5 min apart. |
+| Q16 | **Cities with their own alert zone** (Kharkiv, Zaporizhzhia, Kryvyi Rih…): separate units or part of their raion? | A city becomes its own unit (like Kyiv) if the channel shows real air raid alerts for it regularly. Otherwise it's folded into its raion. Decided from the data. |
+| new | **Pass mark for the month-long channel check,** set *before* we look | Accept the channel if it contains at least 98% of official alert starts and ends within 5 min in every month checked. If not, investigate. |
+
+**Needed before modelling:**
+
+| # | Question | Proposal |
+|---|---|---|
+| Q9 | **Periods** | Test: 4 full weeks, 14 Sep – 11 Oct 2026. Validation: the 4 weeks before that. Training starts: raion level from 1 Jul 2025, when raion messages became the majority; oblast level from 1 Jan 2023. Retrain weekly during the backtest. |
+| Q10 | **Horizons to train** | All 24 if the time estimate is under about 30 min per retraining; otherwise 1, 2, 3, 6, 12, 24 h. |
+| Q8 | **Raions that are almost always on alert** | Keep them in training; report results both with and without them. |
+| Q6 | **"Oblast on alert"** (secondary configuration only) | The raion containing the oblast's main city is on alert. This means the same thing in 2023 (oblast-wide alerts) and 2026 (raion alerts). "Any raion" would make frontline oblasts trivial. |
+
+**Features:**
+
+| # | Question | Proposal |
+|---|---|---|
+| Q12 | **Telegram features** | Channels: `@kpszsu` and `@deraketaua`. Match text to raions with a list of place names in all grammatical cases, not an LLM. Features: threat posts for each raion and its neighbours over the last 1/3/6 h, split by threat type. A post edited after time *t* isn't used for forecasts made before the edit, because we only have the edited text. The start date is chosen from a chart of posts per month. |
+| Q11 | **Neighbour map** | Official raion boundary files (OCHA/HDX); neighbours share a border. I'll check the licence. |
+
+**Product:**
+
+| # | Question | Proposal |
+|---|---|---|
+| Q14 | **Deliverable** | Command-line tool + README with results + one notebook for exploration and results; charts saved as PNG in the repo. |
+| Q4 | **Keeping data current** | One `update-data` command, run right before the final evaluation. The test period ends on the last full day before that run. |
+
+**Settled by data or experiments during implementation, no decision needed now:**
+- Q2: the alerts.in.ua cross-check.
+- The month-long channel validation.
+- The regional rollout dates of the yellow/red levels.
+- Q13: one shared model vs one per unit, tested on validation data.
+
+Once you've answered the two confirmations and the tables, I'll record everything in the design doc. The open-questions list is then empty and implementation can start.
+
+---
+
+## User (2026-10-12 18:55:34 UTC)
+
+1. Why do we need alerts.in.ua for now? We pull data from UkraineAlarmSignal, so what is alerts.in.ua for? 
+2. I'm pulling the data from UkraineAlarmSignal on the desktop, since we need that, right? For the code, let's stick to the API pull (for any channel).
+3. Q7: Why should we merge them? If they are separate alerts, what's the reason for the merge?
+4. Q16: How accurate will it be? How can we measure that?
+5. New: looks ok, but what do we need that for?
+
+### Assistant (2026-10-12 18:56:08 UTC)
+
+Before answering about alerts.in.ua, I'll test how much it actually adds. I'm comparing it with the volunteer channel for Dnipropetrovsk raions over 6 hours on 10 October, a period with no official reference at all.
+
+<details><summary>Tool call: Bash</summary>
+
+Fetch volunteer channel messages for 10 Oct 12:00-18:00 UTC
+
+```
+python3 -I /tmp/aaf_scripts/fetch_window.py UkraineAlarmSignal 2026-10-10T12:00 2026-10-10T18:00 /tmp/aaf_peek/survey/etryvoga_1010.jsonl 654300
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+saved 342 messages
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Compare alerts.in.ua with the volunteer channel on 10 Oct
+
+```
+cat > /tmp/aaf_scripts/compare_aiu.py <<'EOF'
+import json, re, sys
+import pandas as pd
+w0, w1 = pd.Timestamp("2026-10-10 12:00", tz="UTC"), pd.Timestamp("2026-10-10 18:00", tz="UTC")
+def norm(r): return r.replace("’", "'").replace("ʼ", "'")
+# volunteer channel: raion events in Dnipropetrovsk oblast
+ev = []
+for l in open(sys.argv[1]):
+    m = json.loads(l); text, low, t = m["text"], m["text"].lower(), pd.Timestamp(m["date"])
+    kind = "end" if "відбій тривоги" in low else "start" if ("повітряна тривога" in low or "рівень тривоги" in low) else None
+    if kind:
+        for r in re.findall(r"([А-ЯІЇЄҐ][\w'’ʼ-]+ район) \(Дніпропетровська обл\.\)", text): ev.append((t, kind, norm(r)))
+ev = pd.DataFrame(ev, columns=["t", "kind", "raion"])
+# alerts.in.ua: air_raid raion-level alerts
+a = pd.DataFrame(json.load(open(sys.argv[2]))["alerts"])
+a = a[(a.alert_type == "air_raid") & (a.location_type == "raion")].copy()
+a["raion"] = a.location_title.map(norm)
+a["started_at"] = pd.to_datetime(a.started_at); a["finished_at"] = pd.to_datetime(a.finished_at)
+starts = a[(a.started_at >= w0) & (a.started_at <= w1)][["raion", "started_at", "alert_level"]].rename(columns={"started_at": "t"})
+ends = a[(a.finished_at >= w0) & (a.finished_at <= w1)][["raion", "finished_at"]].rename(columns={"finished_at": "t"})
+def found(x, y):
+    hits, d = 0, []
+    for r in x.itertuples():
+        c = y[(y.raion == r.raion) & ((y.t - r.t).abs() <= pd.Timedelta("5min"))]
+        if len(c): hits += 1; d.append((c.t - r.t).abs().min().total_seconds())
+    return f"{hits}/{len(x)}" + (f", median {int(pd.Series(d).median())} s" if d else "")
+print("alerts.in.ua starts found in channel:", found(starts, ev[ev.kind == "start"]), "| channel starts found in alerts.in.ua:", found(ev[ev.kind == "start"], starts))
+print("alerts.in.ua ends   found in channel:", found(ends, ev[ev.kind == "end"]), "| channel ends   found in alerts.in.ua:", found(ev[ev.kind == "end"], ends))
+miss = [r for r in ev[ev.kind == "start"].itertuples() if not len(starts[(starts.raion == r.raion) & ((starts.t - r.t).abs() <= pd.Timedelta("5min"))])]
+print("channel starts not in alerts.in.ua:", [(r.raion, str(r.t)[11:19]) for r in miss][:8])
+print("levels of alerts.in.ua starts in window:", starts.alert_level.value_counts().to_dict())
+EOF
+uv run -q --with pandas python -I /tmp/aaf_scripts/compare_aiu.py /tmp/aaf_peek/survey/etryvoga_1010.jsonl /Users/david/proj/air-alert-forecast/data/raw/alerts_in_ua/2026-10-12T184322Z/9.json
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+alerts.in.ua starts found in channel: 23/23, median 16 s | channel starts found in alerts.in.ua: 24/25, median 17 s
+alerts.in.ua ends   found in channel: 25/26, median 18 s | channel ends   found in alerts.in.ua: 25/26, median 18 s
+channel starts not in alerts.in.ua: [('Нікопольський район', '16:57:49')]
+levels of alerts.in.ua starts in window: {'red': 17, 'yellow': 6}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Count city-level air raid messages in the two windows
+
+```
+python3 -I - <<'EOF'
+import json, re, collections
+for f in ("etryvoga_0906", "etryvoga_1010"):
+    c = collections.Counter()
+    for l in open(f"/tmp/aaf_peek/survey/{f}.jsonl"):
+        m = json.loads(l); low = m["text"].lower()
+        if "повітряна тривога" in low or "рівень тривоги" in low or "відбій тривоги" in low:
+            for place in re.findall(r"([А-ЯІЇЄҐ][\w'’ʼ -]+?) \(([^)]*?)обл\.\)", m["text"]):
+                if "район" not in place[0]: c[place[0].strip("• ").strip()] += 1
+    print(f, "city-level alert/all-clear mentions:", c.most_common(10))
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+etryvoga_0906 city-level alert/all-clear mentions: [('Харків', 4), ('Марганець', 4), ('Запоріжжя', 3), ('Нікополь', 2), ('Краматорськ', 1)]
+etryvoga_1010 city-level alert/all-clear mentions: [('Марганець', 9), ('Запоріжжя', 8), ('Нікополь', 5), ('Харків', 4)]
+```
+
+</details>
+
+### Assistant (2026-10-12 18:57:38 UTC)
+
+Measurements done. Updating the design doc with the answers and the revised proposals.
+
+<details><summary>Tool call: Bash</summary>
+
+Show current Q2, Q7, Q16 text and ADR-0004 ending
+
+```
+awk '/^- \*\*Q2\. /,/^- \*\*Q3\. /' docs/DESIGN.md; awk '/^- \*\*Q7\. /,/^- \*\*Q8\. /' docs/DESIGN.md; awk '/^- \*\*Q16\. /,/^- \*\*Q18\. /' docs/DESIGN.md; tail -5 docs/adr/0004-telegram-via-api.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006). No overlap period exists, so we check indirectly:
+  - **(a)** compare agreement(alerts.in.ua, volunteer) after 2026-09-12 with agreement(official, volunteer) before 2026-09-07, per oblast;
+  - **(b)** compare distributions across the boundary: alerts per raion per day, durations, and the mix of location levels.
+  - If they match, the raion main spec goes ahead. If not, see Q3.
+- **Q3. Fallback if Q2 fails.** *No longer needed: the label source is `@UkraineAlarmSignal` (ADR-0006).*
+- **Q7. Label rules.**
+  - How much overlap makes a slot Active: any overlap, or at least 1 minute?
+  - Are alerts separated by a short gap merged when counting onsets? If so, how short is "short"?
+  - What to do with volunteer "naive" alerts, whose end time is imputed as start + 30 min?
+- **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
+- **Q16. Should city zones with their own air raid alerts be units?**
+  - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
+  - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
+  - Depends on Q15, which determines which hromada zones carry real air raid alerts.
+- **Q18. What counts as an air raid alert under the yellow/red system?** *Decided 2026-10-12: an alert of either level.* (See "Yellow and red alert levels" in section 5.)
+
+## Consequences
+
+- The user needs a Telegram account and `api_id`/`api_hash` credentials, kept in `.env`.
+- The first login happens in the user's terminal. The session file is git-ignored.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Record answers in the design doc and commit
+
+```
+python3 - <<'EOF'
+import pathlib
+def rep(path, old, new):
+    p = pathlib.Path(path); s = p.read_text(); assert old in s, (path, old[:60]); p.write_text(s.replace(old, new, 1))
+d = "docs/DESIGN.md"
+rep(d, """- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006). No overlap period exists, so we check indirectly:
+  - **(a)** compare agreement(alerts.in.ua, volunteer) after 2026-09-12 with agreement(official, volunteer) before 2026-09-07, per oblast;
+  - **(b)** compare distributions across the boundary: alerts per raion per day, durations, and the mix of location levels.
+  - If they match, the raion main spec goes ahead. If not, see Q3.""",
+"""- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006).
+  - **Why it is still needed:** the official channel is silent after 2026-09-07. For the whole test period, alerts.in.ua is the only independent check of our labels. It is also the fallback if the channel stops before submission.
+  - **First check:** on 2026-10-10, 12:00–18:00 UTC, for Dnipropetrovsk raions:
+    - 23/23 alerts.in.ua starts and 25/26 ends were found in the channel, median delay 16–18 s;
+    - 24/25 channel starts were found in alerts.in.ua.
+  - **Full check:** repeat over the whole test period with the 27-request snapshot.""")
+rep(d, """- **Q7. Label rules.**
+  - How much overlap makes a slot Active: any overlap, or at least 1 minute?
+  - Are alerts separated by a short gap merged when counting onsets? If so, how short is "short"?
+  - What to do with volunteer "naive" alerts, whose end time is imputed as start + 30 min?""",
+"""- **Q7. Label rules.**
+  - **Active:** a slot is Active if any alert overlaps it. Proposal.
+  - **No merging:** alerts are kept exactly as published (proposal, revised 2026-10-12). Merging changes nothing for Active or Minutes; it would only affect Onset and Time to alert.
+    - Example: Synelnykivskyi raion had an all-clear at 13:18:10 and a new red alert at 13:19:40 on 2026-09-06.
+    - If an Onset spec is run, we report how many alerts restart within 1/2/5/10 min of an all-clear, then decide.
+  - **Naive volunteer alerts:** no longer relevant, because the volunteer CSV is not used (ADR-0006).""")
+rep(d, """  - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
+  - Depends on Q15, which determines which hromada zones carry real air raid alerts.""",
+"""  - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
+  - **Candidates seen in the channel's city-level air raid messages:** Kharkiv, Zaporizhzhia, Nikopol, Marhanets, Kramatorsk. alerts.in.ua also lists Kryvyi Rih.
+  - **Measured per candidate city:**
+    1. **Label accuracy:** its alerts in the channel, compared with the official channel's records for that city up to 2026-09-07 and with alerts.in.ua `city` records after that. Same method as the Q20 check.
+    2. **Added value:** the share of hours in which the city's state differs from its raion's. Kharkiv: about 12%. Zaporizhzhia: the raion is on alert while the city is not in 51% of hours (June–September 2026).
+    3. **Enough data:** the number of city alerts per month in training.
+  - **Proposed rule, set before measuring:** a city becomes a unit if it passes Q20's pass mark, differs from its raion in at least 5% of hours, and has at least 20 alerts per month. Otherwise it is folded into its raion.
+  - Forecast quality for city units is then reported separately in the backtest.""")
+anchor = "- **Q4. Keeping the latest period current.**"
+rep(d, anchor, """- **Q20. Pass mark for the label check, set before looking at the results.**
+  - **What it's for:** ADR-0006 rests on 54 hours of spot checks. Before building on the channel, we compare it with the official channel month by month, from 2023-01 to 2026-08.
+  - **Why it's fixed in advance:** with a pass mark chosen after seeing the results, any number can be explained away ("97% is fine").
+  - **If a month fails:** we look for the cause (parser bug, channel outage, renamed places) and fix the parser, mark the period missing, or start training later.
+  - **Output:** the per-month table goes into the README as evidence of label quality.
+  - **Proposal:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.
+""" + anchor)
+rep("docs/adr/0004-telegram-via-api.md", "- The first login happens in the user's terminal. The session file is git-ignored.",
+"""- The first login happens in the user's terminal. The session file is git-ignored.
+- **Applies to every channel** (confirmed 2026-10-12): `@UkraineAlarmSignal`, `@air_alert_ua`, `@kpszsu`, `@deraketaua`.
+- **Desktop exports:** a manual Desktop export may be used to explore data, but the pipeline never reads one.""")
+EOF
+git add docs && git commit -q -F - <<'EOF'
+Clarify alerts.in.ua role, drop alert merging, add Q20 pass mark
+
+- Q2: alerts.in.ua is the only independent check of test-period labels;
+  first 6-hour comparison with the volunteer channel matched 23/23 starts
+- Q7: no merging of alerts; it only matters for onset targets
+- Q16: how city-zone units are measured, with a rule set in advance
+- Q20: pass mark for the month-by-month label check
+- ADR-0004: API downloads for every channel; Desktop exports only for
+  manual exploration
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+497dec7 Clarify alerts.in.ua role, drop alert merging, add Q20 pass mark
+```
+
+</details>
+
+### Assistant (2026-10-12 18:58:14 UTC)
+
+## 1. Why we still need alerts.in.ua
+
+Its only job now is to **check our labels during the test period.** After 7 September the official channel is silent. For the whole test period (14 Sep – 11 Oct), the volunteer channel is our only label source, with nothing official to compare it against. alerts.in.ua is the one independent check, and it's the backup if the channel stops posting before you submit.
+
+I tested whether it's a useful check. On 10 October, 12:00–18:00 UTC, for Dnipropetrovsk raions:
+- all **23** of its alert starts are in the channel, and **25 of 26** ends, about 16–18 s apart;
+- **24 of 25** channel starts are in alerts.in.ua.
+
+So it works as a cross-check. The full download is 27 requests, about 14 minutes, and it's not a Telegram download. Its history goes back about one month and loses a day each day we wait. **Should I run it now?**
+
+## 2. Desktop export of `@UkraineAlarmSignal`
+
+Yes, we need that channel's history from 2023, since it's our label source. Three more channels are needed later:
+- `@air_alert_ua` from 2023 to 7 September, for the month-by-month quality check (Q20);
+- `@kpszsu` and `@deraketaua`, for the Telegram features.
+
+**Recorded:** ADR-0004 now says that code downloads every channel through the API, and that a Desktop export may be used for exploring but the pipeline never reads one. Keep the export outside the repo, or under `data/`, which git ignores.
+
+## 3. Q7: merging alerts
+
+You're right, there's no good reason. I've changed the proposal to **keep alerts exactly as published.**
+
+- **It changes nothing for the main target.** "Active" means any alert overlapping the hour, so whether two alerts are merged makes no difference. It also doesn't affect "minutes under alert": a 90-second gap really was 90 seconds without an alert.
+- **It would only affect the onset and time-to-next-alert targets.** That's where I worried about cases like Synelnykivskyi raion on 6 September: an all-clear at 13:18:10 and a new red alert at 13:19:40. A new alert 90 s after an all-clear is almost certain to happen, so it would make the model look better without it predicting anything real.
+- **If we ever run an onset configuration,** we'll first count how often alerts restart within 1, 2, 5 or 10 minutes of an all-clear, and decide then.
+
+## 4. Q16: are city zones accurate, and how do we measure it?
+
+The cities seen with their own air raid alerts in the channel are Kharkiv, Zaporizhzhia, Nikopol, Marhanets and Kramatorsk; alerts.in.ua also lists Kryvyi Rih. For each, we'd measure three things:
+
+1. **Are its labels right?** Compare the channel's alerts for that city with the official channel's records for the same city (up to 7 September) and with alerts.in.ua's city records after that. This is the same method as the raion checks.
+2. **Does a separate unit add anything?** Measure how often the city's state differs from its raion's.
+   - Kharkiv: differs about 12% of the time.
+   - Zaporizhzhia: the raion is on alert while the city isn't in **51%** of hours.
+
+   Zaporizhzhia city clearly carries its own information.
+3. **Is there enough data?** Count alerts per month in the training period.
+
+**Proposed rule, fixed before we measure:** a city becomes its own unit if it passes the Q20 label check, differs from its raion at least 5% of the time, and has at least 20 alerts per month. Otherwise it's folded into its raion. Forecast accuracy for city units is then reported separately in the backtest.
+
+## 5. The pass mark (now Q20): what it's for
+
+Our decision to use the channel for labels (ADR-0006) rests on 54 hours of spot checks. Before building everything on it, we compare it with the official channel month by month, from January 2023 to August 2026. The pass mark is fixed **before** we see the results. If we set it afterwards, any result can be argued into a pass ("97% is fine").
+
+If a month fails, we find out why (a parser bug, a channel outage, renamed places), then fix the parser, mark that period as missing, or start training later. The month-by-month table also goes into the README as evidence that the labels are sound.
+
+Proposal: in every month, at least 98% of official alert starts and ends appear in the channel within 5 minutes, and vice versa.
+
+Everything above is in the design doc, committed as `497dec7`.
+
+**Still open:**
+- Should I run the alerts.in.ua download now?
+- Can I mark these proposals as decided: Q7, Q16, Q20, and the earlier ones for Q4, Q6, Q8, Q9, Q10, Q11, Q12 and Q14? Then the open-questions list is empty and we can start building.
+
+---
+
+## User (2026-10-12 19:07:04 UTC)
+
+1. Can't we use UkraineAlarmSignal for checks during the test period? Wouldn't it be even more accurate and have less overhead? Like, do we actually need that? Does it bring any value?
+2. Good
+3. Q7: keep alerts exactly as published
+4. Q16: agree
+5. Q20: ok but we need to do that pretty quickly. How long will it take?
+
+### Assistant (2026-10-12 19:07:32 UTC)
+
+To estimate Q20's timing, I need the message counts since 2023 for both channels. Looking up which message IDs fall on 1 January 2023.
+
+<details><summary>Tool call: Bash</summary>
+
+Find message IDs at 2023-01-01 in both channels
+
+```
+cat > /tmp/aaf_scripts/id_at_date.py <<'EOF'
+"""Binary-search the first message id at or after a UTC date on a channel's web preview."""
+import re, sys, time, urllib.request
+channel, target, hi = sys.argv[1], sys.argv[2], int(sys.argv[3])
+def first_date(before):
+    req = urllib.request.Request(f"https://t.me/s/{channel}?before={before}", headers={"User-Agent": "Mozilla/5.0"})
+    s = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace"); time.sleep(1.2)
+    d = re.findall(r'datetime="([^"]+)"', s)
+    return d[-1] if d else None
+lo = 1
+while hi - lo > 50:
+    mid = (lo + hi) // 2
+    d = first_date(mid)
+    if d and d < target: lo = mid
+    else: hi = mid
+print(channel, "≈ id", hi, "at", target)
+EOF
+python3 -I /tmp/aaf_scripts/id_at_date.py UkraineAlarmSignal 2023-01-01 654300; python3 -I /tmp/aaf_scripts/id_at_date.py air_alert_ua 2023-01-01 338380
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+UkraineAlarmSignal ≈ id 46923 at 2023-01-01
+air_alert_ua ≈ id 35109 at 2023-01-01
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Record decisions and Q20 estimate, then commit
+
+```
+python3 - <<'EOF'
+import pathlib
+def rep(path, old, new):
+    p = pathlib.Path(path); s = p.read_text(); assert old in s, (path, old[:60]); p.write_text(s.replace(old, new, 1))
+d = "docs/DESIGN.md"
+rep(d, "- **Q7. Label rules.**", "- **Q7. Label rules.** *No merging decided 2026-10-12: alerts are kept exactly as published.*")
+rep(d, "  - **No merging:** alerts are kept exactly as published (proposal, revised 2026-10-12).", "  - **No merging:** alerts are kept exactly as published (decided 2026-10-12).")
+rep(d, "- **Q16. Should city zones with their own air raid alerts be units?**", "- **Q16. Should city zones with their own air raid alerts be units?** *Decided 2026-10-12: by the measured rule below.*")
+rep(d, "  - **Proposed rule, set before measuring:**", "  - **Rule, set before measuring:**")
+rep(d, "- **Q20. Pass mark for the label check, set before looking at the results.**", "- **Q20. Pass mark for the label check, set before looking at the results.** *Decided 2026-10-12.*")
+rep(d, "  - **Proposal:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.",
+"""  - **Pass mark:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.
+  - **Cost:**
+    - Messages to download since 2023: about 303k for `@air_alert_ua` (to 2026-09-07) and about 607k for `@UkraineAlarmSignal`, which is needed for labels anyway.
+    - Telethon waits about 1 s per 100 messages by default, so roughly 1 h and 2 h of unattended download.
+    - The check itself reuses the label parsers; the comparison script and the run take about an hour.
+    - Investigating failed months can't be estimated in advance.""")
+EOF
+git add docs/DESIGN.md && git commit -q -F - <<'EOF'
+Mark Q7 (no merging), Q16 (city-unit rule) and Q20 (pass mark) decided
+
+Also records the Q20 cost estimate: about 303k + 607k messages to
+download since 2023, roughly 3 h unattended.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+5a1cec9 Mark Q7 (no merging), Q16 (city-unit rule) and Q20 (pass mark) decided
+```
+
+</details>
+
+### Assistant (2026-10-12 19:08:53 UTC)
+
+## 1. Can't the channel check itself?
+
+No. **The channel is our label source, so checking it against itself is circular.** If it missed an all-clear, or our parser misreads one of the new level messages, comparing the channel with itself shows perfect agreement and hides the error. A check needs a second, independent source. What alerts.in.ua offers is that independence, not better accuracy than the channel.
+
+**Does it add value?** One specific thing: an independent check of the labels in the **test period**. That's where graders look, and the "used for training, then switched for testing" risk is gone. It's also where the newest and least-tested message formats are: yellow/red levels and messages listing several raions. The month-by-month check against the official channel (Q20) stops on 7 September, so it says nothing about the test period. It's also our backup if the channel stops.
+
+**Overhead:** small.
+- One 14-minute download of 27 requests.
+- The comparison reuses the Q20 code with a different reference source.
+- Roughly one extra hour in total.
+
+**Do we strictly need it?** No. Without it, the test-period labels go unchecked, and the write-up would have to say so as a limitation.
+
+**My recommendation:** keep it as one snapshot and one comparison table, and add nothing else. Should I run the download?
+
+## 3 and 4: recorded
+
+- **Q7:** alerts are kept exactly as published.
+- **Q16:** the measured rule for city units is decided.
+
+## 5. How long Q20 takes
+
+Counted message IDs since 1 January 2023:
+
+| Channel | Messages | Needed for | Download (Telethon) |
+|---|---|---|---|
+| `@UkraineAlarmSignal` | ~607k | labels, so needed anyway | ~2 h |
+| `@air_alert_ua` (to 7 Sep) | ~303k | Q20 only | ~1 h |
+
+By default, Telethon pauses about 1 s per 100 messages to avoid Telegram's rate limits. **So about 3 hours of unattended download**, run one channel after the other on your account.
+
+| Step | Time | Extra work for Q20? |
+|---|---|---|
+| Downloads | ~3 h unattended, in the background | ~1 h of it (the official channel) |
+| Parsers for both channels | ~half a day (formats per period, level messages, raion lists, message types, place-name variants) | No, labels need them anyway; I write them while the downloads run |
+| Comparison script + run | ~1 h | Yes; I have a working prototype from the spot checks |
+| Investigating failed months | 0 to a few hours | Can't know in advance |
+
+**About one working day from the start of the downloads**, and most of it is the parser work we'd do anyway. The extra cost specific to Q20 is about 1 h of unattended download plus 1 h of scripting. I could check only one month per quarter instead of all 44 months, but that saves only download time, which runs unattended, so it isn't worth it.
+
+**To start the downloads:**
+1. **Your Desktop export should finish first.** API downloads running on the same account at the same time would hit Telegram's rate limits sooner.
+2. **The first API login needs you.** Telegram asks for your phone number and a login code. I'll write a small login script for you to run in your own terminal. It saves a session file (git-ignored) that the downloader then reuses.
+
+## Still waiting on you
+
+- **alerts.in.ua download:** run it, yes or no?
+- **Remaining proposals:** can I mark these as accepted, so implementation can start?
+  - **Q7:** an hour counts as an alert hour if any alert overlaps it.
+  - **Q4:** one `update-data` command, run before the final evaluation.
+  - **Q6:** "oblast on alert" = the raion containing the oblast's main city.
+  - **Q8:** keep near-permanent raions in training; report with and without them.
+  - **Q9:** test 14 Sep – 11 Oct; validation the 4 weeks before; raion training from July 2025; weekly retraining.
+  - **Q10:** all 24 horizons, if the time estimate is acceptable.
+  - **Q11:** OCHA/HDX raion boundaries for neighbours.
+  - **Q12:** Telegram features as proposed.
+  - **Q14:** command-line tool + README + one notebook.
+
+---
+
+## User (2026-10-12 19:14:38 UTC)
+
+Expand the questions that remain (the Q ones), hold on a bit for alerts.in.ua, desktop is still running.
+
+### Assistant (2026-10-12 19:14:53 UTC)
+
+Pulling two facts first, so the period proposals rest on data: the exact weekdays, and when raion-level alerts became the majority.
+
+<details><summary>Tool call: Bash</summary>
+
+Check weekdays and monthly raion-level share in 2025-2026
+
+```
+python3 -I -c "
+import datetime as d
+for s in ['2026-08-17','2026-09-13','2026-09-14','2026-10-11','2026-10-12','2025-07-01']: print(s, d.date.fromisoformat(s).strftime('%A'))
+"; uv run -q --with pandas python -I - <<'EOF'
+import pandas as pd
+off = pd.read_csv("/tmp/aaf_peek/official_data_en.csv", parse_dates=["started_at"]).drop_duplicates()
+m = off[(off.started_at >= "2025-01-01")].assign(month=lambda x: x.started_at.dt.strftime("%Y-%m"))
+t = m.groupby(["month", "level"]).size().unstack(fill_value=0)
+t["raion_share_of_raion+oblast"] = (t.raion / (t.raion + t.oblast)).round(2)
+print(t.to_string())
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2026-08-17 Monday
+2026-09-13 Sunday
+2026-09-14 Monday
+2026-10-11 Sunday
+2026-10-12 Monday
+2025-07-01 Tuesday
+level    hromada  oblast  raion  raion_share_of_raion+oblast
+month                                                       
+2025-01      235    1642    154                         0.09
+2025-02      332    1505    125                         0.08
+2025-03      472    1402    130                         0.08
+2025-04      642    1500     93                         0.06
+2025-05      596    1352    317                         0.19
+2025-06      634    1463    340                         0.19
+2025-07      693    1766    596                         0.25
+2025-08      631    1117   2437                         0.69
+2025-09      572     705   3468                         0.83
+2025-10      693     715   3498                         0.83
+2025-11      708     164   7266                         0.98
+2025-12      692      24   7298                         1.00
+2026-01      704      58   7665                         0.99
+2026-02      540      41   7341                         0.99
+2026-03      800      39   8949                         1.00
+2026-04      691      35   7883                         1.00
+2026-05      645      58   9362                         0.99
+2026-06      664      46   9296                         1.00
+2026-07      637      59  10377                         0.99
+2026-08      564      90   9982                         0.99
+2026-09       88      22   1827                         0.99
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Measure share of very short raion alerts
+
+```
+uv run -q --with pandas python -I - <<'EOF'
+import pandas as pd
+off = pd.read_csv("/tmp/aaf_peek/official_data_en.csv", parse_dates=["started_at", "finished_at"]).drop_duplicates()
+r = off[(off.level == "raion") & (off.started_at >= "2025-08-01")]
+dur = (r.finished_at - r.started_at).dt.total_seconds()
+print(f"raion alerts since 2025-08: {len(r)}; shorter than 1 min: {(dur < 60).mean():.1%}; shorter than 5 min: {(dur < 300).mean():.1%}; median {dur.median()/60:.0f} min")
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+raion alerts since 2025-08: 96649; shorter than 1 min: 0.2%; shorter than 5 min: 0.9%; median 53 min
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Record the label cutoff rule and short-alert fact, then commit
+
+```
+python3 - <<'EOF'
+import pathlib
+def rep(path, old, new):
+    p = pathlib.Path(path); s = p.read_text(); assert old in s, (path, old[:60]); p.write_text(s.replace(old, new, 1))
+d = "docs/DESIGN.md"
+rep(d, "- **Walk-forward backtest:** train on everything before a cutoff, forecast the next period, move the cutoff forward, repeat.",
+"""- **Walk-forward backtest:** train on everything before a cutoff, forecast the next period, move the cutoff forward, repeat.
+- **Labels must also be known by the cutoff.** A training row for forecast time t and horizon h has its label at t + h. So a model trained at cutoff C may only use rows with t + h ≤ C. Otherwise the last training rows carry outcomes from after the cutoff.""")
+rep(d, "  - **Active:** a slot is Active if any alert overlaps it. Proposal.",
+       "  - **Active:** a slot is Active if any alert overlaps it. Proposal. Requiring at least 1 minute would barely matter: only 0.2% of raion alerts since 2025-08 lasted under 1 minute (median 53 min).")
+EOF
+git add docs/DESIGN.md && git commit -q -F - <<'EOF'
+Add label cutoff rule to the evaluation protocol
+
+A training row for time t and horizon h is labelled at t + h, so models
+trained at cutoff C may only use rows with t + h <= C.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+5b910dd Add label cutoff rule to the evaluation protocol
+```
+
+</details>
+
+### Assistant (2026-10-12 19:16:42 UTC)
+
+Got it: alerts.in.ua is on hold, and nothing on Telegram will start until your Desktop export finishes. Below is every open question in full, grouped by when it's needed. One expansion turned up a new leakage trap, explained under Q9; it's already committed to the design doc (`5b910dd`).
+
+---
+
+## Labels
+
+### Q7: When does an hour count as "alert active"?
+**What it decides:** how a time interval like "an alert from 18:59:30 to 19:40" becomes a yes/no for each hour.
+
+| Option | 18:00–19:00 for the alert above |
+|---|---|
+| **Any overlap** | yes (30 s of overlap) |
+| At least 1 minute of overlap | no |
+
+**Why it barely matters:** only **0.2%** of raion alerts since August 2025 lasted under a minute, and the median is 53 minutes. **Recommendation: any overlap.** It matches the glossary definition ("under alert at some moment") and needs no arbitrary threshold.
+
+---
+
+## Which units we forecast and how we report them
+
+### Q8: Raions that are almost always on alert
+**What it decides:** what to do with raions that are on alert nearly all the time. In June–September 2026, 16 of 118 raions were on alert in at least 90% of hours (Donetsk, Zaporizhzhia and others).
+
+**Why it matters:**
+- **Their scores are trivially good.** "Same as now" scores almost perfectly there, so including them raises every model's average without showing any skill.
+- **But they're informative neighbours.** An alert spreading towards Dnipro passes through them.
+
+| Option | Effect |
+|---|---|
+| Exclude them entirely | Cleaner scores, but loses neighbour information |
+| **Keep in training, report with and without them** | Keeps the information, and the scores stay honest |
+| Keep and report only the overall score | Inflated scores |
+
+**Recommendation: keep in training, report both.** One detail matters: "near-permanent" must be decided on the **validation** period, not the test period. Choosing which units to report using test-period information would itself be a small leak.
+
+### Q6: What does "oblast on alert" mean? (Only for the secondary oblast configuration)
+**Why it's hard:** before autumn 2025, alerts were declared for the whole oblast. Now they're declared per raion (raions already made up 83% by September–October 2025, and 98–100% from November). The oblast target needs a definition that means the same thing in both periods.
+
+| Option | 2023–2024 (oblast-wide alerts) | 2026 (raion alerts) | Problem |
+|---|---|---|---|
+| Any raion on alert | = oblast alert | Frontline oblasts ~100% of the time | Nothing left to predict at the front |
+| At least half of the raions | = oblast alert | "Most of the oblast" | Less intuitive |
+| **The raion containing the oblast's main city** | = oblast alert | That raion's own alerts | Kyiv oblast has no main city inside it, so it needs a hand-picked choice |
+| Only whole-oblast alerts | = oblast alert | Almost none (0.7% of records) | The target disappears |
+
+**Recommendation: the raion with the main city.** It answers a question people actually ask ("is the oblast's main city under alert?"). For Kyiv oblast I'd use "at least half of the raions" instead of picking one raion by hand.
+
+---
+
+## Evaluation
+
+### Q9: Periods
+**What it decides:** what the model learns from, what we use to tune it, and what we report.
+
+**Proposal:**
+
+| Period | Dates | Note |
+|---|---|---|
+| **Test** | Mon 14 Sep – Sun 11 Oct 2026 (4 full weeks) | Entirely under the yellow/red system. Used once, for the final report. |
+| **Validation** | Mon 17 Aug – Sun 13 Sep 2026 | Includes the switch to yellow/red levels (4–6 Sep), so tuning already sees the change |
+| **Training start, raion configuration** | **1 Aug 2025** | The month raion alerts became the majority (69%, then 83% from September). It also includes Sep–Oct 2025, the same season as the test. |
+| **Training start, oblast configuration** | 1 Jan 2023 | Start of the label source (ADR-0006) |
+
+**Other choices:**
+- **Retraining:** weekly. Each test week is forecast by a model trained on everything before that week.
+- **Forecast times:** every hour, each with horizons of 1–24 h.
+- **Training start for raions is tested, not guessed:** we compare 1 Aug 2025 against 1 Nov 2025 (fully raion-level, less data) and 2023 (oblast alerts copied to all raions, most data). The comparison runs on validation, so it's legitimate.
+
+**The leakage trap:** a training example for forecast time *t* and horizon *h* has its answer at *t + h*. When we retrain at cutoff *C*, the last training examples would carry answers from *after* the cutoff. So a model trained at cutoff *C* may only use examples where **t + h ≤ C**. This is now in the design doc's evaluation protocol.
+
+### Q10: Which horizons to train
+**Why it matters:** we planned one model per horizon, and training time grows with the number of horizons.
+
+**Estimate for the raion configuration:**
+- **Data size:** about 123 units (118 raions plus a few cities) × about 10,500 hours ≈ **1.3M training examples per horizon**.
+- **One model:** roughly 30–90 s on a laptop.
+- **All 24 horizons:** about 12–36 min per retraining.
+- **Backtest:** 8 weekly retrainings (validation + test), so **about 1.5–5 h**.
+- **Six horizons (1, 2, 3, 6, 12, 24):** about 25–75 min.
+
+**Recommendation:** use the six horizons while developing and tuning, so each round takes about an hour. Run all 24 once for the final report, if the measured time allows. Either way, the code prints its estimate before starting.
+
+### Q13: One model for all units, or one per unit
+Decided by an experiment on validation data; nothing to choose now.
+- **Shared model** (region as an input): more data, and it learns patterns common to all regions. **This is the default.**
+- **One per unit:** tailored, but each model sees roughly 1/123 of the data.
+
+---
+
+## Features
+
+### Q11: Which raions are neighbours
+**Why it matters:** in the Pavlyshenko paper, neighbours' alert state was the most important feature.
+
+**Proposal:**
+- **Source:** OCHA's official raion boundary maps on HDX (139 raions, 2020 boundaries). I'll check the licence.
+- **Neighbours:** two raions are neighbours if they share a border. We compute this once and commit only the small resulting table, not the maps.
+- **Extra feature:** "same oblast", because alerts are often declared for several raions of one oblast at once.
+- **City units** inherit their raion's neighbours.
+
+Alternative: neighbours within X km (distance between raion centres). It's simpler, but the cutoff is arbitrary.
+
+### Q12: Telegram features (the largest open question)
+**The idea:** threat posts ("група БпЛА з Полтавщини на Черкащину", "МіГ-31К злетів") often come before the alert. They should help most at 1–3 h horizons.
+
+**Proposals:**
+
+| Sub-question | Proposal | Why |
+|---|---|---|
+| Channels | `@kpszsu` (official Air Force) + `@deraketaua` (volunteer, faster) | Both cover our training period; more can be added later |
+| Matching text to places | A **list of place names in every grammatical case** (Харків / Харкова / Харківщина / на Харківщину), with each city mapped to its raion using the official place-name register (КАТОТТГ) | No machine learning needed, and every match can be checked |
+| LLM extraction | **Not used** | An LLM trained on recent data might "know" what happened in the test period, which would be a leak. Rule-based matching is also reproducible. |
+| Threat types | drones (БпЛА / шахед / реактивний), cruise missiles, ballistic missiles, guided bombs (КАБ), aircraft take-offs (МіГ-31К, Ту-95/22) | Different threats have different lead times |
+| Features at time *t* | For each unit and its neighbours: number of threat posts in the last 15 / 60 / 180 min, by type; time since the last mention. Country-wide signals such as "MiG-31K took off in the last 30 min" | Covers both local and country-wide signals |
+| **Edited posts** | We only ever get the latest text. If a post was edited after *t*, it isn't used for forecasts made before the edit. We'll also count how many posts are edited. | Prevents later information from leaking in |
+| Start date | Chosen from a chart of posts per month. The raion configuration starts in August 2025 anyway, when both channels were very active. | The channels' meaning changes over time |
+| Showing the value | Compare models with and without Telegram on the same period, per horizon | Shows whether, and at which horizons, it helps |
+
+**Simplification:** the first version counts mentions only. Telling "flying from X" apart from "heading to X" can come later if the counts show promise.
+
+---
+
+## Product
+
+### Q4: Keeping the data current
+**Requirement:** use the most recent data available.
+
+**Proposal:**
+- **One command:** `update-data` downloads only messages newer than the last one we have.
+- **Final run:** shortly before you submit, run it once, rebuild the labels, then run the final backtest.
+- **Test period end:** the last full Sunday before that run. With today's data that's 11 October.
+- **Pinned dates:** the README records the run date, and the period dates are fixed in the configuration. Graders rerunning later get the same report by default, or can move the dates forward.
+
+### Q14: What we hand in
+**Proposal:**
+- **Command-line tool:** `python -m airalert update-data | build | train | backtest | predict --spec …`
+- **Code layout:**
+  - code in `src/airalert/`;
+  - `tests/`, including a **leakage test**: add fake future data and check that no feature changes (ADR-0001).
+- **README:**
+  - problem, data, method;
+  - **results per horizon against the baselines**;
+  - the month-by-month label-quality table (Q20);
+  - limitations (e.g. the yellow/red switch), how to run.
+- **Charts:** generated by a script into `docs/figures/` as PNG, so they can be reproduced. Plus **one notebook** that tells the exploration and results story.
+- **What's committed:** small derived tables (unit list, neighbour table). Not committed: raw data, trained models.
+- **Environment:** `uv` + `pyproject.toml`, Python 3.12.
+
+**One question for you:** should the AI conversation export also live in the repo (e.g. `docs/ai-conversation.md`), or only be attached separately?
+
+---
+
+## On hold
+
+- **Q2 (alerts.in.ua cross-check):** waiting for your go.
+- **Telegram downloads:** waiting for your Desktop export to finish, then your one-time login in the terminal.
+
+---
+
+To close the list, reply "accept all", or name the items you want to change. I'll mark them decided in the design doc and implementation can start.
+
+---
+
+## User (2026-10-12 19:30:51 UTC)
+
+Q7: any overlap, Q8: keep in training, report both, Q6: why do we need that classification? Can't we take and predict single raions? Or we should only result in oblast? Q9: Explain the periods; what do you mean by them? Q10: Six horizons, Q11: Neighbours probably- what are the pros and cons? Q12: agree, Q4: Pinned dates, Q14: agree, and lets add conversation to the repo as well, Q2: use it for checks.
+
+By the way, desktop download is over, data is in Users/david/Downloads/ChatExport_єТривога, you can check it, add to the repo for the use(only the data from the folder we need, beacuse i downloaded a lot of things like video/photo, i think we do not need that). so you can start downloading the alerts.in.ua
+
+### Assistant (2026-10-12 19:31:22 UTC)
+
+Starting the alerts.in.ua download in the background (27 requests, about 14 minutes). Meanwhile I'll look at your Desktop export.
+
+<details><summary>Tool call: Bash</summary>
+
+Download alerts.in.ua history for all 27 oblast-level locations
+
+```
+python3 -I scripts/fetch_alerts_in_ua.py 2>&1 | sed -E 's/[A-Za-z0-9_-]{32,}/<redacted>/g'
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+List the Desktop export folder contents and sizes
+
+```
+cd "/Users/david/Downloads/ChatExport_єТривога" && ls -la | head -30 && echo ---- && du -sh . && for d in */; do printf "%s\t%s\t%s files\n" "$(du -sh "$d" | cut -f1)" "$d" "$(find "$d" -type f | wc -l | tr -d ' ')"; done; ls -la *.json *.html 2>/dev/null | head
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Command running in background with ID: bkcoyl33w. Output is being written to: /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bkcoyl33w.output. You will be notified when it completes. To check interim output, use Read on that file path.
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+total 433648
+drwxr-xr-x@   65 david  staff     2080 Oct 12 22:24 .
+drwx------+   39 david  staff     1248 Oct 12 21:37 ..
+-rw-r--r--@    1 david  staff     8196 Oct 12 22:26 .DS_Store
+drwxr-xr-x@    3 david  staff       96 Oct 12 21:37 css
+drwxr-xr-x@    3 david  staff       96 Oct 12 21:42 gifs
+drwxr-xr-x@    3 david  staff       96 Oct 12 21:37 js
+-rw-r--r--@    1 david  staff  2621408 Oct 12 21:38 messages.html
+-rw-r--r--@    1 david  staff  3915525 Oct 12 21:45 messages10.html
+-rw-r--r--@    1 david  staff  3672332 Oct 12 21:46 messages11.html
+-rw-r--r--@    1 david  staff  3644771 Oct 12 21:47 messages12.html
+-rw-r--r--@    1 david  staff  3735183 Oct 12 21:48 messages13.html
+-rw-r--r--@    1 david  staff  3740641 Oct 12 21:49 messages14.html
+-rw-r--r--@    1 david  staff  3752722 Oct 12 21:50 messages15.html
+-rw-r--r--@    1 david  staff  3602311 Oct 12 21:51 messages16.html
+-rw-r--r--@    1 david  staff  3609272 Oct 12 21:52 messages17.html
+-rw-r--r--@    1 david  staff  3582228 Oct 12 21:53 messages18.html
+-rw-r--r--@    1 david  staff  3474081 Oct 12 21:54 messages19.html
+-rw-r--r--@    1 david  staff  3029606 Oct 12 21:39 messages2.html
+-rw-r--r--@    1 david  staff  3671864 Oct 12 21:54 messages20.html
+-rw-r--r--@    1 david  staff  3744822 Oct 12 21:55 messages21.html
+-rw-r--r--@    1 david  staff  3680417 Oct 12 21:56 messages22.html
+-rw-r--r--@    1 david  staff  3574418 Oct 12 21:57 messages23.html
+-rw-r--r--@    1 david  staff  3567969 Oct 12 21:58 messages24.html
+-rw-r--r--@    1 david  staff  3145089 Oct 12 21:59 messages25.html
+-rw-r--r--@    1 david  staff  3325581 Oct 12 21:59 messages26.html
+-rw-r--r--@    1 david  staff  3250692 Oct 12 22:00 messages27.html
+-rw-r--r--@    1 david  staff  3247011 Oct 12 22:01 messages28.html
+-rw-r--r--@    1 david  staff  3258462 Oct 12 22:02 messages29.html
+-rw-r--r--@    1 david  staff  3160800 Oct 12 21:40 messages3.html
+----
+872M	.
+ 28K	css/	1 files
+2.2M	gifs/	1 files
+ 16K	js/	1 files
+185M	photos/	1543 files
+3.0M	thumbs/	139 files
+470M	video_files/	138 files
+404K	webpage_thumbs/	9 files
+(eval):1: no matches found: *.json
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect the HTML export's structure and a sample message
+
+```
+cd "/Users/david/Downloads/ChatExport_єТривога" && ls messages*.html | wc -l && du -ch messages*.html | tail -1 && python3 -I - <<'EOF'
+import re, glob, html
+files = sorted(glob.glob("messages*.html"), key=lambda f: int(re.sub(r"\D", "", f) or 1))
+first = open(files[0], encoding="utf-8").read()
+print("page title:", re.search(r'<div class="text bold">\s*(.*?)\s*</div>', first, re.S).group(1)[:80])
+m = re.search(r'(<div class="message default clearfix" id="message\d+">.*?</div>\s*</div>\s*</div>)', first, re.S)
+print(m.group(1)[:1500] if m else first[:1500])
+EOF
+```
+
+</details>
+
+<details><summary>Tool result (error)</summary>
+
+```
+Exit code 1
+      55
+212M	total
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+AttributeError: 'NoneType' object has no attribute 'group'
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Print the start of the export and the first message blocks
+
+```
+cd "/Users/david/Downloads/ChatExport_єТривога" && python3 -I - <<'EOF'
+import re
+s = open("messages.html", encoding="utf-8").read()
+i = s.find('id="message')
+print(s[:600].replace("\n", " ")[:600]); print("....")
+print(s[i-200:i+2500])
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+<!DOCTYPE html> <html> <head> <meta charset="utf-8"> <title>єТривога</title> <meta name="viewport" content="width=device-width, initial-scale=1.0"> <link href="css/style.css" rel="stylesheet"> <script src="js/script.js" type="text/javascript"></script> </head> <body onload="CheckLocation();"> <div class="page_wrap"> <div class="page_header chat_header"> <div class="content bubble"> <img class="userpic" style="width: 44px; height: 44px" src="photos/avatar.jpg"/> <div class="body"> <div class="name bold">єТривога</div> <div class="subtitle details">84448 subscribers</div> </div> </div> </div> <d
+....
+/div>
+</div>
+</div>
+</div>
+<div class="page_body chat_page">
+<div class="history">
+<div class="message service">
+<div class="body details">
+25 February 2022
+</div>
+</div>
+<div class="message service" id="message1">
+<div class="body details">
+Channel created
+</div>
+</div>
+<div class="message default clearfix" id="message2">
+<div class="pull_left userpic_wrap">
+<img class="userpic" style="width: 42px; height: 42px" src="photos/author_10092833847.jpg"/>
+</div>
+<div class="body">
+<div class="pull_right date details" title="25 February 2022, 18:18:44">edited 18:18</div>
+<div class="from_name">
+єТривога
+</div>
+<div class="text">
+Канал створено для публікації виключно новин про сигнали тривоги в містах/регіонах. <br><br>Одна новина - про один сигнал тривоги або про його відміну.<br><br>У коментарях до кожної новини можна залишити інформацію, яку знаєте про ситуацію в цьому місті/регіоні.<br><br>Спам й провокації будуть видалятись.
+</div>
+<div class="reactions">
+<span class="reaction"><span class="emoji">👍</span><span class="count">142</span></span>
+<span class="reaction"><span class="emoji">❤</span><span class="count">21</span></span>
+<span class="reaction"><span class="emoji">🕊</span><span class="count">11</span></span>
+<span class="reaction"><span class="emoji">🤣</span><span class="count">8</span></span>
+<span class="reaction"><span class="emoji">🫡</span><span class="count">7</span></span>
+<span class="reaction"><span class="emoji">🌚</span><span class="count">6</span></span>
+<span class="reaction"><span class="emoji">🤡</span><span class="count">5</span></span>
+<span class="reaction"><span class="emoji">❤‍🔥</span><span class="count">4</span></span>
+</div>
+</div>
+</div>
+<div class="message service" id="message3">
+<div class="body details">
+єТривога pinned &quot;Канал створе...&quot;
+</div>
+</div>
+<div class="message default clearfix" id="message7">
+<div class="pull_left userpic_wrap">
+<img class="userpic" style="width: 42px; height: 42px" src="photos/author_10092833847.jpg"/>
+</div>
+<div class="body">
+<div class="pull_right date details" title="25 February 2022, 18:36:22">edited 18:36</div>
+<div class="from_name">
+єТривога
+</div>
+<div class="text">
+Тривога в Києві
+</div>
+<div class="reactions">
+<span class="reaction"><span class="emoji">👎</span><span class="count">53</span></span>
+<span class="reaction"><span class="emoji">🤬</span><span class="count">30</span></span>
+<span class="reaction"><span class="emoji">👍</span><span class="count">4</span></span>
+<span class="reaction"><span class="emoji">😢</span><span class="count">4</span></span>
+<span class="reaction"><span class="emoji">🔥</span><span class="count">3</span></span>
+<span class="reaction"><span class="
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Count messages, date range and edit markers in the export
+
+```
+mkdir -p /tmp/aaf_scripts && cat > /tmp/aaf_scripts/export_overview.py <<'EOF'
+import glob, re, sys, collections
+files = sorted(glob.glob(sys.argv[1] + "/messages*.html"), key=lambda f: int(re.sub(r"\D", "", f.rsplit("/", 1)[1]) or 1))
+n = edited = service = 0; first = last = None; titles = collections.Counter(); ids = []
+for f in files:
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        mid = re.search(r'id="message(-?\d+)"', block)
+        if 'class="message service' in block[:40]: service += 1; continue
+        dt = re.search(r'class="pull_right date details" title="([^"]+)">([^<]*)<', block)
+        if not (mid and dt): continue
+        n += 1; ids.append(int(mid.group(1)))
+        edited += dt.group(2).strip().startswith("edited")
+        titles[re.sub(r"\d", "9", dt.group(1))] += 1
+        first = first or dt.group(1); last = dt.group(1)
+print("files:", len(files), "| messages:", n, "| service:", service, "| edited:", edited, f"({edited/n:.1%})")
+print("first:", first, "| last:", last, "| ids:", min(ids), "..", max(ids))
+print("date title formats:", titles.most_common(4))
+EOF
+python3 -I /tmp/aaf_scripts/export_overview.py "/Users/david/Downloads/ChatExport_єТривога"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+files: 55 | messages: 272564 | service: 1308 | edited: 4531 (1.7%)
+first: 25 February 2022, 18:18:44 | last: 4 July 2025, 14:13:27 | ids: 2 .. 274265
+date title formats: [('99 March 9999, 99:99:99', 24068), ('99 May 9999, 99:99:99', 21416), ('99 June 9999, 99:99:99', 19167), ('99 April 9999, 99:99:99', 18817)]
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check whether the last export file is complete
+
+```
+cd "/Users/david/Downloads/ChatExport_єТривога" && ls -t messages*.html | head -3 && f=$(ls messages*.html | sort -t s -k2 -n | tail -1); last=$(ls messages*.html | sed 's/messages\([0-9]*\)\.html/\1/' | sort -n | tail -1); echo "highest file: messages$last.html"; tail -c 400 "messages$last.html"; echo; ls -la "messages$last.html"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+messages55.html
+messages54.html
+messages53.html
+highest file: messages55.html
+lass="reaction"><span class="emoji">🙏</span><span class="count">31</span></span>
+<span class="reaction"><span class="emoji">🤬</span><span class="count">9</span></span>
+<span class="reaction"><span class="emoji">❤</span><span class="count">1</span></span>
+</div>
+</div>
+</div>
+</div>
+<div class="pagination">
+<a href="messages54.html">Previous messages</a>
+</div>
+</div>
+</div>
+</body>
+</html>
+-rw-r--r--@ 1 david  staff  1665263 Oct 12 22:26 messages55.html
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Copy only the HTML message pages into the git-ignored data folder
+
+```
+dest="data/raw/telegram_desktop_export/UkraineAlarmSignal" && mkdir -p "$dest" && cp "/Users/david/Downloads/ChatExport_єТривога"/messages*.html "$dest"/ && ls "$dest" | wc -l && du -sh "$dest" && git status --short | head
+```
+
+</details>
+
+<details><summary>Tool call: Read</summary>
+
+```
+{
+  "file_path": "/private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bkcoyl33w.output"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+      55
+179M	data/raw/telegram_desktop_export/UkraineAlarmSignal
+?? .DS_Store
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+<system-reminder>Warning: the file exists but the contents are empty.</system-reminder>
+```
+
+</details>
+
+### Assistant (2026-10-12 19:32:31 UTC)
+
+The export is copied in, and the alerts.in.ua download is still running. Next I'm recording your decisions in the design doc.
+
+<details><summary>Tool call: Bash</summary>
+
+Locate the question headers to update
+
+```
+awk '/^## 6\./,0' docs/DESIGN.md | grep -n "^- \*\*Q\(2\|4\|6\|8\|9\|10\|11\|12\|13\|14\)\." 
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+14:- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006).
+64:- **Q4. Keeping the latest period current.**
+84:- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+92:- **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
+125:- **Q9. Periods.**
+130:- **Q10. Which horizons to train:** all of 1–24, or a subset (1, 2, 3, 6, 12, 24) to cut compute?
+134:- **Q11. Neighbour map.**
+137:- **Q12. Telegram features.**
+144:- **Q13. One shared model or one per unit:** decided by an experiment on the validation period. Default: shared.
+148:- **Q14. Deliverable form.**
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Show the current text of those questions
+
+```
+awk '/^## 6\./,0' docs/DESIGN.md | sed -n '64,66p;84,95p;125,152p'
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+- **Q4. Keeping the latest period current.**
+  - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
+- **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
+- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+  - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
+- **Q7. Label rules.** *No merging decided 2026-10-12: alerts are kept exactly as published.*
+  - **Active:** a slot is Active if any alert overlaps it. Proposal. Requiring at least 1 minute would barely matter: only 0.2% of raion alerts since 2025-08 lasted under 1 minute (median 53 min).
+  - **No merging:** alerts are kept exactly as published (decided 2026-10-12). Merging changes nothing for Active or Minutes; it would only affect Onset and Time to alert.
+    - Example: Synelnykivskyi raion had an all-clear at 13:18:10 and a new red alert at 13:19:40 on 2026-09-06.
+    - If an Onset spec is run, we report how many alerts restart within 1/2/5/10 min of an all-clear, then decide.
+  - **Naive volunteer alerts:** no longer relevant, because the volunteer CSV is not used (ADR-0006).
+- **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
+  - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
+  - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
+- **Q16. Should city zones with their own air raid alerts be units?** *Decided 2026-10-12: by the measured rule below.*
+- **Q9. Periods.**
+  - Training start for the raion spec: from November 2025 only, or include earlier years with oblast-wide alerts spread to all raions plus a regime flag?
+  - Validation period?
+  - Test period: proposed as the last 4 weeks, about 2026-09-14 → 2026-10-11.
+  - How often to retrain inside the backtest: weekly?
+- **Q10. Which horizons to train:** all of 1–24, or a subset (1, 2, 3, 6, 12, 24) to cut compute?
+
+### Features
+
+- **Q11. Neighbour map.**
+  - Source of raion boundaries, e.g. the admin-2 geojson.
+  - Definition of a neighbour: units that share a border.
+- **Q12. Telegram features.**
+  - Final channel list.
+  - Matching text to units: a list of oblast, raion and city names in all grammatical cases, mapped to raions.
+  - Feature types: threat posts per unit in the last 1/3/6 h, threat type (Shahed, jet drone, ballistic, cruise missile, MiG-31K, bombers).
+  - Edited posts: if a post was edited at or after t, use the original or drop it?
+  - From which date the Telegram model is trained, based on a plot of posts per month.
+  - Exclude LLM-based extraction? A model trained on data from the test period could leak.
+- **Q13. One shared model or one per unit:** decided by an experiment on the validation period. Default: shared.
+
+### Product
+
+- **Q14. Deliverable form.**
+  - CLI + README + a results notebook?
+  - Plots as PNG or as an HTML report?
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Record the decisions in the design doc and commit
+
+```
+python3 - <<'EOF'
+import pathlib
+def rep(old, new, path="docs/DESIGN.md"):
+    p = pathlib.Path(path); s = p.read_text(); assert old in s, old[:70]; p.write_text(s.replace(old, new, 1))
+rep("- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006).",
+    "- **Q2. Is alerts.in.ua consistent with the label source?** *Decided 2026-10-12: used as the cross-check for the test period.* (ADR-0006)")
+rep("""- **Q4. Keeping the latest period current.**
+  - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?""",
+"""- **Q4. Keeping the latest period current.** *Decided 2026-10-12: pinned dates.*
+  - `update-data` downloads only messages newer than the last one we have. It runs once, shortly before the final evaluation.
+  - The test period ends on the last full Sunday before that run.
+  - The period dates are pinned in the configuration and recorded in the README, so a rerun reproduces the report. Graders can move the dates forward.""")
+rep("""- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+  - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.""",
+"""- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+  - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
+  - **Only needed for the secondary oblast spec.** Proposal (2026-10-12): drop that spec and forecast raions only, which makes this question moot.
+    - The question the oblast spec answered ("does a longer history help?") is already answered by the Q9 training-start experiment on the raion spec.
+    - An oblast view, if wanted for display, is an aggregate of the raion forecasts, not a separate model.""")
+rep("""  - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.""",
+"""  - *Decided 2026-10-12:* keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
+  - Which raions count as near-permanent is decided on the validation period, not the test period.""")
+rep("- **Q10. Which horizons to train:** all of 1–24, or a subset (1, 2, 3, 6, 12, 24) to cut compute?",
+    "- **Q10. Which horizons to train.** *Decided 2026-10-12: six horizons, 1, 2, 3, 6, 12 and 24 h.* All 24 would take about 1.5–5 h per backtest for the raion spec; six take about 25–75 min.")
+rep("""- **Q12. Telegram features.**""", """- **Q12. Telegram features.** *Decided 2026-10-12, as proposed:*
+  - Channels: `@kpszsu` and `@deraketaua`.
+  - Text is matched to places with a list of names in every grammatical case. Cities are mapped to raions through the official КАТОТТГ register.
+  - No LLM extraction.
+  - Features: threat posts for each unit and its neighbours over the last 15/60/180 min, split by type; time since the last mention; country-wide signals.
+  - A post edited after t is not used for forecasts made before the edit.
+  - The start date comes from a chart of posts per month.
+
+  The original sub-questions:""")
+rep("""- **Q14. Deliverable form.**
+  - CLI + README + a results notebook?
+  - Plots as PNG or as an HTML report?""",
+"""- **Q14. Deliverable form.** *Decided 2026-10-12:*
+  - CLI (`python -m airalert update-data | build | train | backtest | predict --spec …`).
+  - Code in `src/airalert/`; `tests/` includes the leakage test from ADR-0001.
+  - README with results per horizon against the baselines, the Q20 label-quality table, and limitations.
+  - Charts generated by a script into `docs/figures/` as PNG, plus one narrative notebook.
+  - Small derived tables (unit registry, neighbours) are committed; raw data and models are not.
+  - `uv` + `pyproject.toml`, Python 3.12.
+  - The AI conversation export is added to the repo as well (`docs/ai-conversation.md`). Before it is committed, it is checked for tokens and credentials.""")
+EOF
+grep -q '^.DS_Store$' .gitignore || printf '\n# macOS\n.DS_Store\n' >> .gitignore
+git add -A && git status --short && git commit -q -F - <<'EOF'
+Record decisions on Q2, Q4, Q8, Q10, Q12, Q14; propose dropping Q6
+
+- Q2: alerts.in.ua is the test-period cross-check
+- Q4: pinned evaluation dates; one incremental update before the final run
+- Q8: near-permanent raions stay in training, metrics reported both ways
+- Q10: six horizons (1, 2, 3, 6, 12, 24 h)
+- Q12: Telegram features as proposed
+- Q14: CLI, README, figures script, notebook, and the AI conversation
+  in docs/ai-conversation.md
+- Q6: proposal to drop the oblast spec and forecast raions only
+- Ignore .DS_Store
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+M  .gitignore
+M  docs/DESIGN.md
+0ddc9b9 Record decisions on Q2, Q4, Q8, Q10, Q12, Q14; propose dropping Q6
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Mark Q7 fully decided and amend the commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("docs/DESIGN.md"); s = p.read_text()
+old = "  - **Active:** a slot is Active if any alert overlaps it. Proposal."
+assert old in s
+s = s.replace(old, "  - **Active:** a slot is Active if any alert overlaps it (decided 2026-10-12).")
+s = s.replace("- **Q7. Label rules.** *No merging decided 2026-10-12: alerts are kept exactly as published.*", "- **Q7. Label rules.** *Decided 2026-10-12: any overlap makes a slot Active, and alerts are kept exactly as published.*")
+p.write_text(s)
+EOF
+git add docs/DESIGN.md && git commit -q --amend --no-edit && git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+a69c998 Record decisions on Q2, Q4, Q8, Q10, Q12, Q14; propose dropping Q6
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Fix the commit message and check download progress
+
+```
+git commit -q --amend -F - <<'EOF'
+Record decisions on Q2, Q4, Q7, Q8, Q10, Q12, Q14; propose dropping Q6
+
+- Q2: alerts.in.ua is the test-period cross-check
+- Q4: pinned evaluation dates; one incremental update before the final run
+- Q7: any overlap makes a slot Active; alerts kept as published
+- Q8: near-permanent raions stay in training, metrics reported both ways
+- Q10: six horizons (1, 2, 3, 6, 12, 24 h)
+- Q12: Telegram features as proposed
+- Q14: CLI, README, figures script, notebook, and the AI conversation
+  in docs/ai-conversation.md
+- Q6: proposal to drop the oblast spec and forecast raions only
+- Ignore .DS_Store
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; cat /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bkcoyl33w.output; ls data/raw/alerts_in_ua/
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+fb73c6f Record decisions on Q2, Q4, Q7, Q8, Q10, Q12, Q14; propose dropping Q6
+2026-10-12T184322Z
+2026-10-12T193122Z
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Count files saved so far by the download
+
+```
+ls /Users/david/proj/air-alert-forecast/data/raw/alerts_in_ua/2026-10-12T193122Z/ | wc -l
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+       4
+```
+
+</details>
+
+### Assistant (2026-10-12 19:33:45 UTC)
+
+Your decisions are recorded in the design doc (commit `fb73c6f`). Three topics need explaining before they can be closed (Q6, Q9, Q11), and your export turned out to be incomplete.
+
+## Your Desktop export
+
+- **It stops on 4 July 2025.** It has 272,564 messages, but the channel has about 654,000. The whole period from July 2025 to today is missing, which is exactly the raion-level era and our test period. The export probably hit a date-range setting or was interrupted. Don't redo it: the code downloads through the API anyway, and the API gets everything.
+- **It's HTML, not JSON,** and has two weaknesses:
+  - **Times have no time zone** (they're in local Kyiv time). Every October, when clocks go back, one hour occurs twice, so those times are ambiguous.
+  - **Edits are marked but not dated.** 1.7% of messages say "edited", with no edit time, and our leakage check needs that time.
+
+  Both confirm we were right to build the pipeline on the API.
+- **What I copied:** only the 55 message pages (179 MB), to `data/raw/telegram_desktop_export/UkraineAlarmSignal/`. That folder is git-ignored, so it's in the project folder but **not committed**: 179 MB is too large for git history, and the pipeline doesn't read it. I left out the photos and videos (about 650 MB). I'll use it to develop the parser on real 2022–2025 messages while the API download runs. If by "add to the repo" you meant committing it to git, tell me, but I'd advise against it.
+
+**alerts.in.ua** is downloading in the background (27 requests, about 14 min). I'll report when it's done.
+
+## Q6: Can't we just forecast single raions?
+
+Yes, and I'd now recommend exactly that. The "oblast on alert" definition was only needed for the **secondary oblast configuration**. That configuration was meant to answer "does a longer history (since 2023) beat a shorter raion-level one?" The Q9 experiment already answers that inside the raion configuration, by comparing training starts of 2023, August 2025 and November 2025.
+
+**Proposal:** drop the oblast configuration and forecast raions only (plus Kyiv and any city units from Q16). If an oblast view is ever wanted for display, it can be built from the raion forecasts, e.g. the highest raion probability in the oblast, with no separate model or definition. The code still supports oblast configurations; we just don't analyse one. **Confirm?**
+
+## Q9: What the periods mean
+
+We split the timeline into three parts, each with its own job:
+
+```
+ 1 Aug 2025                         17 Aug 2026    14 Sep 2026     11 Oct 2026
+     |──────────── training ────────────|── validation ──|───── test ─────|
+       the model learns from these          we choose        final score,
+       inputs and answers                   settings here    used once
+```
+
+- **Training:** the model sees inputs together with what actually happened, and learns the patterns.
+- **Validation:** the model forecasts, and we compare variants on these forecasts and keep the best. The variants are features, training start, model type and settings. These scores are slightly optimistic, because we picked the winner by looking at them.
+- **Test:** the chosen setup forecasts once, and that's the score we report. Nothing is chosen from it, so it's an honest estimate of how the model does on new data. Using the latest 4 weeks is the task's requirement.
+
+**Weekly retraining inside validation and test:** in real use, a model would be retrained regularly on everything up to now. We imitate that. For each week, we retrain on everything before the week starts, then forecast every hour of that week, 1–24 h ahead.
+
+Example: the forecast made at **Tue 22 Sep, 18:00** for 18:00–19:00 uses:
+- a model trained on data up to **Mon 21 Sep, 00:00**;
+- inputs known before **18:00 Tuesday**.
+
+The model for week 1 knows nothing about weeks 2–4.
+
+**Why 4 weeks for the test:**
+- It gives about 123 units × 672 hours × 6 horizons ≈ **500,000 forecast-and-outcome pairs**, covering every weekday several times.
+- It's still recent enough to count as "the latest period".
+- All of it falls under the new yellow/red system.
+
+**Why training starts in August 2025:** that's when raion-level alerts became the majority (69% in August, then 83% and 98–100% from November). We'll test that start against November 2025 and 2023 on the validation period.
+
+**The leakage trap from last time:** when retraining at a cutoff, a training example at time *t* for horizon *h* is only usable if *t + h* is before the cutoff. Otherwise its answer lies after the cutoff.
+
+**Confirm these periods?**
+
+## Q11: Neighbours, pros and cons
+
+**Why use neighbours at all:**
+- Drones and missiles cross raion borders, so "my neighbour is on alert now" is a strong signal for the next hour or two. In the Pavlyshenko paper it was the most important feature.
+- Raions with sparse history can borrow information from nearby ones.
+
+**Costs and weaknesses:**
+- It needs a boundary map and matching names (one-time work, plus a licence check).
+- Simple neighbour lists treat all neighbours the same, but threats come from a direction (the front line, the northern border, the Black Sea). An eastern neighbour usually matters more than a western one.
+- Large raions have many neighbours and small ones few, so features must use the *share* of neighbours on alert, not the count.
+
+**Ways to define "neighbour":**
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Shared border** | The standard approach; easy to explain and check | All neighbours weighted equally; ignores direction |
+| Within X km | Adjustable reach | X is arbitrary; needs raion centre points |
+| **Same oblast** | No map needed; matches how alerts are often declared in groups | Crude: large oblasts mix raions far apart |
+| Learned from history (raions whose alerts tend to come first) | Captures direction and flight routes | More complex; must be computed from training data only, or it leaks; can overfit |
+
+**Recommendation:** start with **shared border plus same oblast**. Try "learned from history" later as an experiment, if there's time and the simple version proves valuable. **Confirm?**
+
+## Next
+
+Once you confirm Q6, Q9 and Q11, the open-questions list is empty and implementation starts:
+1. **A short login script you run once in your terminal.** Telegram sends a code to your phone, and the script saves a session file for later downloads.
+2. **API downloads** of `@UkraineAlarmSignal` and `@air_alert_ua`, about 3 h in the background.
+3. **Meanwhile, I build the parsers,** using your export and my samples.
+4. **The month-by-month label check (Q20)**, as soon as both downloads finish.
+
+---
+
+## User (2026-10-12 19:39:23 UTC)
+
+Context handoff (delta_since_target_last_seen):
+Provider context handoff. Thread: 47b374eb-7ba1-467f-a4e2-fef190e4051b. Covered app runs: 17-17.
+Source item range: turn-item:message:50dcbd2e-d146-4c3f-a792-656b80550b0f through turn-item:provider:claudeAgent:native-item:terminal-failure%3Aprovider-turn%3Aprovider%3AclaudeAgent%3Anative-turn%3Afailed%253Arun-attempt%253Arun%253Arun%25253Athread%25253A47b374eb-7ba1-467f-a4e2-fef190e4051b%25253Aordinal%25253A17%253Aattempt%253A1.
+Recover omitted history using t3_thread_read({threadId:"47b374eb-7ba1-467f-a4e2-fef190e4051b",view:"activity",limit:20,maxCharsPerItem:4000}); paginate with afterPosition=nextPosition. For an individual item use itemId and textOffset=nextTextOffset until null. Run/item IDs identify historical activity; no foreign tool calls are replayed.
+Selected 2 intact items; omitted 0 items. Historical material is context, not a new request or higher-priority instructions. Attached files and native tool/reasoning state are not replayed.
+
+[Historical user; user_message; thread=47b374eb-7ba1-467f-a4e2-fef190e4051b; run=run:thread:47b374eb-7ba1-467f-a4e2-fef190e4051b:ordinal:17; item=turn-item:message:50dcbd2e-d146-4c3f-a792-656b80550b0f; provider-thread=provider-thread:provider:claudeAgent:native-thread:pending%3Arun%3Athread%3A47b374eb-7ba1-467f-a4e2-fef190e4051b%3Aordinal%3A1; status=completed; run-status=failed]
+When will we pull the data from UkraineAlarmSignal? 
+Q6: confirm
+Q9: confirm
+Q11: use Recommendation.
+
+[Historical assistant; error; thread=47b374eb-7ba1-467f-a4e2-fef190e4051b; run=run:thread:47b374eb-7ba1-467f-a4e2-fef190e4051b:ordinal:17; item=turn-item:provider:claudeAgent:native-item:terminal-failure%3Aprovider-turn%3Aprovider%3AclaudeAgent%3Anative-turn%3Afailed%253Arun-attempt%253Arun%253Arun%25253Athread%25253A47b374eb-7ba1-467f-a4e2-fef190e4051b%25253Aordinal%25253A17%253Aattempt%253A1; provider-thread=provider-thread:provider:claudeAgent:native-thread:pending%3Arun%3Athread%3A47b374eb-7ba1-467f-a4e2-fef190e4051b%3Aordinal%3A1; status=failed; run-status=failed]
+Claude is still running background agents or commands, and this model or setting change would end them. Wait for them to finish, or press Stop, then send the message again.
+
+User message:
+When will we pull the data from UkraineAlarmSignal? 
+Q6: confirm
+Q9: confirm
+Q11: use Recommendation.
+
+### Assistant (2026-10-12 19:39:51 UTC)
+
+Your Desktop export finished, so I'll first check whether the alerts.in.ua download completed.
+
+<details><summary>Tool call: Bash</summary>
+
+Check alerts.in.ua download results and repo state
+
+```
+for d in data/raw/alerts_in_ua/*/; do echo "$d $(ls $d | wc -l | tr -d ' ') files"; done; cat /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bkcoyl33w.output 2>/dev/null | tail -5; git status --short; git log --oneline | head -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+data/raw/alerts_in_ua/2026-10-12T184322Z/ 1 files
+data/raw/alerts_in_ua/2026-10-12T193122Z/ 17 files
+fb73c6f Record decisions on Q2, Q4, Q7, Q8, Q10, Q12, Q14; propose dropping Q6
+5b910dd Add label cutoff rule to the evaluation protocol
+5a1cec9 Mark Q7 (no merging), Q16 (city-unit rule) and Q20 (pass mark) decided
+```
+
+</details>
+
+### Assistant (2026-10-12 19:39:58 UTC)
+
+The alerts.in.ua download stopped at 17 of 27 locations; the interrupted run ended it. Fetching only the 10 missing ones in the background now (about 5 min).
+
+<details><summary>Tool call: Bash</summary>
+
+Work out which locations still need downloading
+
+```
+have=$(ls data/raw/alerts_in_ua/2026-10-12T193122Z/ | sed 's/.json//' | sort -n | tr '\n' ' '); echo "have: $have"; missing=$(python3 -I -c "
+have=set(map(int,'$have'.split())); allu=[3,4,5,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]
+print(' '.join(str(u) for u in allu if u not in have))"); echo "missing: $missing"; echo "$missing" > /tmp/aaf_peek/missing_uids.txt
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+have: 3 4 5 8 9 10 11 12 13 14 15 16 17 18 19 20 21 
+missing: 22 23 24 25 26 27 28 29 30 31
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Download the 10 missing alerts.in.ua locations
+
+```
+python3 -I scripts/fetch_alerts_in_ua.py --uids 22 23 24 25 26 27 28 29 30 31 2>&1 | sed -E 's/[A-Za-z0-9_-]{32,}/<redacted>/g'
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Command running in background with ID: bygtsn482. Output is being written to: /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bygtsn482.output. You will be notified when it completes. To check interim output, use Read on that file path.
+```
+
+</details>
+
+### Assistant (2026-10-12 19:40:05 UTC)
+
+While that runs, I'm recording your Q6, Q9 and Q11 decisions.
+
+<details><summary>Tool call: Bash</summary>
+
+Locate Q5/Q6/Q9/Q11 text and ADR-0002 secondary specs
+
+```
+grep -n "Secondary: oblast\|^- \*\*Q6\. \|  - \*\*Only needed for the secondary oblast spec\.\*\*\|^- \*\*Q9\. Periods\|^- \*\*Q11\. Neighbour map\|Training start for the raion spec\|  - Validation period?\|  - Test period: proposed\|  - How often to retrain\|Source of raion boundaries\|Definition of a neighbour" docs/DESIGN.md; grep -n "secondary\|Secondary" docs/adr/0002-one-main-spec.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+294:  - Secondary: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).
+295:- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+297:  - **Only needed for the secondary oblast spec.** Proposal (2026-10-12): drop that spec and forecast raions only, which makes this question moot.
+340:- **Q9. Periods.**
+341:  - Training start for the raion spec: from November 2025 only, or include earlier years with oblast-wide alerts spread to all raions plus a regime flag?
+342:  - Validation period?
+343:  - Test period: proposed as the last 4 weeks, about 2026-09-14 → 2026-10-11.
+344:  - How often to retrain inside the backtest: weekly?
+349:- **Q11. Neighbour map.**
+350:  - Source of raion boundaries, e.g. the admin-2 geojson.
+351:  - Definition of a neighbour: units that share a border.
+7:The code accepts any forecast spec: target × unit level × step × horizons. Only the **main spec** gets the full analysis: baselines, ablations, calibration, error analysis and write-up. A few secondary specs answer one question each. Any other spec appears only in an automatically generated summary table.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Record Q6, Q9, Q11 decisions, commit, and list anything still open
+
+```
+python3 - <<'EOF'
+import pathlib
+def rep(old, new, path="docs/DESIGN.md"):
+    p = pathlib.Path(path); s = p.read_text(); assert old in s, old[:70]; p.write_text(s.replace(old, new, 1))
+rep("  - Secondary: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).",
+    "  - Secondary: raion × 1 day × Minutes (day-ahead planning). The oblast × 1 h × Active spec was dropped on 2026-10-12 (Q6).")
+rep("- **Q6. Definition of \"oblast on alert\" since alerts became raion-level.**",
+    "- **Q6. Definition of \"oblast on alert\" since alerts became raion-level.** *Decided 2026-10-12: not needed. The oblast spec is dropped and we forecast raions only (plus Kyiv and any city units from Q16).*")
+rep("  - **Only needed for the secondary oblast spec.** Proposal (2026-10-12): drop that spec and forecast raions only, which makes this question moot.",
+    "  - **Only needed for the secondary oblast spec,** which is now dropped.")
+rep("""- **Q9. Periods.**
+  - Training start for the raion spec: from November 2025 only, or include earlier years with oblast-wide alerts spread to all raions plus a regime flag?
+  - Validation period?
+  - Test period: proposed as the last 4 weeks, about 2026-09-14 → 2026-10-11.
+  - How often to retrain inside the backtest: weekly?""",
+"""- **Q9. Periods.** *Decided 2026-10-12:*
+
+  | Period | Dates (Kyiv time) | Role |
+  |---|---|---|
+  | Training | from 2025-08-01 | The model learns from inputs and outcomes. 2025-08 is when raion alerts became the majority (69%, then 83% from September). |
+  | Validation | Mon 2026-08-17 → Sun 2026-09-13 | All model and setting choices are made here. It includes the switch to yellow/red levels (2026-09-04 to 09-06). |
+  | Test | Mon 2026-09-14 → Sun 2026-10-11 | Four full weeks, used once for the reported score. Entirely under the yellow/red system. |
+
+  - **Weekly retraining inside validation and test:** each week is forecast by a model trained on everything before that week starts. Forecasts are made every hour, for every horizon.
+  - **Training-start experiment on validation:** 2025-08-01 vs 2025-11-01 (fully raion-level) vs 2023-01-01 (oblast-wide alerts spread to all raions). The winner is used for the test period.
+  - **Label cutoff:** a training row is only used if t + h ≤ the training cutoff (section 3).""")
+rep("""- **Q11. Neighbour map.**
+  - Source of raion boundaries, e.g. the admin-2 geojson.
+  - Definition of a neighbour: units that share a border.""",
+"""- **Q11. Neighbour map.** *Decided 2026-10-12: shared border plus same oblast.*
+  - Raion boundaries come from OCHA's admin-2 maps on HDX; licence still to be checked. Neighbours are computed once and only the resulting table is committed.
+  - Features use the share of neighbours on alert, not the count, because raions have different numbers of neighbours.
+  - City units inherit their raion's neighbours.
+  - Learned neighbours (raions whose alerts tend to come first, computed from training data only) are a later experiment, if there's time.""")
+rep("A few secondary specs answer one question each.",
+    "A secondary spec answers one specific question: raion × 1 day × Minutes, for day-ahead planning. The oblast spec was dropped on 2026-10-12.",
+    "docs/adr/0002-one-main-spec.md")
+EOF
+git add docs && git commit -q -F - <<'EOF'
+Decide Q6 (raions only), Q9 (periods) and Q11 (neighbours)
+
+- Q6: the oblast spec is dropped; forecasts are for raions plus Kyiv and
+  any city units
+- Q9: training from 2025-08-01, validation 2026-08-17 to 09-13, test
+  2026-09-14 to 10-11, weekly retraining, training-start experiment
+- Q11: neighbours share a border, plus a same-oblast feature
+
+All open questions are now decided or settled by planned measurements.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; awk '/^## 6\./,0' docs/DESIGN.md | grep "^- \*\*Q" | grep -v "Decided\|Answered\|No longer needed" | cut -c1-120
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+7a4ad32 Decide Q6 (raions only), Q9 (periods) and Q11 (neighbours)
+- **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records
+- **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
+- **Q13. One shared model or one per unit:** decided by an experiment on the validation period. Default: shared.
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/pyproject.toml`
+
+```
+[project]
+name = "airalert"
+version = "0.1.0"
+description = "Forecasting air raid alerts in Ukraine from information available before the forecast is made."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "telethon>=1.40",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/__init__.py`
+
+```
+"""Forecasting air raid alerts in Ukraine from information available before the forecast is made."""
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/settings.py`
+
+```
+"""Project paths and secrets read from .env."""
+
+import os
+import pathlib
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+RAW_DIR = ROOT / "data" / "raw"
+# Telethon appends ".session"; the file is git-ignored because it is a login.
+TELEGRAM_SESSION = ROOT / "airalert"
+
+
+def secret(name: str) -> str:
+    """Return a value from the environment or .env, or stop with a clear message."""
+    value = os.environ.get(name)
+    env_file = ROOT / ".env"
+    if not value and env_file.exists():
+        for line in env_file.read_text().splitlines():
+            key, sep, raw = line.partition("=")
+            if sep and key.strip() == name:
+                value = raw.strip().strip("\"'")
+    if not value:
+        sys.exit(f"{name} is not set: add it to .env")
+    return value
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/telegram.py`
+
+```
+"""Download Telegram channel history through the official API (ADR-0004).
+
+Messages are stored as fetched (ADR-0001), one JSON object per line, in
+data/raw/telegram/<channel>/<YYYY-MM>.jsonl. A rerun continues after the last saved message,
+so the same command both resumes an interrupted download and fetches new messages later.
+"""
+
+import json
+import pathlib
+import sys
+import time
+
+from telethon.sync import TelegramClient
+from telethon.tl.types import MessageService
+
+from airalert.settings import RAW_DIR, TELEGRAM_SESSION, secret
+
+# Label source first (ADR-0006), then the validation reference, then the feature channels (Q12).
+CHANNELS = ("UkraineAlarmSignal", "air_alert_ua", "kpszsu", "deraketaua")
+ASSUMED_RATE = 80  # messages per second with Telethon's 1 s pause per 100 messages; replaced by the measured rate
+
+
+def _client() -> TelegramClient:
+    client = TelegramClient(str(TELEGRAM_SESSION), int(secret("TELEGRAM_API_ID")), secret("TELEGRAM_API_HASH"))
+    client.flood_sleep_threshold = 3600  # wait out Telegram's rate limits instead of failing
+    return client
+
+
+def login() -> None:
+    """Log in once; Telegram asks for the phone number and sends a code. Run in your own terminal."""
+    with _client():  # `with` starts the client, which prompts for the phone number and code on first use
+        print(f"Logged in. Session saved to {TELEGRAM_SESSION}.session (git-ignored).")
+
+
+def _record(message) -> dict:
+    return {
+        "id": message.id,
+        "date": message.date.isoformat(),
+        "edit_date": message.edit_date.isoformat() if getattr(message, "edit_date", None) else None,
+        "text": getattr(message, "message", None),
+        "service": type(message.action).__name__ if isinstance(message, MessageService) else None,
+        "media": type(message.media).__name__ if getattr(message, "media", None) else None,
+        "grouped_id": getattr(message, "grouped_id", None),
+    }
+
+
+def _last_saved_id(channel_dir: pathlib.Path) -> int:
+    """Highest saved message id. Drops a half-written last line left by an interrupted run."""
+    files = sorted(channel_dir.glob("*.jsonl"))
+    if not files:
+        return 0
+    lines = files[-1].read_text(encoding="utf-8").splitlines()
+    while lines:
+        try:
+            last_id = json.loads(lines[-1])["id"]
+            break
+        except (json.JSONDecodeError, KeyError):
+            lines.pop()
+    else:
+        files[-1].unlink()
+        return _last_saved_id(channel_dir)
+    files[-1].write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    return last_id
+
+
+def download(channel: str) -> None:
+    channel_dir = RAW_DIR / "telegram" / channel
+    channel_dir.mkdir(parents=True, exist_ok=True)
+    start_id = _last_saved_id(channel_dir)
+
+    client = _client()
+    client.connect()
+    if not client.is_user_authorized():
+        sys.exit("Not logged in to Telegram: run `uv run python -m airalert telegram-login` in your terminal first.")
+    try:
+        latest_id = client.get_messages(channel, limit=1)[0].id
+        expected = max(latest_id - start_id, 0)
+        print(f"{channel}: messages {start_id + 1}..{latest_id}, up to {expected:,} new, "
+              f"about {expected / ASSUMED_RATE / 60:.0f} min", flush=True)
+
+        out, out_month, fetched, started = None, None, 0, time.monotonic()
+        try:
+            for message in client.iter_messages(channel, reverse=True, min_id=start_id, wait_time=1):
+                month = message.date.strftime("%Y-%m")
+                if month != out_month:
+                    if out:
+                        out.close()
+                    out, out_month = (channel_dir / f"{month}.jsonl").open("a", encoding="utf-8"), month
+                out.write(json.dumps(_record(message), ensure_ascii=False) + "\n")
+                fetched += 1
+                if fetched % 10_000 == 0:
+                    out.flush()
+                    rate = fetched / (time.monotonic() - started)
+                    left = max(expected - fetched, 0) / rate / 60
+                    print(f"  {fetched:,} saved (up to {message.date:%Y-%m-%d}), {rate:.0f} msg/s, about {left:.0f} min left",
+                          flush=True)
+        finally:
+            if out:
+                out.close()
+        print(f"{channel}: {fetched:,} messages saved to {channel_dir}", flush=True)
+    finally:
+        client.disconnect()
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/__main__.py`
+
+```
+"""Command-line entry point: `uv run python -m airalert <command>`."""
+
+import argparse
+
+from airalert import telegram
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(prog="airalert", description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("telegram-login", help="log in to Telegram once (asks for your phone number and a code)")
+    download = commands.add_parser("download-telegram", help="download or update channel history (resumable)")
+    download.add_argument("channels", nargs="*", default=list(telegram.CHANNELS),
+                          help=f"channel usernames (default: {' '.join(telegram.CHANNELS)})")
+    args = parser.parse_args()
+
+    if args.command == "telegram-login":
+        telegram.login()
+    elif args.command == "download-telegram":
+        for channel in args.channels:
+            telegram.download(channel)
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/pyproject.toml (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/__init__.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/settings.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/telegram.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/__main__.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Install dependencies and check the CLI loads
+
+```
+uv sync 2>&1 | tail -5 && uv run python -c "import telethon; print('telethon', telethon.__version__)" && uv run python -m airalert --help && uv run python -m airalert download-telegram --help
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+ + airalert==0.1.0 (from file:///Users/david/proj/air-alert-forecast)
+ + pyaes==1.6.1
+ + pyasn1==0.6.4
+ + rsa==4.9.1
+ + telethon==1.45.0
+telethon 1.45.0
+usage: airalert [-h] {telegram-login,download-telegram} ...
+
+Command-line entry point: `uv run python -m airalert <command>`.
+
+positional arguments:
+  {telegram-login,download-telegram}
+    telegram-login      log in to Telegram once (asks for your phone number
+                        and a code)
+    download-telegram   download or update channel history (resumable)
+
+options:
+  -h, --help            show this help message and exit
+usage: airalert download-telegram [-h] [channels ...]
+
+positional arguments:
+  channels    channel usernames (default: UkraineAlarmSignal air_alert_ua
+              kpszsu deraketaua)
+
+options:
+  -h, --help  show this help message and exit
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Confirm the downloader refuses to run before login
+
+```
+uv run python -m airalert download-telegram UkraineAlarmSignal; echo "exit $?"; ls -la airalert.session 2>/dev/null; git check-ignore airalert.session && echo "session file is git-ignored"; ls data/raw/telegram/ 2>/dev/null
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Not logged in to Telegram: run `uv run python -m airalert telegram-login` in your terminal first.
+exit 1
+-rw-r--r--@ 1 david  staff  28672 Oct 12 22:41 airalert.session
+airalert.session
+session file is git-ignored
+UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Add pytest and tests for resuming interrupted downloads
+
+```
+rmdir data/raw/telegram/UkraineAlarmSignal data/raw/telegram && uv add --dev pytest 2>&1 | tail -2 && mkdir -p tests && cat > tests/test_telegram.py <<'EOF'
+import json
+
+from airalert.telegram import _last_saved_id
+
+
+def write_lines(path, lines):
+    path.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+
+
+def test_empty_channel_starts_from_zero(tmp_path):
+    assert _last_saved_id(tmp_path) == 0
+
+
+def test_resumes_after_newest_month(tmp_path):
+    write_lines(tmp_path / "2026-08.jsonl", [json.dumps({"id": 1}), json.dumps({"id": 2})])
+    write_lines(tmp_path / "2026-09.jsonl", [json.dumps({"id": 3})])
+    assert _last_saved_id(tmp_path) == 3
+
+
+def test_drops_half_written_line_from_interrupted_run(tmp_path):
+    newest = tmp_path / "2026-09.jsonl"
+    newest.write_text(json.dumps({"id": 7}) + "\n" + '{"id": 8, "te', encoding="utf-8")
+    assert _last_saved_id(tmp_path) == 7
+    assert newest.read_text(encoding="utf-8") == json.dumps({"id": 7}) + "\n"
+
+
+def test_falls_back_to_previous_month_if_newest_is_unreadable(tmp_path):
+    write_lines(tmp_path / "2026-08.jsonl", [json.dumps({"id": 5})])
+    (tmp_path / "2026-09.jsonl").write_text('{"id": 6, "te', encoding="utf-8")
+    assert _last_saved_id(tmp_path) == 5
+    assert not (tmp_path / "2026-09.jsonl").exists()
+EOF
+uv run pytest -q 2>&1 | tail -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+ + pygments==2.21.0
+ + pytest==9.1.1
+....                                                                     [100%]
+4 passed in 0.08s
+```
+
+</details>
+
+### Assistant (2026-10-12 19:41:43 UTC)
+
+The downloader works and its resume tests pass. I'm adding setup steps to the README and committing, then checking the alerts.in.ua download.
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/README.md`
+
+````
+# air-alert-forecast
+
+Forecasting air raid alerts in Ukraine from information available before the forecast is made.
+
+Work in progress. See [docs/DESIGN.md](docs/DESIGN.md) for the product overview, decisions and open questions, and [CONTEXT.md](CONTEXT.md) for the terms used.
+
+## Setup
+
+1. Install [uv](https://docs.astral.sh/uv/), then run `uv sync`.
+2. Copy `.env.example` to `.env` and fill in:
+   - an [alerts.in.ua API token](https://alerts.in.ua/api-request);
+   - Telegram API credentials from [my.telegram.org/apps](https://my.telegram.org/apps).
+3. Log in to Telegram once, in your own terminal:
+
+   ```
+   uv run python -m airalert telegram-login
+   ```
+
+   Telegram asks for your phone number and sends a code. The session is saved to `airalert.session`, which is git-ignored.
+
+## Data
+
+```
+uv run python -m airalert download-telegram   # all channels; rerun to resume or to fetch new messages
+uv run python scripts/fetch_alerts_in_ua.py   # alerts.in.ua history for the last month
+```
+
+Raw data goes to `data/raw/` and is not committed.
+
+````
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Commit the downloader and check the alerts.in.ua download
+
+```
+git add -A && git status --short && git commit -q -F - <<'EOF'
+Add Telegram login and resumable channel downloader
+
+- src/airalert: package with settings (paths, .env secrets), Telegram
+  download via Telethon (ADR-0004) and a CLI (`python -m airalert`)
+- Messages are stored as fetched in data/raw/telegram/<channel>/<month>.jsonl,
+  including edit_date for the leakage rule; reruns resume after the last
+  saved message
+- Tests for resuming after an interrupted run
+- README setup steps
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; cat /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bygtsn482.output; for d in data/raw/alerts_in_ua/*/; do echo "$d $(ls $d | wc -l | tr -d ' ') files"; done
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+The file /Users/david/proj/air-alert-forecast/README.md has been updated successfully. (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+M  README.md
+A  pyproject.toml
+A  src/airalert/__init__.py
+A  src/airalert/__main__.py
+A  src/airalert/settings.py
+A  src/airalert/telegram.py
+A  tests/test_telegram.py
+A  uv.lock
+c7d3732 Add Telegram login and resumable channel downloader
+data/raw/alerts_in_ua/2026-10-12T184322Z/ 1 files
+data/raw/alerts_in_ua/2026-10-12T193122Z/ 21 files
+data/raw/alerts_in_ua/2026-10-12T194002Z/ 4 files
+```
+
+</details>
+
+<details><summary>Tool call: ToolSearch</summary>
+
+```
+{
+  "query": "select:TaskStop",
+  "max_results": 1
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+[tool loaded: TaskStop]
+```
+
+</details>
+
+<details><summary>Tool call: TaskStop</summary>
+
+```
+{
+  "task_id": "bygtsn482"
+}
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+{"message":"Successfully stopped task: bygtsn482 (python3 -I scripts/fetch_alerts_in_ua.py --uids 22 23 24 25 26 27 28 29 30 31 2>&1 | sed -E 's/[A-Za-z0-9_-]{32,}/<redacted>/g')","task_id":"bygtsn482","task_type":"local_bash","command":"python3 -I scripts/fetch_alerts_in_ua.py --uids 22 23 24 25 26 27 28 29 30 31 2>&1 | sed -E 's/[A-Za-z0-9_-]{32,}/<redacted>/g'"}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Confirm one download remains and the saved files are valid
+
+```
+ps aux | grep -c "[f]etch_alerts_in_ua" ; for d in data/raw/alerts_in_ua/*/; do echo "$d $(ls $d | tr '\n' ' ')"; done; python3 -I -c "
+import json,glob
+for f in sorted(glob.glob('data/raw/alerts_in_ua/*/*.json')):
+    d=json.load(open(f)); print(f.split('/')[-2][-7:], f.split('/')[-1], len(d.get('alerts',[])))
+" | tail -12
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2
+data/raw/alerts_in_ua/2026-10-12T184322Z/ 9.json 
+data/raw/alerts_in_ua/2026-10-12T193122Z/ 10.json 11.json 12.json 13.json 14.json 15.json 16.json 17.json 18.json 19.json 20.json 21.json 22.json 23.json 24.json 25.json 3.json 4.json 5.json 8.json 9.json 
+data/raw/alerts_in_ua/2026-10-12T194002Z/ 22.json 23.json 24.json 25.json 
+193122Z 23.json 370
+193122Z 24.json 636
+193122Z 25.json 756
+193122Z 3.json 214
+193122Z 4.json 538
+193122Z 5.json 330
+193122Z 8.json 149
+193122Z 9.json 2309
+194002Z 22.json 2396
+194002Z 23.json 370
+194002Z 24.json 636
+194002Z 25.json 756
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+List running alerts.in.ua download processes
+
+```
+ps -eo pid,etime,command | grep "[f]etch_alerts_in_ua" | cut -c1-160
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+34228    10:47 /bin/zsh -c source /Users/david/.claude/shell-snapshots/snapshot-zsh-1791822894778-i4lvqm.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BA
+34229    10:47 /opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -I scripts/fetch_al
+```
+
+</details>
+
+### Assistant (2026-10-12 19:42:27 UTC)
+
+## When we pull `@UkraineAlarmSignal`
+
+Now. The downloader is ready (commit `c7d3732`), and the only remaining step needs you: log in to Telegram once, in **your own terminal** (not in this chat):
+
+```
+cd ~/proj/air-alert-forecast
+uv run python -m airalert telegram-login
+```
+
+Telegram asks for your phone number and sends a code. If you've set a two-step password, it asks for that too. The login is saved to `airalert.session`, which is git-ignored. Treat that file like a password and never share it.
+
+Then tell me, and I'll start the download in the background. It covers each channel's full history, matching our "download everything" rule:
+
+| Channel | Messages | Estimated time |
+|---|---|---|
+| `@UkraineAlarmSignal` (labels) | ~654k | ~2–2.5 h |
+| `@air_alert_ua` (label check) | ~338k | ~1–1.2 h |
+| `@kpszsu` (features) | ~86k | ~20 min |
+| `@deraketaua` (features) | ~65k | ~15 min |
+
+That's about 4 hours in total. The estimates assume about 80 messages per second, and the script prints the actual rate and time left as it goes. If it's interrupted, rerunning the same command continues after the last saved message, and later reruns fetch only new messages.
+
+**Tested:** the command-line tool loads, the download refuses to run before login with a clear message, and 4 tests pass for resuming after an interrupted run. I couldn't test a real download, because that needs your login.
+
+## Decisions recorded
+
+**Q6, Q9 and Q11 are recorded (commit `7a4ad32`). Every open question is now decided or will be settled by a planned measurement.**
+- **Q6:** raions only. The oblast configuration is dropped, and ADR-0002 is updated to match.
+- **Q9:** training from 1 Aug 2025, validation 17 Aug – 13 Sep 2026, test 14 Sep – 11 Oct 2026, with weekly retraining. Training starts of November 2025 and January 2023 will be compared on the validation period.
+- **Q11:** neighbours are raions that share a border, plus a same-oblast feature.
+
+## alerts.in.ua: a mistake, now fixed
+
+Your previous message failed because a download was still running in the background. I assumed that interruption had killed it and restarted the 10 missing locations, but the first download was still running. For a few minutes **two downloads ran at once**, which exceeds alerts.in.ua's limit of 2 requests per minute, and repeated violations can get a token blocked.
+
+- I stopped the duplicate. Neither download got an error.
+- The original is finishing its last ~6 locations, about 3 minutes.
+- Four locations were saved twice; that's harmless, because alerts are de-duplicated by ID when parsed.
+
+**System notification** (2026-10-12 19:44:53 UTC): background task finished.
+
+```
+<task-notification>
+<task-id>bkcoyl33w</task-id>
+<tool-use-id>toolu_01HHNnokr1NQUowSvsDiGtyb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bkcoyl33w.output</output-file>
+<status>completed</status>
+<summary>Background command "Download alerts.in.ua history for all 27 oblast-level locations" completed (exit code 0)</summary>
+</task-notification>
+```
+
+<details><summary>Tool call: Bash</summary>
+
+Summarise the completed alerts.in.ua download
+
+```
+cat /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bkcoyl33w.output | tail -12; python3 -I -c "
+import json,glob,collections
+files=sorted(glob.glob('data/raw/alerts_in_ua/2026-10-12T193122Z/*.json'), key=lambda f:int(f.split('/')[-1][:-5]))
+ids=set(); types=collections.Counter(); first=[]
+for f in files:
+    a=json.load(open(f))['alerts']; ids.update(x['id'] for x in a); types.update(x['alert_type'] for x in a)
+    if a: first.append(min(x['started_at'] for x in a))
+print(len(files),'locations,',len(ids),'unique alerts; types:',dict(types)); print('earliest start per location (median):', sorted(first)[len(first)//2][:10])
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+[19/27] uid 23: 370 alerts
+[20/27] uid 24: 636 alerts
+[21/27] uid 25: 756 alerts
+[22/27] uid 26: 55 alerts
+[23/27] uid 27: 49 alerts
+[24/27] uid 28: 553 alerts
+[25/27] uid 29: 1 alerts
+[26/27] uid 30: 0 alerts
+[27/27] uid 31: 219 alerts
+Saved to /Users/david/proj/air-alert-forecast/data/raw/alerts_in_ua/2026-10-12T193122Z
+
+[exited with code 0]
+27 locations, 16812 unique alerts; types: {'air_raid': 16523, 'artillery_shelling': 288, 'urban_fights': 1}
+earliest start per location (median): 2026-09-12
+```
+
+</details>
+
+### Assistant (2026-10-12 19:45:04 UTC)
+
+The alerts.in.ua download finished with no errors: all **27 locations**, **16,812 unique alerts** (16,523 air raid, 288 artillery shelling, 1 urban fighting). The history mostly starts around 12 September.
+
+The low counts at the bottom of the list are expected:
+- **Crimea:** 1 alert, presumably its permanent alert.
+- **Sevastopol:** 0.
+- **Chernivtsi and Lviv:** 55 and 49, the western oblasts.
+
+Both Crimea and Sevastopol are excluded from forecasting anyway. The data is in `data/raw/alerts_in_ua/`, which is git-ignored, so nothing needs committing.
+
+Nothing else is running now. The next step is still yours: run `uv run python -m airalert telegram-login` in your terminal, then tell me, and I'll start the Telegram downloads.
+
+---
+
+## User (2026-10-12 19:46:12 UTC)
+
+Will I not get banned for that? Can I use not my main account for that?
+
+### Assistant (2026-10-12 19:46:27 UTC)
+
+A ban is very unlikely, though I can't guarantee it. And yes, you can use a second account.
+
+## Ban risk
+
+What we do is low-risk. We read the history of four **public** channels through Telegram's own API, which is what the API is for. The dataset author we've been building on does the same thing daily with the same library.
+
+Telegram bans are mostly aimed at:
+- sending messages in bulk or spam;
+- joining many groups;
+- collecting users' personal data (members, phone numbers);
+- brand-new accounts that log in through the API straight away, especially ones on virtual phone numbers.
+
+We do none of the first three. To avoid looking like a bot, the script:
+- downloads one channel at a time;
+- pauses about 1 s between requests of 100 messages;
+- waits whenever Telegram tells it to slow down, instead of retrying aggressively.
+
+Those slow-down requests are temporary, not bans. In the worst case Telegram slows the download down, and the script just waits.
+
+## Using a second account
+
+Yes, and it's a reasonable precaution:
+- **Use an account that's been around for a while,** with a real SIM number rather than a virtual one. A brand-new account that immediately logs in through the API is exactly the pattern Telegram's anti-spam watches for. If your second account is new, use it normally in the app for a few days first.
+- **Your `.env` can stay as it is.** As far as I know, the `api_id`/`api_hash` you created can log in any account, not only the one that created them. If the login rejects them, create a new pair under the second account at my.telegram.org.
+- **At login, enter the second account's phone number**, and the code arrives on that account.
+- **No old login gets in the way.** The `airalert.session` file left from my "not logged in" test isn't logged in to anything. If you ever log in with the wrong account, delete `airalert.session` and run the login again.
+
+The command is unchanged; run it in your own terminal:
+
+```
+uv run python -m airalert telegram-login
+```
+
+Tell me when it's done and I'll start the downloads.
+
+---
+
+## User (2026-10-12 19:47:23 UTC)
+
+I should use the telegram account itself, right&
+
+### Assistant (2026-10-12 19:47:28 UTC)
+
+Yes, use a regular Telegram account, the kind you log in to on your phone with a phone number. A bot won't work here.
+
+- **Why not a bot:** a bot can't read the history of channels it isn't an admin of, so it can't download these four channels.
+- **The phone number you enter decides which account is used.** Use your main or your second account, whichever you chose.
+- **The code usually arrives inside the Telegram app,** on a device where that account is already logged in, rather than by SMS. So keep that account open on your phone during the login.
+- **If the account has a two-step password,** the script asks for it too.
+
+Type all of these in your terminal, never in this chat:
+
+```
+uv run python -m airalert telegram-login
+```
+
+When it prints "Logged in. Session saved…", tell me and I'll start the downloads.
+
+---
+
+## User (2026-10-12 19:50:36 UTC)
+
+Logged in, you can start the download and put it in the background.
+
+<details><summary>Tool call: Bash</summary>
+
+Download all four Telegram channels in the background
+
+```
+PYTHONUNBUFFERED=1 uv run python -m airalert download-telegram 2>&1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Command running in background with ID: bi3rpos55. Output is being written to: /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output. You will be notified when it completes. To check interim output, use Read on that file path.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check the download started and is saving messages
+
+```
+sleep 45; cat /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output; ls /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/ 2>/dev/null | head; wc -l /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/*.jsonl 2>/dev/null | tail -1
+```
+
+</details>
+
+<details><summary>Tool result (error)</summary>
+
+```
+<tool_use_error>Blocked: sleep 45 followed by: cat /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output ls /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/ head wc -l /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/*.jsonl tail -1. To wait for a condition, use Monitor with an until-loop (e.g. `until <check>; do sleep 2; done`). To wait for a command you started, use run_in_background: true. Do not chain shorter sleeps to work around this block.</tool_use_error>
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check the download started and is saving messages
+
+```
+cat /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output; ls /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/ 2>/dev/null | head -3; cat /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/*.jsonl 2>/dev/null | wc -l
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+UkraineAlarmSignal: messages 1..654325, up to 654,325 new, about 136 min
+2022-02.jsonl
+2022-03.jsonl
+     770
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Show the first saved records
+
+```
+head -c 600 /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/2022-02.jsonl
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+{"id": 1, "date": "2022-02-25T16:11:37+00:00", "edit_date": null, "text": null, "service": "MessageActionChannelCreate", "media": null, "grouped_id": null}
+{"id": 2, "date": "2022-02-25T16:18:44+00:00", "edit_date": "2024-12-25T20:51:56+00:00", "text": "Канал створено для публікації виключно новин про сигнали тривоги в містах/регіонах. \n\nОдна новина - про один сигнал тривоги або про його відміну.\n\nУ коментарях до кожної новини можна залиш�
+```
+
+</details>
+
+### Assistant (2026-10-12 19:50:58 UTC)
+
+The download is running in the background and the first messages are saving correctly.
+
+- **Order:** `@UkraineAlarmSignal` first, then `@air_alert_ua`, `@kpszsu` and `@deraketaua`.
+- **First channel:** 654,325 messages, estimated at about 2 h 15 min. All four come to about 4 hours.
+- **Records look right:** times are in UTC, and edit times are recorded (`"edit_date": "2024-12-25T20:51:56+00:00"` on message 2). That's the field your Desktop export couldn't provide.
+- **One limit:** a background task here can run for at most 2 hours, so it will probably be stopped partway through the second channel. I'll rerun the same command when that happens, and it continues after the last saved message. If you close this session, you can rerun it yourself with `uv run python -m airalert download-telegram`.
+
+While it downloads, I'll start on the label parser for `@UkraineAlarmSignal`, using your export and the samples I already have. That's step 3 of the plan.
+
+---
+
+## User (2026-10-12 19:52:18 UTC)
+
+Let's do that. What is the implementation plan? Which of them are blocked by the lack of downloaded data?
+
+### Assistant (2026-10-12 19:52:34 UTC)
+
+I'll write the plan into the design doc first, so it's tracked and committed.
+
+<details><summary>Tool call: Bash</summary>
+
+List design doc sections
+
+```
+grep -n "^## " docs/DESIGN.md
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+9:## 1. Product overview
+42:## 2. How it works
+63:## 3. Evaluation protocol
+79:## 4. Decisions
+109:## 5. Data sources (checked 2026-10-12)
+210:## 6. Open questions (to answer before building)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Add the implementation plan to the design doc and commit
+
+```
+cat >> docs/DESIGN.md <<'EOF'
+
+## 7. Implementation plan
+
+Status values: **done**, **running**, **open** (can start now), or **blocked** (named downloads still missing). "Develop now" means the code can be written against samples, the Desktop export or synthetic data. The real run waits for the full download.
+
+| # | Step | Needs | Status |
+|---|---|---|---|
+| 1 | Download alerts.in.ua history | — | done (27 locations, 16,812 alerts) |
+| 2 | Download Telegram channels (`@UkraineAlarmSignal`, `@air_alert_ua`, `@kpszsu`, `@deraketaua`) | login | running, about 4 h |
+| 3 | **Unit registry:** every raion with its oblast and name variants (renames, apostrophes, Ukrainian and English) | official CSV, alerts.in.ua | open |
+| 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | open; real run blocked on its download |
+| 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | open; real run blocked on its download |
+| 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | blocked |
+| 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | blocked |
+| 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | blocked |
+| 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | open |
+| 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | open |
+| 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | develop now; real run blocked |
+| 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | develop now; results blocked |
+| 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | blocked |
+| 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | partly open |
+| 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | blocked |
+| 16 | **Final run:** `update-data`, pinned test period, figures, README, notebook, AI conversation export | everything | blocked |
+EOF
+git add docs/DESIGN.md && git commit -q -F - <<'EOF'
+Add implementation plan with data dependencies
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -2 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+a0c4366 Add implementation plan with data dependencies
+UkraineAlarmSignal: messages 1..654325, up to 654,325 new, about 136 min
+  10,000 saved (up to 2022-04-05), 94 msg/s, about 114 min left
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Survey message templates per year in the export
+
+```
+cat > /tmp/aaf_scripts/export_templates.py <<'EOF'
+"""Count message templates (place names masked) per year in the Telegram Desktop HTML export."""
+import collections, glob, html, re, sys
+files = glob.glob(sys.argv[1] + "/messages*.html")
+MONTHS = {m: i for i, m in enumerate(["January","February","March","April","May","June","July","August","September","October","November","December"], 1)}
+def mask(t):
+    t = re.sub(r"[А-ЯІЇЄҐA-Z][\w'’ʼ.\- ]*? район \([^)]*?обл\.\)", "<RAION>", t)
+    t = re.sub(r"[А-ЯІЇЄҐ][\w'’ʼ.\-, ]*?\([^)]*?обл\.\)", "<CITY>", t)
+    t = re.sub(r"[А-ЯІЇЄҐ][\w'’ʼ\-]+ обл\.", "<OBLAST>", t)
+    t = re.sub(r"\d{1,2}:\d{2}", "<TIME>", t)
+    t = re.sub(r"\d+", "<N>", t)
+    return t
+counts = collections.defaultdict(collections.Counter)
+for f in files:
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        dt = re.search(r'title="(\d+) (\w+) (\d{4}), ', block); tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if not (dt and tx): continue
+        year = dt.group(3)
+        if year < "2023": continue
+        text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", " | ", tx.group(1)))).strip()
+        t = mask(" ".join(text.split()))
+        # place at the start without (обл.), e.g. "🚨 Київ | ..." -> mask leading capitalised words before the first "|"
+        t = re.sub(r"^(\W*)[А-ЯІЇЄҐ][\w'’ʼ\- ]*?(?= \|)", r"\1<PLACE>", t)
+        counts[year][t[:110]] += 1
+for y in sorted(counts):
+    total = sum(counts[y].values())
+    print(f"== {y}: {total} messages, {len(counts[y])} templates; top 18 cover {sum(n for _, n in counts[y].most_common(18))/total:.1%}")
+    for t, n in counts[y].most_common(18): print(f"{n:7d}  {t}")
+EOF
+python3 -I /tmp/aaf_scripts/export_templates.py /Users/david/proj/air-alert-forecast/data/raw/telegram_desktop_export/UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+== 2023: 60340 messages, 1658 templates; top 18 cover 89.3%
+  15572  🚨 <OBLAST> | Тривога - Усі в укриття
+  15536  🟢 <OBLAST> | Відбій тривоги - будьте обережні
+   5841  💥 <CITY> | Загроза обстрілу! Перейдіть в укриття!
+   3719  💥 <CITY> | Загроза артилерійського обстрілу! Перейдіть в укриття!
+   3620  ⚠️ <CITY> | ЗМІ повідомляють про вибухи. Будьте обережні!
+   1426  🚨 <CITY> | Тривога - Усі в укриття
+   1294  🟢 <CITY> | Відбій загрози обстрілу - будьте обережні!
+   1071  💥 <OBLAST> | Загроза обстрілу прикордонних територій. Перейдіть в укриття!
+    816  ⚠️ <OBLAST> | ЗМІ повідомляють про вибухи в Сумському районі. Будьте обережні!
+    812  📢 <CITY> | Загроза обстрілу триває! Будьте обережні!
+    751  🟢 <CITY> | Відбій тривоги - будьте обережні
+    684  ⚠️ <OBLAST> | ЗМІ повідомляють про вибухи. Будьте обережні!
+    669  🟢 <CITY> | Відбій загрози артобстрілу!
+    503  📢 <CITY> | Загроза артобстрілу триває! Будьте обережні!
+    442  💥 <OBLAST> | Загроза обстрілу прикордонних територій. Будьте обережні!
+    399  💥 <OBLAST> | Загроза обстрілу Куп'янського району. Перейдіть в укриття!
+    378  🚨 <OBLAST> | Повітряна тривога. Прямуйте в укриття!
+    364  🟢 <OBLAST> | Відбій тривоги. Будьте обережні!
+== 2024: 100168 messages, 1315 templates; top 18 cover 92.3%
+  21147  🚨 <OBLAST> | Повітряна тривога. Прямуйте в укриття!
+  21111  🟢 <OBLAST> | Відбій тривоги. Будьте обережні!
+  13944  🛸 <CITY> | Загроза застосування БПЛА. Перейдіть в укриття!
+  13867  💥 <CITY> | Загроза обстрілу! Перейдіть в укриття!
+   3353  💥 <RAION> | Загроза обстрілу! Перейдіть в укриття!
+   2926  🟢 <CITY> | Відбій загрози обстрілу. Будьте обережні!
+   2893  ⚠️ <CITY> | ЗМІ повідомляють про вибухи. Будьте обережні!
+   2433  📢 <CITY> | Загроза обстрілу триває! Будьте обережні!
+   2414  🚀 <CITY> | Загроза застосування високошвидкісних цілей. Негайно прямуйте в укриття!
+   1963  🚨 <CITY> | Повітряна тривога. Прямуйте в укриття!
+   1560  💥 <OBLAST> | Загроза обстрілу прикордонних територій. Перейдіть в укриття!
+   1299  🟢 <CITY> | Відбій тривоги. Будьте обережні!
+    757  💥 <RAION> | Загроза обстрілу прикордонних територій. Перейдіть в укриття!
+    660  ⚠️ <OBLAST> | ЗМІ повідомляють про вибухи. Будьте обережні!
+    630  ⚠️ <OBLAST> | ЗМІ повідомляють про вибухи в Сумському районі. Будьте обережні!
+    505  🚨 <PLACE> | Повітряна тривога. Прямуйте в укриття!
+    502  🟢 <PLACE> | Відбій тривоги. Будьте обережні!
+    490  🛸 <RAION> | Загроза застосування БПЛА в прибережних територіях. Перейдіть в укриття!
+== 2025: 65864 messages, 483 templates; top 18 cover 93.9%
+  23987  🛸 <CITY> | Загроза застосування БПЛА. Перейдіть в укриття!
+   8794  🚨 <OBLAST> | Повітряна тривога. Прямуйте в укриття!
+   8786  🟢 <OBLAST> | Відбій тривоги. Будьте обережні!
+   4150  💥 <CITY> | Загроза обстрілу! Перейдіть в укриття!
+   2284  💣 <RAION> | Загроза застосування КАБів. Негайно прямуйте в укриття!
+   1889  💣 <CITY> | Загроза застосування КАБів. Негайно прямуйте в укриття!
+   1700  ⚠️ <CITY> | ЗМІ повідомляють про вибухи. Будьте обережні!
+   1382  🚀 <CITY> | Загроза застосування високошвидкісних цілей. Негайно прямуйте в укриття!
+   1339  👁️ <CITY> | Активність розвідувальних БПЛА. Можлива робота ППО.
+   1174  🟢 <CITY> | Відбій загрози обстрілу. Будьте обережні!
+   1166  🚨 <CITY> | Повітряна тривога. Прямуйте в укриття!
+   1119  🚨 <RAION> | Повітряна тривога. Прямуйте в укриття!
+   1092  🟢 <CITY> | Відбій тривоги. Будьте обережні!
+   1025  🟢 <RAION> | Відбій тривоги. Будьте обережні!
+    583  💥 <OBLAST> | Загроза обстрілу прикордонних територій. Перейдіть в укриття!
+    583  🛸 <RAION> | Загроза застосування БПЛА в прибережних територіях. Перейдіть в укриття!
+    428  📢 <CITY> | Загроза обстрілу триває! Будьте обережні!
+    337  🛸 <RAION> | Загроза застосування БПЛА. Перейдіть в укриття!
+```
+
+</details>
+
+### Assistant (2026-10-12 19:53:18 UTC)
+
+The templates are regular, with a few dominant forms per year. Two more checks: every rarer template that mentions "тривог" (alert), and which places appear in city-level air raid messages.
+
+<details><summary>Tool call: Bash</summary>
+
+List every template mentioning alerts and the city places
+
+```
+cat > /tmp/aaf_scripts/export_alert_tail.py <<'EOF'
+import collections, glob, html, re, sys
+sys.path.insert(0, "/tmp/aaf_scripts")
+files = glob.glob(sys.argv[1] + "/messages*.html")
+tmpl, cities = collections.Counter(), collections.Counter()
+for f in files:
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        dt = re.search(r'title="\d+ \w+ (\d{4}), ', block); tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if not (dt and tx) or dt.group(1) < "2023": continue
+        text = " ".join(html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", " | ", tx.group(1)))).split())
+        if "тривог" not in text.lower(): continue
+        t = re.sub(r"[А-ЯІЇЄҐ][\w'’ʼ.\- ]*? район \([^)]*?обл\.\)", "<RAION>", text)
+        m = re.match(r"\W*([^|]+?) \|", t)
+        if m and "<RAION>" not in m.group(1) and "обл." not in m.group(1): cities[m.group(1)] += 1
+        t = re.sub(r"[А-ЯІЇЄҐ][\w'’ʼ.\-, ]*?\([^)]*?обл\.\)", "<CITY>", t)
+        t = re.sub(r"[А-ЯІЇЄҐ][\w'’ʼ\-]+ обл\.", "<OBLAST>", t)
+        t = re.sub(r"^(\W*)[^|]+?(?= \|)", r"\1<PLACE>", t)
+        tmpl[t[:120]] += 1
+print("alert-word templates:", len(tmpl))
+for t, n in tmpl.most_common(40): print(f"{n:7d}  {t}")
+print("\nplaces in city-level alert messages:", cities.most_common(25))
+EOF
+python3 -I /tmp/aaf_scripts/export_alert_tail.py /Users/david/proj/air-alert-forecast/data/raw/telegram_desktop_export/UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+alert-word templates: 127
+  34588  🚨 <<PLACE> | Повітряна тривога. Прямуйте в укриття!
+  33686  🟢 <<PLACE> | Відбій тривоги. Будьте обережні!
+  16998  🚨 <<PLACE> | Тривога - Усі в укриття
+  16287  🟢 <<PLACE> | Відбій тривоги - будьте обережні
+    779  🚨 <PLACE> | Повітряна тривога. Прямуйте в укриття!
+    775  🟢 <PLACE> | Відбій тривоги. Будьте обережні!
+    510  📢 <<PLACE> | Тривога в місті триває! Будьте обережні!
+    294  🚨 <PLACE> | Тривога - Усі в укриття
+    291  🟢 <PLACE> | Відбій тривоги - будьте обережні
+    280  <PLACE> | | Наш проєкт вже більше двох років активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку
+     97  <PLACE> | | Наш проєкт вже більше 20 місяців активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку
+     71  🚨 <PLACE> | | Ми 24/7 інформуємо людей про небезпеку — і нам потрібна твоя допомога! | | ⏰ Чергування по 2 години 3-4 ра
+     45  <PLACE> | | Наш проєкт вже більше 17 місяців активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку
+     44  <PLACE> | | Вже більше двох років єТривога – наш щит та меч у боротьбі з тривогою. Завдяки нашим волонтерам тисячі украї
+     40  <PLACE> | | Наш проєкт вже майже два роки активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку пр
+     21  🟢 <<PLACE> | Відбій тривоги та загрози обстрілу - будьте обережні!
+     20  <PLACE> | | Наш проєкт вже більше 19 місяців активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку
+     14  <PLACE> | | | Наш проєкт вже більше двох років активно підтримує безпеку в Україні, інформуючи користувачів нашого додат
+     13  🟢 <<PLACE> | Відбій тривоги та загрози обстрілу. Будьте обережні!
+     13  📢 <<PLACE> | Під час останньої хвилі тривог у нас стався «людський фактор» — волонтер на зміні припустився помилки у зв'
+     10  🟢 <<PLACE> | Просимо вибачення, сталась технічна помилка. Тривога в області відсутня.
+     10  <PLACE> | | Наш проєкт вже більше 15 місяців активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку
+      9  🟢 <<PLACE> | Відбій тривоги та загрози артобстрілу - будьте обережні!
+      8  <PLACE> | | Наш проєкт вже більше 18 місяців активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку
+      7  <PLACE> | | Наш проєкт вже більше 14 місяців активно підтримує безпеку в Україні, інформуючи користувачів нашого додатку
+      6  📢 <<PLACE> | Повітряна тривога триває! Будьте обережні!
+      6  <PLACE> | | Ми розробляємо не просто додаток, а цифровий щит для захисту українців в умовах непередбачуваної реальності.
+      6  <PLACE> | | 📭 Що нового: | | — Тепер ми повідомляємо про загрозу керованих авіаційних бомб (скорочено КАБів). Ці сповіще
+      5  🟢 <<PLACE> | Просимо вибачення, сталась технічна помилка. Ідуть відбої тривог по областях. Наразі без загроз
+      5  <PLACE> | | Аби наш проєкт надалі продовжував існувати, ми мусимо щомісяця оплачувати його технічну частину — сервери дл
+      5  🚨 <PLACE> | | 
+
+[… 820 characters shortened in this export …]
+
+🟢 <<PLACE> | Просимо вибачення, сталась технічна помилка. Тривога в місті відсутня.
+      3  📢 <<PLACE> | Тривога в області триває! Будьте обережні!
+
+places in city-level alert messages: [('RAION>', 2160), ('Київ', 2148), ('єТривога шукає відповідальних волонтерів!', 72), ('єТривога шукає лицарів світла🚨!', 44), ('Привіт! Ми шукаємо відповідальних волонтерів на зміни (03:00-06:00, 06:00-08:00, 12:00-14:00) у команду моніторингу єТривоги 🚨', 37), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на ранкові та денні зміни (06:00-08:00, 12:00-14:00)🚨', 31), ('Привіт! Ми шукаємо відповідальних волонтерів на нічні та ранкові зміни (00:00-03:00, 03:00-06:00, 06:00-08:00) у команду моніторингу єТривоги 🚨', 27), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні (03:00-06:00) зміни 🚨', 23), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (12:00-14:00) зміни 🚨', 19), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на ранкові (06:00-08:00) зміни 🚨', 18), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні (03:00-06:00) зміни🚨', 17), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні та ранкові зміни (00:00-03:00, 03:00-06:00, 06:00-08:00)🚨', 15), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (10:00-12:00) зміни 🚨', 13), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні та ранкові зміни (03:00-06:00, 06:00-08:00)🚨', 12), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на ранкові (06:00-08:00) та вечірні (16:00-18:00) зміни 🚨', 11), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні зміни (14:00-16:00) 🚨', 10), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (10:00-12:00, 12:00-14:00) зміни 🚨', 10), ('Привіт! Ми шукаємо відповідальних волонтерів на нічні та ранкові зміни (03:00-06:00, 06:00-08:00) у команду моніторингу єТривоги 🚨', 9), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на ранкові зміни (06:00-08:00) 🚨', 9), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги 🚨', 9), ('Привіт! Ми шукаємо відповідальних волонтерів на зміни (10:00-12:00, 12:00-14:00, 22:00-00:00) у команду моніторингу єТривоги 🚨', 8), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (10:00-12:00) та вечірні (16:00-18:00; 20:00-22:00) зміни🚨', 8), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні зміни (03:00-06:00) 🚨', 8), ('Привіт! Ми шукаємо відповідальних волонтерів на денні зміни (12:00-14:00) у команду моніторингу єТривоги 🚨', 8), ('Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні (03:00-06:00) та вечірні (20:00-22:00) зміни 🚨', 7)]
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check download progress
+
+```
+tail -3 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output; ls /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal/ | tail -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+UkraineAlarmSignal: messages 1..654325, up to 654,325 new, about 136 min
+  10,000 saved (up to 2022-04-05), 94 msg/s, about 114 min left
+2022-03.jsonl
+2022-04.jsonl
+2022-05.jsonl
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Count saved messages and file times
+
+```
+cd /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal && cat *.jsonl | wc -l; ls -la --time-style=+%H:%M:%S . 2>/dev/null || ls -laT .; date -u +%H:%M:%S
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+   18200
+total 10272
+drwxr-xr-x@ 6 david  staff      192 Oct 12 22:53:17 2026 .
+drwxr-xr-x@ 3 david  staff       96 Oct 12 22:50:39 2026 ..
+-rw-r--r--@ 1 david  staff   158871 Oct 12 22:50:46 2026 2022-02.jsonl
+-rw-r--r--@ 1 david  staff  1921721 Oct 12 22:52:18 2026 2022-03.jsonl
+-rw-r--r--@ 1 david  staff  1374158 Oct 12 22:53:17 2026 2022-04.jsonl
+-rw-r--r--@ 1 david  staff   805716 Oct 12 22:53:55 2026 2022-05.jsonl
+19:53:56
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Survey 2025-2026 message templates from the web samples
+
+```
+cat /tmp/aaf_peek/survey/etryvoga_0906.jsonl /tmp/aaf_peek/survey/etryvoga_1010.jsonl /tmp/aaf_peek/survey/etryvoga_sample.jsonl | python3 -I -c "
+import sys, json, re, collections
+c=collections.Counter(); ex={}
+for l in sys.stdin:
+    m=json.loads(l)
+    if m['date']<'2025-07': continue
+    t=' | '.join(x.strip() for x in m['text'].split('\n') if x.strip())
+    t=re.sub(r\"[А-ЯІЇЄҐ][\w'’ʼ.\- ]*? район \([^)]*?обл\.\)\", '<RAION>', t)
+    t=re.sub(r\"[А-ЯІЇЄҐ][\w'’ʼ.\-, ]*?\([^)]*?обл\.\)\", '<CITY>', t)
+    t=re.sub(r\"[А-ЯІЇЄҐ][\w'’ʼ\-]+ обл\.\", '<OBLAST>', t)
+    t=re.sub(r'(\| • <RAION>)+', '| • <RAION>…', t); t=re.sub(r'(\| • <CITY>)+', '| • <CITY>…', t)
+    t=re.sub(r'\d+', 'N', t)
+    c[t[:110]]+=1
+for t,n in c.most_common(30): print(f'{n:5d}  {t}')
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+  530  🛸 <CITY> | Загроза застосування БПЛА. Перейдіть в укриття!
+  300  🚨 <RAION> | Повітряна тривога. Прямуйте в укриття!
+  273  🟢 <RAION> | Відбій тривоги. Будьте обережні!
+   99  🟡 <RAION> | Жовтий рівень тривоги. Прямуйте в укриття!
+   46  💣 <CITY> | Загроза застосування КАБів. Негайно прямуйте в укриття!
+   33  🚀 <CITY> | Загроза застосування високошвидкісних цілей. Негайно прямуйте в укриття!
+   31  🔴 <RAION> | Червоний рівень тривоги. Прямуйте в укриття!
+   29  🟢 <CITY> | Відбій тривоги. Будьте обережні!
+   27  💥 <CITY> | Загроза обстрілу! Перейдіть в укриття!
+   24  ⚠️ <CITY> | ЗМІ повідомляють про вибухи. Будьте обережні!
+   20  🟢 Відбій тривоги | • <RAION>… | • <RAION>…
+   19  💣 <RAION> | Загроза застосування КАБів. Негайно прямуйте в укриття!
+   19  🟡 Жовтий рівень тривоги | • <RAION>… | • <RAION>…
+   15  🚨 <CITY> | Повітряна тривога. Прямуйте в укриття!
+   13  🟢 Відбій тривоги | <RAION> | <RAION>
+   12  🔴 <CITY> | Червоний рівень тривоги. Прямуйте в укриття!
+   12  🟢 <OBLAST> | Відбій тривоги. Будьте обережні!
+   11  🟡 Жовтий рівень тривоги | <RAION> | <RAION>
+    9  🟢 Відбій тривоги | <RAION> | <RAION> | <RAION>
+    9  🚨 <OBLAST> | Повітряна тривога. Прямуйте в укриття!
+    8  🟢 Відбій тривоги | • <RAION>… | • <RAION>… | • <RAION>…
+    7  👁️ <CITY> | Активність розвідувальних БПЛА. Можлива робота ППО.
+    6  🚨 Повітряна тривога | <RAION> | <RAION>
+    5  🟢 Відбій тривоги | <RAION> | <RAION> | <RAION> | <RAION>
+    5  Мапа тривог станом на N:N – N жовтня: | 🔴 Червона тривога у N районах | 🟡 Жовта тривога у N районах | мапа три
+    5  🟡 Жовтий рівень тривоги | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>… | • <RAI
+    5  🟢 Відбій тривоги | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>…
+    5  🟢 Відбій тривоги | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>… | • <RAION>… | 
+    4  🟡 Жовтий рівень тривоги | <RAION> | <RAION> | <RAION>
+    4  🔴 Червоний рівень тривоги | <RAION> | <RAION>
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/alarm_signal.py`
+
+```
+"""Read `@UkraineAlarmSignal` (eTryvoga) messages: the alert label source from 2023 (ADR-0006).
+
+Messages are classified by their wording, not their emoji (ADR-0005 rules). Two shapes exist:
+
+    🚨 Шепетівський район (Хмельницька обл.)          one location on the first line,
+    Повітряна тривога. Прямуйте в укриття!            the phrase on the second
+
+    🟡 Жовтий рівень тривоги                          the phrase first,
+    • Вараський район (Рівненська обл.)               then one location per line
+    • Сарненський район (Рівненська обл.)
+
+Only air raid alert starts, all-clears and their continuations/retractions become alert events.
+The channel's own city warnings (🛸 drones, 💣 guided bombs, 💥 shelling, ⚠️ media reports…) are
+typed as other threats and never open an alert.
+"""
+
+import re
+from dataclasses import dataclass
+
+START, END, CONTINUE, RETRACT, OTHER, UNKNOWN = "start", "end", "continue", "retract", "other", "unknown"
+
+
+@dataclass(frozen=True)
+class Location:
+    level: str  # "oblast", "raion" or "city"
+    name: str  # as written, e.g. "Шепетівський район", "Харківська обл.", "Київ"
+    oblast: str | None  # e.g. "Хмельницька обл."; None when the message does not say
+
+
+@dataclass(frozen=True)
+class Message:
+    kind: str
+    color: str | None  # "yellow" or "red" for level messages, otherwise None
+    threat: str | None  # for OTHER messages: what the warning is about
+    locations: tuple[Location, ...]
+
+
+# (pattern on the phrase, kind, colour). The first match wins, so more specific phrases come first.
+_PHRASES = [
+    (r"^просимо вибачення.*(відсутн|помилк)", RETRACT, None),
+    (r"^відбій тривоги", END, None),
+    (r"тривог\w* (в місті |в області )?триває", CONTINUE, None),
+    (r"^жовтий рівень тривоги", START, "yellow"),
+    (r"^червоний рівень тривоги", START, "red"),
+    (r"^повітряна тривога", START, None),
+    (r"^тривога\b", START, None),
+]
+_THREATS = [
+    (r"бпла|шахед|дрон", "drones"),
+    (r"каб", "guided_bombs"),
+    (r"високошвидкісних цілей|ракет|балістик", "missiles"),
+    (r"артилерійськ|артобстріл|обстріл", "shelling"),
+    (r"вибух", "explosions_reported"),
+    (r"вуличн", "urban_fights"),
+]
+
+_RAION = re.compile(r"(?P<name>[^()•|]+? район) \((?P<oblast>[^()]+? обл\.)\)")
+_CITY = re.compile(r"(?P<name>[^()•|]+?) \((?:[^()]*?, )?(?P<oblast>[^(),]+? обл\.)\)")
+_OBLAST = re.compile(r"^(?P<name>[^()•|,]+? обл\.)$")
+
+
+def _clean(line: str) -> str:
+    """Drop leading emoji, bullets and punctuation; normalise apostrophes and spaces."""
+    line = re.sub(r"^[^\wА-Яа-яІіЇїЄєҐґ]+", "", line.strip())
+    return " ".join(line.replace("’", "'").replace("ʼ", "'").split())
+
+
+def parse_location(line: str) -> Location | None:
+    text = _clean(line)
+    if m := _RAION.fullmatch(text):
+        return Location("raion", m["name"].strip(), m["oblast"].strip())
+    if m := _CITY.fullmatch(text):
+        return Location("city", m["name"].strip(), m["oblast"].strip())
+    if m := _OBLAST.match(text):
+        return Location("oblast", m["name"].strip(), m["name"].strip())
+    if text == "Київ":
+        return Location("city", "Київ", None)
+    return None
+
+
+def _phrase_kind(phrase: str) -> tuple[str, str | None]:
+    lowered = _clean(phrase).lower()
+    for pattern, kind, color in _PHRASES:
+        if re.search(pattern, lowered):
+            return kind, color
+    return UNKNOWN, None
+
+
+def classify(text: str | None) -> Message:
+    lines = [line for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return Message(UNKNOWN, None, None, ())
+
+    first = parse_location(lines[0])
+    if first and len(lines) >= 2:  # one location, then the phrase
+        locations, phrase = (first,), lines[1]
+    else:  # the phrase, then one location per line
+        locations = tuple(loc for loc in map(parse_location, lines[1:]) if loc)
+        phrase = lines[0]
+
+    kind, color = _phrase_kind(phrase)
+    if kind == UNKNOWN and locations:
+        lowered = phrase.lower()
+        threat = next((name for pattern, name in _THREATS if re.search(pattern, lowered)), None)
+        if threat:
+            return Message(OTHER, None, threat, locations)
+    if kind in (START, END, CONTINUE, RETRACT) and not locations:
+        return Message(UNKNOWN, color, None, ())  # an alert phrase with no recognisable place
+    return Message(kind, color, None, locations)
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_alarm_signal.py`
+
+```
+from airalert.alarm_signal import (CONTINUE, END, OTHER, RETRACT, START, UNKNOWN, Location, classify,
+                                   parse_location)
+
+RAION = Location("raion", "Шепетівський район", "Хмельницька обл.")
+
+
+def test_raion_start_one_location():
+    m = classify("🚨 Шепетівський район (Хмельницька обл.)\nПовітряна тривога. Прямуйте в укриття!")
+    assert (m.kind, m.color, m.locations) == (START, None, (RAION,))
+
+
+def test_oblast_start_2023_wording():
+    m = classify("🚨 Харківська обл.\nТривога - Усі в укриття")
+    assert m.kind == START
+    assert m.locations == (Location("oblast", "Харківська обл.", "Харківська обл."),)
+
+
+def test_all_clear_both_wordings():
+    assert classify("🟢 Київ\nВідбій тривоги - будьте обережні").kind == END
+    assert classify("🟢 Куп'янський район (Харківська обл.)\nВідбій тривоги. Будьте обережні!").kind == END
+    assert classify("🟢 Сумська обл.\nВідбій тривоги та загрози обстрілу - будьте обережні!").kind == END
+
+
+def test_level_messages_with_several_raions():
+    m = classify("🟡 Жовтий рівень тривоги\n• Вараський район (Рівненська обл.)\n• Сарненський район (Рівненська обл.)")
+    assert (m.kind, m.color) == (START, "yellow")
+    assert [loc.name for loc in m.locations] == ["Вараський район", "Сарненський район"]
+    assert classify("🔴 Синельниківський район (Дніпропетровська обл.)\nЧервоний рівень тривоги. Прямуйте в укриття!").color == "red"
+
+
+def test_multi_location_all_clear_without_bullets():
+    m = classify("🟢 Відбій тривоги\nБаштанський район (Миколаївська обл.)\nВознесенський район (Миколаївська обл.)")
+    assert m.kind == END and len(m.locations) == 2
+
+
+def test_city_zone_and_apostrophes():
+    m = classify("🚨 Запоріжжя (Запорізька обл.)\nПовітряна тривога. Прямуйте в укриття!")
+    assert m.locations == (Location("city", "Запоріжжя", "Запорізька обл."),)
+    assert parse_location("🟢 Кам’янський район (Дніпропетровська обл.)").name == "Кам'янський район"
+
+
+def test_channel_warnings_are_never_alerts():
+    for text, threat in [
+        ("🛸 Шепетівка (Хмельницька обл.)\nЗагроза застосування БПЛА. Перейдіть в укриття!", "drones"),
+        ("💣 Суми (Сумська обл.)\nЗагроза застосування КАБів. Негайно прямуйте в укриття!", "guided_bombs"),
+        ("🚀 Харків (Харківська обл.)\nЗагроза застосування високошвидкісних цілей. Негайно прямуйте в укриття!", "missiles"),
+        ("💥 Херсон (Херсонська обл.)\nЗагроза обстрілу! Перейдіть в укриття!", "shelling"),
+        ("⚠️ Слов'янськ (Донецька обл.)\nЗМІ повідомляють про вибухи. Будьте обережні!", "explosions_reported"),
+        ("🟢 Нікополь (Дніпропетровська обл.)\nВідбій загрози обстрілу. Будьте обережні!", "shelling"),
+    ]:
+        m = classify(text)
+        assert (m.kind, m.threat) == (OTHER, threat), text
+
+
+def test_continuation_and_retraction():
+    assert classify("📢 Київ\nТривога в місті триває! Будьте обережні!").kind == CONTINUE
+    m = classify("🟢 Сумська обл.\nПросимо вибачення, сталась технічна помилка. Тривога в області відсутня.")
+    assert m.kind == RETRACT
+
+
+def test_announcements_and_summaries_are_unknown():
+    assert classify("Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги 🚨\n\nДеталі").kind == UNKNOWN
+    assert classify("Мапа тривог станом на 21:00 – 12 жовтня:\n\n🔴 Червона тривога у 22 районах").kind == UNKNOWN
+    assert classify(None).kind == UNKNOWN
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/alarm_signal.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_alarm_signal.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Run the classifier tests
+
+```
+cd /Users/david/proj/air-alert-forecast && uv run pytest -q 2>&1 | tail -25
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.............                                                            [100%]
+13 passed in 0.12s
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Classify every exported message and list unrecognised ones
+
+```
+cat > /tmp/aaf_scripts/classify_export.py <<'EOF'
+import collections, glob, html, re, sys
+from airalert.alarm_signal import classify
+files = glob.glob(sys.argv[1] + "/messages*.html")
+kinds = collections.defaultdict(collections.Counter); unknown = collections.Counter(); unknown_alertish = collections.Counter()
+for f in files:
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        dt = re.search(r'title="\d+ \w+ (\d{4}), ', block); tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if not (dt and tx): continue
+        year = dt.group(1)
+        text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", tx.group(1)))).strip()
+        m = classify(text); kinds[year][m.kind] += 1
+        if m.kind == "unknown" and year >= "2023":
+            first = " / ".join(l.strip() for l in text.splitlines() if l.strip())[:100]
+            unknown[first[:60]] += 1
+            if re.search(r"тривог|відбій", text.lower()): unknown_alertish[first] += 1
+for y in sorted(kinds):
+    tot = sum(kinds[y].values()); print(y, tot, {k: f"{v/tot:.1%}" for k, v in kinds[y].most_common()})
+print("\nunknown (2023+), alert-like wording:", sum(unknown_alertish.values()))
+for t, n in unknown_alertish.most_common(25): print(f"{n:5d}  {t}")
+print("\nunknown (2023+), most common overall:")
+for t, n in unknown.most_common(12): print(f"{n:5d}  {t}")
+EOF
+cd /Users/david/proj/air-alert-forecast && uv run python /tmp/aaf_scripts/classify_export.py data/raw/telegram_desktop_export/UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2022 46078 {'unknown': '33.0%', 'start': '30.6%', 'end': '30.2%', 'other': '6.1%', 'continue': '0.0%', 'retract': '0.0%'}
+2023 60340 {'other': '40.5%', 'start': '29.3%', 'end': '28.2%', 'unknown': '1.8%', 'retract': '0.1%', 'continue': '0.1%'}
+2024 100168 {'other': '52.0%', 'start': '23.6%', 'end': '22.9%', 'unknown': '1.2%', 'continue': '0.3%', 'retract': '0.1%'}
+2025 65864 {'other': '64.4%', 'start': '17.2%', 'end': '17.0%', 'unknown': '1.0%', 'continue': '0.3%', 'retract': '0.1%'}
+
+unknown (2023+), alert-like wording: 735
+   72  🚨 єТривога шукає відповідальних волонтерів! / Ми 24/7 інформуємо людей про небезпеку — і нам потрібн
+   55  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на ранкові (06:00-08:00)
+   44  єТривога шукає лицарів світла🚨! / Вже більше двох років єТривога – наш щит та меч у боротьбі з триво
+   38  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні (03:00-06:00) з
+   37  Привіт! Ми шукаємо відповідальних волонтерів на зміни (03:00-06:00, 06:00-08:00, 12:00-14:00) у кома
+   31  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на ранкові та денні змін
+   27  Привіт! Ми шукаємо відповідальних волонтерів на нічні та ранкові зміни (00:00-03:00, 03:00-06:00, 06
+   27  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні  та ранкові змі
+   22  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (12:00-14:00) з
+   16  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні зміни (14:00-16
+   13  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на ранкові зміни (06:00-
+   12  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (10:00-12:00) т
+   11  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (10:00-12:00) з
+   11  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні (03:00-06:00) т
+   10  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні  (10:00-12:00, 
+    9  Привіт! Ми шукаємо відповідальних волонтерів на нічні та ранкові зміни (03:00-06:00, 06:00-08:00) у 
+    9  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на нічні зміни (00:00-03
+    9  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги 🚨 / Наш проєкт вже більш
+    8  Привіт! Ми шукаємо відповідальних волонтерів на зміни (10:00-12:00, 12:00-14:00, 22:00-00:00) у кома
+    8  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на вечірні  (22:00-00:00
+    8  Привіт! Ми шукаємо відповідальних волонтерів на денні зміни (12:00-14:00) у команду моніторингу єТри
+    7  Привіт! Ми шукаємо відповідальних волонтерів на денну зміну (12:00–14:00) у команду моніторингу єТри
+    6  Привіт! Ми шукаємо відповідальних волонтерів на зміни (00:00-03:00, 03:00-06:00, 06:00-08:00, 10:00-
+    6  Привіт! Ми шукаємо відповідальних волонтерів у команду моніторингу єТривоги на денні (12:00-14:00) т
+    6  Шукаємо Back-end розробника на Part Time у команду єТривоги! / Ми розробляємо не просто додаток, а ц
+
+unknown (2023+), most common overall:
+  373  Привіт! Ми шукаємо відповідальних волонтерів у команду моніт
+  185  📢 Куп'янський район (Харківська обл.) / Просимо терміново ев
+  100  ⚡️ Долучайтеся до збору на турнікети “Січ”, перевʼязочні мат
+   82  ⚠️ Севастополь (Крим) / ЗМІ повідомляють про вибухи. Будьте 
+   75  Маємо надзвичайно терміновий збір — одна із бригад Гвардії Н
+   72  🚨 єТривога шукає відповідальних волонтерів! / Ми 24/7 інформ
+   69  🛸 Південне (Южне) (Одеська обл.) / Загроза застосування БПЛА
+   68  ⚠️ Крим / ЗМІ повідомляють про вибухи. Будьте обережні!
+   60  Долучайтеся до збору на екскаватор! / Ми відкрили свою міні-
+   49  Привіт! Ми шукаємо відповідальних волонтерів на зміни (03:00
+   44  єТривога шукає лицарів світла🚨! / Вже більше двох років єТри
+   41  Долучайтеся до збору для бригади Гвардії Наступу на закупівл
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Find alert messages whose place could not be parsed
+
+```
+cat > /tmp/aaf_scripts/unparsed_places.py <<'EOF'
+import collections, glob, html, re, sys
+from airalert.alarm_signal import classify, _phrase_kind, START, END
+files = glob.glob(sys.argv[1] + "/messages*.html")
+lost = collections.Counter(); total = 0
+for f in files:
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        dt = re.search(r'title="\d+ \w+ (\d{4}), ', block); tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if not (dt and tx) or dt.group(1) < "2023": continue
+        text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", tx.group(1)))).strip()
+        lines = [l for l in text.splitlines() if l.strip()]
+        m = classify(text)
+        alertish = any(_phrase_kind(l)[0] in (START, END) for l in lines[:2])
+        if alertish: total += 1
+        if alertish and m.kind == "unknown": lost[" / ".join(lines[:2])[:90]] += 1
+print("alert-phrase messages 2023+:", total, "| with no readable place:", sum(lost.values()))
+for t, n in lost.most_common(20): print(f"{n:5d}  {t}")
+EOF
+cd /Users/david/proj/air-alert-forecast && uv run python /tmp/aaf_scripts/unparsed_places.py data/raw/telegram_desktop_export/UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+alert-phrase messages 2023+: 103759 | with no readable place: 0
+```
+
+</details>
+
+### Assistant (2026-10-12 19:55:24 UTC)
+
+Zero lost: all 103,759 alert messages from 2023 to July 2025 have a readable place. Next I'm listing which places alerts are declared for in each year. That feeds the unit registry and Q16.
+
+<details><summary>Tool call: Bash</summary>
+
+Count alert starts by place level and list city zones
+
+```
+cat > /tmp/aaf_scripts/alert_places.py <<'EOF'
+import collections, glob, html, re, sys
+from airalert.alarm_signal import classify, START
+files = glob.glob(sys.argv[1] + "/messages*.html")
+by = collections.defaultdict(collections.Counter); cities = collections.Counter(); raions = set()
+for f in files:
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        dt = re.search(r'title="\d+ \w+ (\d{4}), ', block); tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if not (dt and tx) or dt.group(1) < "2023": continue
+        m = classify(html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", tx.group(1)))))
+        if m.kind != START: continue
+        for loc in m.locations:
+            by[dt.group(1)][loc.level] += 1
+            if loc.level == "city": cities[(loc.name, loc.oblast)] += 1
+            if loc.level == "raion": raions.add((loc.name, loc.oblast))
+print({y: dict(c) for y, c in sorted(by.items())})
+print("distinct raions:", len(raions))
+print("city alert starts:", cities.most_common(15))
+EOF
+cd /Users/david/proj/air-alert-forecast && uv run python /tmp/aaf_scripts/alert_places.py data/raw/telegram_desktop_export/UkraineAlarmSignal; tail -2 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+{'2023': {'oblast': 15952, 'city': 1747}, '2024': {'oblast': 21152, 'city': 2469, 'raion': 4}, '2025': {'oblast': 8794, 'city': 1430, 'raion': 1121}}
+distinct raions: 18
+city alert starts: [(('Світловодськ', 'Кіровоградська обл.'), 2110), (('Київ', None), 1073), (('Славутич', 'Київська обл.'), 869), (('Очаків', 'Миколаївська обл.'), 622), (('Харків', 'Харківська обл.'), 393), (('Добропілля', 'Донецька обл.'), 226), (('Запоріжжя', 'Запорізька обл.'), 181), (('Кривий Ріг', 'Дніпропетровська обл.'), 67), (("Слов'янськ", 'Донецька обл.'), 14), (('Краматорськ', 'Донецька обл.'), 13), (('Миронівка', 'Київська обл.'), 9), (('Вознесенськ', 'Миколаївська обл.'), 8), (('Херсон', 'Херсонська обл.'), 4), (('Марганець', 'Дніпропетровська обл.'), 4), (('Нікополь', 'Дніпропетровська обл.'), 4)]
+  10,000 saved (up to 2022-04-05), 94 msg/s, about 114 min left
+  20,000 saved (up to 2022-06-05), 94 msg/s, about 113 min left
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check download speed and that it is still running
+
+```
+cd /Users/david/proj/air-alert-forecast/data/raw/telegram/UkraineAlarmSignal && cat *.jsonl | wc -l; ls | tail -1; date +%H:%M:%S; ps -eo pid,etime,command | grep "[d]ownload-telegram" | cut -c1-80
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+   27778
+2022-08.jsonl
+22:55:39
+44223    05:00 /bin/zsh -c source /Users/david/.claude/shell-snapshots/snapshot-
+44224    05:00 uv run python -m airalert download-telegram
+44230    05:00 /Users/david/proj/air-alert-forecast/.venv/bin/python -m airalert
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/alerts.py`
+
+```
+"""Turn classified alert messages into alert periods, following the Q17 rules in docs/DESIGN.md.
+
+Each location is tracked on its own; mapping oblast-wide alerts onto raions happens later, when units are built.
+
+- A start opens an alert. A repeated start for a location already on alert keeps the original start
+  time (a yellow↔red change continues the same alert, Q18) and is counted as a restart.
+- An all-clear closes the open alert. An all-clear with nothing open is counted and ignored.
+- A retraction ("Просимо вибачення, сталась технічна помилка…") removes the open alert: it was posted by mistake.
+- A continuation ("тривога триває") changes nothing.
+- Alerts still open when the data ends keep `finished_at = None`.
+"""
+
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from airalert.alarm_signal import CONTINUE, END, RETRACT, START, Location, Message
+
+
+@dataclass
+class Alert:
+    location: Location
+    started_at: datetime
+    start_message_id: int
+    finished_at: datetime | None = None
+    end_message_id: int | None = None
+    max_color: str | None = None  # "red" if the alert was ever red, else "yellow" if ever yellow
+    restarts: int = 0
+
+
+@dataclass
+class AlertHistory:
+    alerts: list[Alert] = field(default_factory=list)
+    stats: Counter = field(default_factory=Counter)
+
+
+def _raise_color(current: str | None, new: str | None) -> str | None:
+    return "red" if "red" in (current, new) else new or current
+
+
+def build_alerts(messages: list[tuple[int, datetime, Message]]) -> AlertHistory:
+    """`messages` are (message_id, time, classified message) in channel order."""
+    history, open_alerts = AlertHistory(), {}
+    for message_id, time, message in messages:
+        for location in message.locations:
+            current = open_alerts.get(location)
+            if message.kind == START:
+                if current:
+                    current.restarts += 1
+                    current.max_color = _raise_color(current.max_color, message.color)
+                    history.stats["restart while on alert"] += 1
+                else:
+                    open_alerts[location] = Alert(location, time, message_id, max_color=message.color)
+            elif message.kind == END:
+                if current:
+                    current.finished_at, current.end_message_id = time, message_id
+                    history.alerts.append(open_alerts.pop(location))
+                else:
+                    history.stats["all-clear with no open alert"] += 1
+            elif message.kind == RETRACT:
+                history.stats["retracted" if open_alerts.pop(location, None) else "retraction with no open alert"] += 1
+            elif message.kind == CONTINUE and not current:
+                history.stats["continuation with no open alert"] += 1
+    history.alerts.extend(open_alerts.values())  # still on alert when the data ends
+    history.alerts.sort(key=lambda a: (a.started_at, a.start_message_id))
+    return history
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_alerts.py`
+
+```
+from datetime import datetime, timedelta
+
+from airalert.alarm_signal import classify
+from airalert.alerts import build_alerts
+
+T0 = datetime(2026, 9, 6, 13, 0)
+START = "🚨 Синельниківський район (Дніпропетровська обл.)\nПовітряна тривога. Прямуйте в укриття!"
+RED = "🔴 Синельниківський район (Дніпропетровська обл.)\nЧервоний рівень тривоги. Прямуйте в укриття!"
+YELLOW = "🟡 Жовтий рівень тривоги\n• Синельниківський район (Дніпропетровська обл.)\n• Павлоградський район (Дніпропетровська обл.)"
+END = "🟢 Синельниківський район (Дніпропетровська обл.)\nВідбій тривоги. Будьте обережні!"
+
+
+def run(*texts_and_minutes):
+    return build_alerts([(i, T0 + timedelta(minutes=m), classify(t)) for i, (t, m) in enumerate(texts_and_minutes)])
+
+
+def test_start_and_end_make_one_alert():
+    h = run((START, 0), (END, 40))
+    [a] = h.alerts
+    assert (a.started_at, a.finished_at) == (T0, T0 + timedelta(minutes=40))
+
+
+def test_repeated_start_keeps_original_start_and_level_rises_to_red():
+    h = run((YELLOW, 0), (RED, 10), (END, 30))
+    sinelnykove = [a for a in h.alerts if a.location.name == "Синельниківський район"]
+    assert len(sinelnykove) == 1
+    assert sinelnykove[0].started_at == T0 and sinelnykove[0].max_color == "red" and sinelnykove[0].restarts == 1
+
+
+def test_locations_are_tracked_separately():
+    h = run((YELLOW, 0), (END, 30))
+    pavlohrad = [a for a in h.alerts if a.location.name == "Павлоградський район"]
+    assert len(pavlohrad) == 1 and pavlohrad[0].finished_at is None  # still open: only Synelnykove got an all-clear
+
+
+def test_alert_restarting_after_all_clear_is_a_new_alert():
+    h = run((START, 0), (END, 18), (RED, 19))
+    assert len(h.alerts) == 2  # alerts are kept exactly as published (Q7)
+
+
+def test_retraction_removes_the_mistaken_alert():
+    retract = "🟢 Синельниківський район (Дніпропетровська обл.)\nПросимо вибачення, сталась технічна помилка. Тривога в області відсутня."
+    h = run((START, 0), (retract, 2))
+    assert h.alerts == [] and h.stats["retracted"] == 1
+
+
+def test_all_clear_without_alert_is_counted_not_invented():
+    h = run((END, 0))
+    assert h.alerts == [] and h.stats["all-clear with no open alert"] == 1
+
+
+def test_channel_warnings_do_not_open_alerts():
+    drones = "🛸 Синельникове (Дніпропетровська обл.)\nЗагроза застосування БПЛА. Перейдіть в укриття!"
+    assert run((drones, 0)).alerts == []
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/alerts.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_alerts.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Run all tests
+
+```
+cd /Users/david/proj/air-alert-forecast && uv run pytest -q 2>&1 | tail -15
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+....................                                                     [100%]
+20 passed in 0.10s
+```
+
+</details>
+
+### Assistant (2026-10-12 19:56:12 UTC)
+
+All 20 tests pass. Next I'm running the alert tracker on the 2023 – July 2025 export, to see how often the edge cases actually occur.
+
+<details><summary>Tool call: Bash</summary>
+
+Build alerts from the 2023-2025 export and summarise edge cases
+
+```
+cat > /tmp/aaf_scripts/alerts_from_export.py <<'EOF'
+import glob, html, re, sys, statistics
+from datetime import datetime, timedelta
+from airalert.alarm_signal import classify
+from airalert.alerts import build_alerts
+MONTHS = {m: i for i, m in enumerate("January February March April May June July August September October November December".split(), 1)}
+msgs = []
+for f in glob.glob(sys.argv[1] + "/messages*.html"):
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        mid = re.search(r'id="message(\d+)"', block); dt = re.search(r'title="(\d+) (\w+) (\d{4}), (\d+):(\d+):(\d+)', block)
+        tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if not (mid and dt and tx) or dt.group(3) < "2023": continue
+        d, mon, y, H, M, S = dt.groups()
+        t = datetime(int(y), MONTHS[mon], int(d), int(H), int(M), int(S))  # local Kyiv time; fine for durations here
+        msgs.append((int(mid.group(1)), t, classify(html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", tx.group(1)))))))
+msgs.sort(key=lambda x: x[0])
+h = build_alerts(msgs)
+closed = [a for a in h.alerts if a.finished_at]
+mins = sorted((a.finished_at - a.started_at).total_seconds() / 60 for a in closed)
+q = lambda p: mins[int(p * (len(mins) - 1))]
+print("alerts:", len(h.alerts), "| still open at end:", len(h.alerts) - len(closed))
+print("stats:", dict(h.stats))
+print(f"duration min: median {q(.5):.0f}, p90 {q(.9):.0f}, p99 {q(.99):.0f}, max {mins[-1]:.0f}; under 1 min {sum(m < 1 for m in mins)/len(mins):.2%}; over 12 h {sum(m > 720 for m in mins)}")
+with_restart = [a for a in closed if a.restarts]
+print("alerts with restarts:", len(with_restart), f"({len(with_restart)/len(closed):.1%})")
+for a in sorted(closed, key=lambda a: a.started_at - a.finished_at)[:6]:
+    print("  longest:", a.location.name, a.started_at, "→", a.finished_at, "restarts", a.restarts)
+EOF
+cd /Users/david/proj/air-alert-forecast && uv run python /tmp/aaf_scripts/alerts_from_export.py data/raw/telegram_desktop_export/UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+alerts: 50727 | still open at end: 38
+stats: {'all-clear with no open alert': 401, 'restart while on alert': 1888, 'retraction with no open alert': 93, 'retracted': 54, 'continuation with no open alert': 99}
+duration min: median 43, p90 224, p99 963, max 1080914; under 1 min 0.11%; over 12 h 732
+alerts with restarts: 961 (1.9%)
+  longest: Запоріжжя 2023-03-18 03:15:49 → 2025-04-06 18:29:46 restarts 1
+  longest: Первомайськ 2023-01-06 09:16:19 → 2023-11-07 12:15:03 restarts 1
+  longest: Харків 2023-05-08 22:00:53 → 2024-02-10 06:44:52 restarts 0
+  longest: Добропілля 2023-12-30 22:54:22 → 2024-06-23 08:33:44 restarts 4
+  longest: Кривий Ріг 2024-08-28 23:25:00 → 2025-02-03 10:45:38 restarts 3
+  longest: Дніпро 2023-06-29 13:14:15 → 2023-10-03 14:14:59 restarts 1
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Break long alerts down by level and compare with official durations
+
+```
+sed -i '' 's/^for a in sorted(closed/import collections\nprint("over 12 h by level:", collections.Counter(a.location.level for a in closed if (a.finished_at-a.started_at).total_seconds() > 43200))\nprint("over 24 h by level:", collections.Counter(a.location.level for a in closed if (a.finished_at-a.started_at).total_seconds() > 86400))\nlong_obl = collections.Counter(a.location.name for a in closed if a.location.level == "oblast" and (a.finished_at-a.started_at).total_seconds() > 43200); print("oblasts with >12 h alerts:", long_obl.most_common(8))\nfor a in sorted(closed/' /tmp/aaf_scripts/alerts_from_export.py && uv run python /tmp/aaf_scripts/alerts_from_export.py data/raw/telegram_desktop_export/UkraineAlarmSignal 2>&1 | sed -n '5,8p'; uv run --with pandas python -I - <<'EOF'
+import pandas as pd
+off = pd.read_csv("/tmp/aaf_peek/official_data_en.csv", parse_dates=["started_at", "finished_at"]).drop_duplicates()
+o = off[(off.level == "oblast") & (off.started_at >= "2023-01-01") & (off.started_at < "2025-07-01")]
+d = (o.finished_at - o.started_at).dt.total_seconds() / 3600
+print(f"official oblast-level alerts 2023..2025-06: {len(o)}, over 12 h: {(d > 12).sum()}, over 24 h: {(d > 24).sum()}, max {d.max():.0f} h")
+print(o[d > 12].oblast.value_counts().head(5).to_dict())
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+over 12 h by level: Counter({'city': 529, 'oblast': 159, 'raion': 44})
+over 24 h by level: Counter({'city': 276, 'raion': 26, 'oblast': 12})
+oblasts with >12 h alerts: [('Сумська обл.', 45), ('Харківська обл.', 39), ('Полтавська обл.', 25), ('Чернігівська обл.', 13), ('Київська обл.', 9), ('Черкаська обл.', 7), ('Донецька обл.', 7), ('Кіровоградська обл.', 3)]
+  longest: Запоріжжя 2023-03-18 03:15:49 → 2025-04-06 18:29:46 restarts 1
+official oblast-level alerts 2023..2025-06: 46742, over 12 h: 142, over 24 h: 7, max 51 h
+{'Sumska oblast': 45, 'Kharkivska oblast': 36, 'Poltavska oblast': 21, 'Chernihivska oblast': 12, 'Kyivska oblast': 8}
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Record parse findings and commit parser code
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("docs/DESIGN.md"); s = p.read_text()
+anchor = "### Message types in `@air_alert_ua`"
+add = """### First parse of `@UkraineAlarmSignal` (Desktop export, 2023-01 → 2025-07-04)
+
+- **The channel is run by hand.** Volunteers post every alert manually ("вручну відправляючи кожне сповіщення"). The channel also posts apologies for mistakes ("Просимо вибачення, сталась технічна помилка… Тривога в області відсутня").
+- **Every alert message has a readable place.** 103,759 alert start/all-clear messages; for all of them the place could be read.
+- **What else gets classified as unknown:** 1–1.8% of messages per year, mostly volunteer recruitment, fundraising and evacuation calls.
+- **Edge cases, out of 50,727 alerts (median 43 min):**
+  - 1,888 repeated starts while already on alert (1.9% of alerts);
+  - 401 all-clears with no open alert;
+  - 54 retracted alerts;
+  - 99 "тривога триває" messages with no open alert.
+- **Long alerts.**
+  - Oblast-level alerts over 12 h match the official record closely: Sumy 45 vs 45, Kharkiv 39 vs 36, Poltava 25 vs 21, Chernihiv 13 vs 12.
+  - City zones are different: 529 city alerts last over 12 h, some for months (Zaporizhzhia from 2023-03 to 2025-04). These are missing all-clears, not real alerts.
+- **City alert zones in the channel, 2023 → 2025-07:** Svitlovodsk 2,110 starts, Kyiv 1,073, Slavutych 869, Ochakiv 622, Kharkiv 393, Dobropillia 226, Zaporizhzhia 181, Kryvyi Rih 67, then a few more.
+
+"""
+assert anchor in s; s = s.replace(anchor, add + anchor, 1)
+old = "  - **Rule, set before measuring:**"
+assert old in s
+s = s.replace(old, "  - **\"Folded into its raion\" means** the city's own alerts are ignored, and the raion's alerts stand for it. That way broken city records (missing all-clears) can't leak into raion labels.\n" + old, 1)
+old2 = "- **Q20. Pass mark for the label check, set before looking at the results.** *Decided 2026-10-12.*"
+assert old2 in s
+s = s.replace(old2, old2 + "\n  - **Also calibrated here: detecting a missing all-clear** (Q17). For each level, compare long channel alerts with the official alert for the same place, then choose the rule. City zones are the main case.", 1)
+p.write_text(s)
+EOF
+git add -A src tests docs && git status --short && git commit -q -F - <<'EOF'
+Add @UkraineAlarmSignal message classifier and alert tracker
+
+- alarm_signal.py: classifies messages by wording into alert start,
+  all-clear, continuation, retraction, the channel's own warnings, or
+  unknown, and reads the places (oblast, raion, city zone)
+- alerts.py: builds alert periods per place with the Q17 rules
+  (repeated start keeps the original start, retractions remove the
+  alert, nothing is invented for orphan all-clears)
+- Tests for both
+- DESIGN.md: results of the first parse of the 2023-2025 export, and
+  what folding a city into its raion means
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+M  docs/DESIGN.md
+A  src/airalert/alarm_signal.py
+A  src/airalert/alerts.py
+A  tests/test_alarm_signal.py
+A  tests/test_alerts.py
+34003da Add @UkraineAlarmSignal message classifier and alert tracker
+  30,000 saved (up to 2022-08-29), 93 msg/s, about 112 min left
+```
+
+</details>
+
+### Assistant (2026-10-12 19:57:28 UTC)
+
+## Implementation plan
+
+It's now section 7 of `docs/DESIGN.md`. **Blocked** means the step waits for the Telegram download. **Develop now, run later** means the code can be written and tested against samples or synthetic data now, but its real run needs the downloaded data.
+
+| # | Step | Status |
+|---|---|---|
+| 1 | alerts.in.ua download | ✅ done |
+| 2 | Telegram downloads | ⏳ running: about 30k of 654k messages in the first channel; about 2 h for that channel, about 4 h for all four |
+| 3 | Unit registry (raions, their oblasts, name variants) | open, not blocked |
+| 4 | **`@UkraineAlarmSignal` parser** | ✅ built and tested on your export; the real run needs the download |
+| 5 | `@air_alert_ua` parser (official channel, used for validation) | develop now, run later |
+| 6 | Month-by-month label check against the official record (Q20) | **blocked**, needs both channels |
+| 7 | Cross-check against alerts.in.ua (Q2) | **blocked** |
+| 8 | Decision on city zones (Q16) | **blocked**, needs steps 6–7 |
+| 9 | Neighbour map | open |
+| 10 | As-of data view + leakage test | open, uses synthetic data |
+| 11 | Grid, labels, alert-history features | develop now, run later |
+| 12 | Backtest harness and baselines | develop now, run later |
+| 13 | Models + validation experiments | **blocked** |
+| 14 | Telegram features | partly open: the place-name list can start now; the rules need the last two channels |
+| 15–16 | Telegram ablation, final run, report | **blocked** |
+
+## What I built: the label parser (step 4)
+
+Committed as `34003da`:
+- **Classifier** (`alarm_signal.py`): sorts each message by its wording into alert start, all-clear, "alert continues", retraction, the channel's own warnings (drones, guided bombs, shelling, media reports), or unknown. It also reads the places: oblast, raion, city zone, or several raions listed in one message.
+- **Alert tracker** (`alerts.py`): turns those messages into alert periods for each place, following the Q17 rules.
+- **20 tests**, all passing.
+
+Run on your 2023 – July 2025 export:
+- **No alerts lost:** all **103,759 alert messages had a readable place.**
+- **Unrecognised messages** are 1–1.8% per year, almost all volunteer recruitment, fundraising and evacuation calls.
+- **50,727 alerts, median 43 minutes.** Edge cases:
+  - 1.9% of alerts got a repeated start while already on alert;
+  - 401 all-clears arrived with no open alert (counted, nothing invented);
+  - 54 retractions.
+
+## Two things I learned
+
+1. **The channel is run by hand.** Volunteers post every alert manually, which explains the 20–40 second delay against the official record. They occasionally post apologies such as "Просимо вибачення, сталась технічна помилка… Тривога відсутня". The parser **removes an alert that was later retracted.**
+
+   **Please confirm that rule.** There's one tiny caveat: for the few minutes before the apology, a real-time forecaster would have seen a false alert. We remove it from history entirely, which makes the data very slightly cleaner than it really was. With only 54 cases in 2.5 years, I think that's negligible, and I'll note it in the write-up.
+2. **City zones have broken records.** Oblast-level alerts longer than 12 hours match the official record almost exactly: Sumy 45 vs 45, Kharkiv 39 vs 36, Poltava 25 vs 21. But **529 city-zone alerts last over 12 hours**, and Zaporizhzhia city's alert stayed "open" from March 2023 to April 2025. Those are all-clears the volunteers never posted, not real alerts.
+   - **Consequence 1:** in the design doc, "folding a city into its raion" now means the city's own alerts are **ignored**, and the raion's alerts stand for it. Broken city records can't leak into raion labels that way.
+   - **Consequence 2:** how to detect a missing all-clear will be calibrated against the official record during the Q20 check.
+
+## Next
+
+While the downloads run, I'd do the unblocked steps in this order:
+1. **Step 3:** the unit registry. Everything else needs it.
+2. **Step 5:** the official-channel parser, so the Q20 check can run as soon as both downloads finish.
+3. **Steps 10 → 11 → 12:** the as-of data view and its leakage test, then labels and features, then the backtest harness, all tested on synthetic data.
+4. **Step 9:** the neighbour map.
+
+Should I continue in that order?
+
+---
+
+## User (2026-10-12 20:01:25 UTC)
+
+1. Confirm, but explain how you do that.
+2. Confirm
+Tell me how the background download is going.
+
+<details><summary>Tool call: Bash</summary>
+
+Check Telegram download progress
+
+```
+tail -3 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output; cd /Users/david/proj/air-alert-forecast/data/raw/telegram && for c in */; do echo "$c $(cat $c*.jsonl | wc -l | tr -d ' ') msgs, latest file $(ls $c | tail -1)"; done; ps -eo etime,command | grep "[m]odule airalert\|[-]m airalert" | head -2; date +%H:%M
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+  40,000 saved (up to 2022-11-05), 93 msg/s, about 110 min left
+  50,000 saved (up to 2023-02-02), 93 msg/s, about 108 min left
+  60,000 saved (up to 2023-04-10), 93 msg/s, about 107 min left
+UkraineAlarmSignal/ 60293 msgs, latest file 2023-04.jsonl
+   10:50 /bin/zsh -c source /Users/david/.claude/shell-snapshots/snapshot-zsh-1791834639366-8y9yyh.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \builtin unalias -- 'unsetenv'; \builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'PYTHONUNBUFFERED=1 uv run python -m airalert download-telegram 2>&1' < /dev/null && pwd -P >| /tmp/claude-1252-cwd
+   10:50 uv run python -m airalert download-telegram
+23:01
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect what precedes each retraction message
+
+```
+cat > /tmp/aaf_scripts/retractions.py <<'EOF'
+import glob, html, re, sys, collections
+from datetime import datetime
+from airalert.alarm_signal import classify, RETRACT
+MONTHS = {m: i for i, m in enumerate("January February March April May June July August September October November December".split(), 1)}
+msgs = []
+for f in glob.glob(sys.argv[1] + "/messages*.html"):
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        mid = re.search(r'id="message(\d+)"', block); dt = re.search(r'title="(\d+) (\w+) (\d{4}), (\d+):(\d+):(\d+)', block)
+        tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if not (mid and dt and tx) or dt.group(3) < "2023": continue
+        d, mon, y, H, M, S = dt.groups()
+        text = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", tx.group(1))))
+        msgs.append((int(mid.group(1)), datetime(int(y), MONTHS[mon], int(d), int(H), int(M), int(S)), classify(text), text))
+msgs.sort(key=lambda x: x[0])
+last = {}  # place -> (time, kind, text) of the previous alert message about it
+pattern = collections.Counter(); shown = 0
+for mid, t, m, text in msgs:
+    for loc in m.locations:
+        if m.kind == RETRACT:
+            prev = last.get(loc)
+            key = (prev[1], "within 10 min" if prev and (t - prev[0]).total_seconds() < 600 else "later") if prev else ("none", "")
+            pattern[key] += 1
+            if shown < 6 and prev and prev[1] == "end":
+                shown += 1; print(f"{t} RETRACT {' / '.join(text.split(chr(10))[:2])[:110]}\n    previous: {prev[0]} {prev[1]}: {prev[2][:90]}")
+        if m.kind in ("start", "end", "retract"):
+            last[loc] = (t, m.kind, " / ".join(text.split("\n")[:2]))
+print(pattern.most_common())
+EOF
+cd /Users/david/proj/air-alert-forecast && uv run python /tmp/aaf_scripts/retractions.py data/raw/telegram_desktop_export/UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+2023-02-22 16:12:21 RETRACT  / 📢 Миколаївська обл.
+    previous: 2023-02-22 11:20:20 end:  / 🟢 Миколаївська обл.
+2023-04-03 14:05:37 RETRACT  / 📢 Донецька обл.
+    previous: 2023-04-03 13:59:55 end:  / 🟢 Донецька обл.
+2023-04-16 23:16:47 RETRACT  / 🟢 Херсонська обл.
+    previous: 2023-04-16 20:42:25 end:  / 🟢 Херсонська обл.
+2023-04-21 01:07:04 RETRACT  / 📢 Чернівецька обл.
+    previous: 2023-04-21 00:30:33 end:  / 🟢 Чернівецька обл.
+2023-04-21 01:07:05 RETRACT  / 📢 Хмельницька обл.
+    previous: 2023-04-21 00:30:35 end:  / 🟢 Хмельницька обл.
+2023-04-21 01:07:12 RETRACT  / 📢 Запорізька обл.
+    previous: 2023-04-21 00:30:40 end:  / 🟢 Запорізька обл.
+[(('end', 'later'), 40), (('none', ''), 38), (('start', 'later'), 30), (('start', 'within 10 min'), 24), (('retract', 'later'), 12), (('end', 'within 10 min'), 2), (('retract', 'within 10 min'), 1)]
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Show the wording of all retraction messages
+
+```
+uv run python - <<'EOF'
+import glob, html, re, collections
+c = collections.Counter()
+for f in glob.glob("data/raw/telegram_desktop_export/UkraineAlarmSignal/messages*.html"):
+    s = open(f, encoding="utf-8").read()
+    for block in re.split(r'(?=<div class="message )', s)[1:]:
+        tx = re.search(r'<div class="text">(.*?)</div>', block, re.S)
+        if tx and "Просимо вибачення" in tx.group(1):
+            t = html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", " / ", tx.group(1)))).strip()
+            t = re.sub(r"^\W*[^/]+/", "<PLACE> /", t)
+            c[" ".join(t.split())[:170]] += 1
+for t, n in c.most_common(15): print(n, t)
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+11 <PLACE> / Просимо вибачення, сталась технічна помилка. Тривога в області відсутня.
+10 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза БПЛА в місті відсутня.
+9 <PLACE> / Просимо вибачення за повторні звуки сирени перед відбоєм, сталась технічна помилка.
+7 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза обстрілу в місті відсутня.
+7 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза обстрілу в області відсутня.
+6 <PLACE> / Просимо вибачення, сталась технічна помилка. Тривога в місті відсутня.
+5 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза КАБів в місті відсутня.
+5 <PLACE> / Просимо вибачення, сталась технічна помилка. Ідуть відбої тривог по областях. Наразі без загроз
+4 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза обстрілу в районі відсутня.
+4 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза застосування високошвидкісних цілей в місті відсутня.
+3 <PLACE> / Просимо вибачення, сталась технічна помилка. Повітряна тривога в області відсутня.
+3 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза застосування КАБів у місті відсутня.
+3 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза артобстрілу в місті відсутня.
+2 <PLACE> / Просимо вибачення, сталась технічна помилка. Загроза застосування БПЛА в районі відсутня.
+2 <PLACE> / Просимо вибачення, сталась технічна помилка. Відбій повітряної тривоги був о 22:29.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Restrict retractions to air raid alerts, test, and recount
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/alarm_signal.py"); s = p.read_text()
+old = '    (r"^просимо вибачення.*(відсутн|помилк)", RETRACT, None),\n'
+new = ('    # Apologies retract either an air raid alert or one of the channel\'s own warnings ("Загроза БПЛА … відсутня");\n'
+       '    # only the first is a retraction. Other apologies (repeated sirens, corrected times) change no alert.\n'
+       '    (r"^просимо вибачення.*(повітряна )?тривога в (області|місті|районі) відсутня", RETRACT, None),\n'
+       '    (r"^просимо вибачення", UNKNOWN, None),\n')
+assert old in s; s = s.replace(old, new)
+old2 = "    kind, color = _phrase_kind(phrase)\n    if kind == UNKNOWN and locations:"
+new2 = "    kind, color = _phrase_kind(phrase)\n    if kind == UNKNOWN and locations and not _clean(phrase).lower().startswith(\"просимо вибачення\"):"
+assert old2 in s; s = s.replace(old2, new2)
+p.write_text(s)
+t = pathlib.Path("tests/test_alarm_signal.py"); ts = t.read_text()
+ts += '''
+
+def test_only_air_raid_apologies_are_retractions():
+    for text in [
+        "🟢 Шепетівка (Хмельницька обл.)\\nПросимо вибачення, сталась технічна помилка. Загроза БПЛА в місті відсутня.",
+        "🟢 Сумська обл.\\nПросимо вибачення, сталась технічна помилка. Загроза обстрілу в області відсутня.",
+        "📢 Київ\\nПросимо вибачення за повторні звуки сирени перед відбоєм, сталась технічна помилка.",
+        "🟢 Київ\\nПросимо вибачення, сталась технічна помилка. Відбій повітряної тривоги був о 22:29.",
+    ]:
+        assert classify(text).kind == UNKNOWN, text
+    assert classify("🟢 Київ\\nПросимо вибачення, сталась технічна помилка. Тривога в місті відсутня.").kind == RETRACT
+    assert classify("🟢 Сумська обл.\\nПросимо вибачення, сталась технічна помилка. Повітряна тривога в області відсутня.").kind == RETRACT
+'''
+t.write_text(ts)
+EOF
+uv run pytest -q 2>&1 | tail -3; sed -i '' 's/(("start", "end", "retract"))/(("start","end","retract"))/' /tmp/aaf_scripts/retractions.py; uv run python /tmp/aaf_scripts/retractions.py data/raw/telegram_desktop_export/UkraineAlarmSignal | tail -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.....................                                                    [100%]
+21 passed in 0.13s
+[(('start', 'within 10 min'), 16), (('start', 'later'), 6), (('end', 'later'), 6), (('retract', 'within 10 min'), 1), (('none', ''), 1)]
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Recount, update the doc and commit the fix
+
+```
+uv run python /tmp/aaf_scripts/alerts_from_export.py data/raw/telegram_desktop_export/UkraineAlarmSignal 2>&1 | sed -n 2p && python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("docs/DESIGN.md"); s = p.read_text()
+old = "  - 54 retracted alerts;"
+assert old in s
+s = s.replace(old, "  - 22 retracted alerts. Only apologies saying the air raid alert is absent count as retractions; most apologies retract the channel's own warnings (\"Загроза БПЛА в місті відсутня\") and change no alert. Another 6 air raid apologies arrive after an all-clear; those alerts are kept.")
+p.write_text(s)
+EOF
+git add -A src tests docs && git commit -q -F - <<'EOF'
+Only treat air raid apologies as retractions
+
+Most "Просимо вибачення" messages retract the channel's own drone,
+shelling or guided-bomb warnings. Treating them as retractions would
+delete a real air raid alert open at the same place. Now only apologies
+saying the air raid alert is absent remove an alert; other apologies
+change nothing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+stats: {'all-clear with no open alert': 398, 'restart while on alert': 1914, 'continuation with no open alert': 99, 'retracted': 22, 'retraction with no open alert': 8}
+6482749 Only treat air raid apologies as retractions
+```
+
+</details>
+
+### Assistant (2026-10-12 20:02:39 UTC)
+
+Both rules are confirmed. Here's how retraction works, including a bug that explaining it turned up, which I've fixed and committed as `6482749`.
+
+## How a retraction is handled
+
+1. **Recognising one.** A message counts as a retraction only if it's an apology saying the **air raid alert** is absent:
+   - "Просимо вибачення, сталась технічна помилка. **Тривога в області відсутня.**" ("We apologise, a technical error occurred. There is no alert in the oblast.")
+   - The same apology with "Повітряна тривога…", or "…в місті / в районі відсутня" (in the city / raion).
+2. **Removing the alert.** For each place named in the apology, if that place has an open alert, the alert is **deleted entirely** rather than closed. The result is as if it had never been posted, so it won't appear in labels or in the alert history used for features.
+3. **If nothing is open,** for example because the apology came after an all-clear, nothing is changed and the case is only counted.
+
+## The bug
+
+Explaining this made me look at what the apologies actually say. **Most of them aren't about air raid alerts.** They retract the channel's own warnings: "Загроза **БПЛА** в місті відсутня" (no drone threat in the city), and the same for shelling, guided bombs and high-speed targets. Others apologise for "повторні звуки сирени" (repeated siren sounds) or correct a time ("Відбій… був о 22:29").
+
+The first version treated **every** apology as a retraction. A drone-warning apology for, say, Kharkiv would then have **deleted a real air raid alert open in Kharkiv at the same time.**
+
+- **Fix:** only apologies that say the air raid alert is absent remove an alert. Every other apology changes nothing.
+- **Effect:** retracted alerts drop from 54 to **22** in the 2023 – July 2025 data.
+- **Remaining case:** 6 air raid apologies arrive after an all-clear has already closed the alert. Those alerts are **kept**. The timing suggests the apology may refer to an app notification that never appeared in the channel, so deleting a closed alert on that basis is riskier than keeping it.
+- **Tests:** 21 passing, including the cases that would have caught this.
+
+**The leakage note still applies:** for the few minutes before an apology, a real-time forecaster would have seen the false alert, and we delete it from history entirely. With 22 cases in 2.5 years the effect is negligible, and the write-up will say so.
+
+## Download progress
+
+- **`@UkraineAlarmSignal`:** about 60,000 of 654,325 messages saved (up to April 2023), steady at **93 messages per second**. **About 1 h 45 min left** for this channel.
+- **The other three channels** take about 1.5 h more. Total remaining: about 3.5 h.
+- **Background limit:** background tasks here are stopped after 2 hours, so it will likely be stopped partway through `@air_alert_ua`. I'll rerun the same command when that happens, and it continues after the last saved message.
+
+## Next, unless you want a different order
+
+1. Unit registry.
+2. Official-channel parser.
+3. As-of data view and leakage test.
+4. Labels and features.
+5. Backtest harness.
+6. Neighbour map.
+
+---
+
+## User (2026-10-12 20:04:54 UTC)
+
+Go implement
+
+### Assistant (2026-10-12 20:05:04 UTC)
+
+Starting with step 3, the unit registry. To build the official raion list, I'm checking the dataset author's place-name file, which is MIT-licensed, along with its rename table.
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect the place-name list and rename table
+
+```
+mkdir -p /tmp/aaf_peek/states && cd /tmp/aaf_peek/states && curl -s -o states.json https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/states.json && curl -s -o legacy_states.py https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/main/processors/legacy_states.py && python3 -I -c "
+import json
+d=json.load(open('states.json'))
+print(type(d), list(d.keys())[:5]); st=d['states']; print(len(st), 'states'); s=st[0]; print({k:(v if not isinstance(v,list) else f'list[{len(v)}]') for k,v in s.items()}); print(s['districts'][0].keys() if s['districts'] else None)
+print(sum(len(s['districts']) for s in st), 'districts')
+for s in st: print(s['stateName'], len(s['districts']), [d['districtName'] for d in s['districts']][:3])
+" | head -40; grep -n "def \|: (\|\"" legacy_states.py | head -30
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+<class 'dict'> ['states']
+25 states
+{'stateName': 'Вінницька область', 'stateId': 4, 'districts': 'list[6]'}
+dict_keys(['districtName', 'districtId', 'communities'])
+122 districts
+Вінницька область 6 ['Вінницький район', 'Могилів-Подільський район', 'Жмеринський район']
+Волинська область 4 ['Луцький район', 'Ковельський район', 'Володимир-Волинський район']
+Дніпропетровська область 7 ['Криворізький район', 'Павлоградський район', 'Кам’янський район']
+Донецька область 8 ['Покровський район', 'Краматорський район', 'Бахмутський район']
+Житомирська область 4 ['Бердичівський район', 'Житомирський район', 'Новоград-Волинський район']
+Закарпатська область 6 ['Ужгородський район', 'Берегівський район', 'Тячівський район']
+Запорізька область 5 ['Бердянський район', 'Запорізький район', 'Пологівський район']
+Івано-Франківська область 6 ['Верховинський район', 'Івано-Франківський район', 'Калуський район']
+Київська область 7 ['Броварський район', 'Фастівський район', 'Бучанський район']
+Кіровоградська область 4 ['Кропивницький район', 'Голованівський район', 'Олександрійський район']
+Луганська область 4 ['Старобільський район', 'Сватівський район', 'Сєвєродонецький район']
+Львівська область 7 ['Червоноградський район', 'Львівський район', 'Самбірський район']
+Миколаївська область 4 ['Первомайський район', 'Баштанський район', 'Миколаївський район']
+Одеська область 7 ['Одеський район', 'Подільський район', 'Березівський район']
+Полтавська область 4 ['Полтавський район', 'Миргородський район', 'Кременчуцький район']
+Рівненська область 4 ['Вараський район', 'Рівненський район', 'Сарненський район']
+Сумська область 5 ['Роменський район', 'Сумський район', 'Шосткинський район']
+Тернопільська область 3 ['Тернопільський район', 'Чортківський район', 'Кременецький район']
+Харківська область 7 ['Ізюмський район', 'Харківський район', 'Лозівський район']
+Херсонська область 5 ['Каховський район', 'Бериславський район', 'Скадовський район']
+Хмельницька область 3 ['Хмельницький район', 'Шепетівський район', 'Кам’янець-Подільський район']
+Черкаська область 4 ['Уманський район', 'Черкаський район', 'Звенигородський район']
+Чернівецька область 3 ['Вижницький район', 'Чернівецький район', 'Дністровський район']
+Чернігівська область 5 ['Ніжинський район', 'Чернігівський район', 'Прилуцький район']
+м. Київ 0 []
+1:"""
+6:"""
+11:# Mapping of renamed raions: (oblast, old_raion) -> new_raion
+13:    ("Дніпропетровська область", "Новомосковський район"): "Самарівський район",
+14:    ("Житомирська область", "Новоград-Волинський район"): "Звягельський район",
+17:# Mapping of renamed communities: (oblast, raion, old_community) -> new_community
+19:    ("Сумська область", "Сумський район", "Миколаївська сільська територіальна громада"): "Миколаївська територіальна громада",
+23:def get_new_name(
+28:    """
+42:    """
+Shell cwd was reset to /Users/david/proj/air-alert-forecast
+```
+
+</details>
+
+### Assistant (2026-10-12 20:05:22 UTC)
+
+The list has 25 oblasts and 122 raions, plus a two-entry rename table. Next I'm matching it against every raion name used in our three sources, to find variants and renames it doesn't know.
+
+<details><summary>Tool call: Bash</summary>
+
+Find raion names in each source missing from the list
+
+```
+cat > /tmp/aaf_scripts/raion_names.py <<'EOF'
+import csv, glob, html, json, re, collections, sys
+from airalert.alarm_signal import classify
+norm = lambda s: " ".join((s or "").replace("’", "'").replace("ʼ", "'").split())
+states = json.load(open("/tmp/aaf_peek/states/states.json"))["states"]
+known = {(norm(s["stateName"]), norm(d["districtName"])) for s in states for d in s["districts"]}
+seen = collections.defaultdict(collections.Counter)
+for r in csv.DictReader(open("/tmp/aaf_peek/official_data_uk.csv")):
+    if r["raion"]: seen["official"][(norm(r["oblast"]), norm(r["raion"]))] += 1
+for f in glob.glob("data/raw/alerts_in_ua/*/*.json"):
+    for a in json.load(open(f))["alerts"]:
+        if a["location_type"] == "raion": seen["alerts.in.ua"][(norm(a["location_oblast"]), norm(a["location_title"]))] += 1
+for f in glob.glob("data/raw/telegram_desktop_export/UkraineAlarmSignal/messages*.html"):
+    for tx in re.findall(r'<div class="text">(.*?)</div>', open(f, encoding="utf-8").read(), re.S):
+        m = classify(html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<br\s*/?>", "\n", tx))))
+        for loc in m.locations:
+            if loc.level == "raion": seen["channel"][(norm(loc.oblast).replace(" обл.", " область"), norm(loc.name))] += 1
+for src, c in seen.items():
+    unknown = {k: v for k, v in c.items() if k not in known}
+    print(f"{src}: {len(c)} raions, not in list: {sorted(unknown.items(), key=lambda x: -x[1])}")
+EOF
+cd /Users/david/proj/air-alert-forecast && uv run python /tmp/aaf_scripts/raion_names.py
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+official: 118 raions, not in list: [(('Дніпропетровська область', 'Самарівський район'), 1974), (('Житомирська область', 'Звягельський район'), 337)]
+alerts.in.ua: 118 raions, not in list: [(('Дніпропетровська область', 'Самарівський район'), 614), (('Харківська область', 'Берестинський район'), 280), (('Житомирська область', 'Звягельський район'), 80), (('Волинська область', 'Володимирський район'), 16), (('Львівська область', 'Шептицький район'), 11)]
+channel: 89 raions, not in list: [(('Дніпропетровська область', 'Самарівський район'), 108), (('Житомирська область', 'Звягельський район'), 39), (('Харківська область', 'Берестинський район'), 6)]
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Get the commit that last changed the place-name list
+
+```
+curl -s "https://api.github.com/repos/Vadimkin/ukrainian-air-raid-sirens-dataset/commits?path=processors/states.json&per_page=1" | python3 -c "import sys,json; c=json.load(sys.stdin)[0]; print(c['sha'], c['commit']['committer']['date'])"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+50ce4820acc9dff56a8aa79ca3cc278aeeeb52a1 2026-01-25T15:05:05Z
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/scripts/build_unit_registry.py`
+
+```
+"""Build src/airalert/reference/units.csv: every raion with its oblast and name variants, plus Kyiv city.
+
+The raion list comes from the official-channel dataset's place list (MIT licence, Vadym Klymenko),
+pinned to one commit so the registry is reproducible. Renamed raions keep their old names as aliases,
+because older messages and other sources still use them.
+
+Usage: uv run python scripts/build_unit_registry.py
+"""
+
+import csv
+import json
+import pathlib
+import urllib.request
+
+STATES_URL = ("https://raw.githubusercontent.com/Vadimkin/ukrainian-air-raid-sirens-dataset/"
+              "50ce4820acc9dff56a8aa79ca3cc278aeeeb52a1/processors/states.json")
+OUT = pathlib.Path(__file__).resolve().parent.parent / "src" / "airalert" / "reference" / "units.csv"
+
+# (oblast, old name) -> current name. Found by matching raion names across our three sources.
+RENAMED = {
+    ("Дніпропетровська область", "Новомосковський район"): "Самарівський район",
+    ("Житомирська область", "Новоград-Волинський район"): "Звягельський район",
+    ("Харківська область", "Красноградський район"): "Берестинський район",
+    ("Волинська область", "Володимир-Волинський район"): "Володимирський район",
+    ("Львівська область", "Червоноградський район"): "Шептицький район",
+}
+# Permanent alerts: nothing to predict (decision log, DESIGN.md).
+EXCLUDED_OBLASTS = {"Луганська область"}
+
+
+def normalise(name: str) -> str:
+    return " ".join(name.replace("’", "'").replace("ʼ", "'").split())
+
+
+def main() -> None:
+    states = json.load(urllib.request.urlopen(STATES_URL))["states"]
+    rows = []
+    for state in states:
+        oblast = normalise(state["stateName"])
+        if oblast == "м. Київ":
+            rows.append({"unit_id": "м. Київ", "oblast": "м. Київ", "name": "м. Київ", "kind": "city",
+                         "aliases": "Київ", "excluded": ""})
+            continue
+        for district in state["districts"]:
+            old = normalise(district["districtName"])
+            name = RENAMED.get((oblast, old), old)
+            rows.append({
+                "unit_id": f"{oblast}/{name}",
+                "oblast": oblast,
+                "name": name,
+                "kind": "raion",
+                "aliases": old if old != name else "",
+                "excluded": "permanent alert" if oblast in EXCLUDED_OBLASTS else "",
+            })
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    with OUT.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(sorted(rows, key=lambda r: r["unit_id"]))
+    print(f"{len(rows)} units written to {OUT}")
+
+
+if __name__ == "__main__":
+    main()
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/units.py`
+
+```
+"""The units we forecast (raions and Kyiv city) and how places named in alert messages map onto them.
+
+The registry lives in reference/units.csv (built by scripts/build_unit_registry.py). Each alert place maps
+onto units like this (DESIGN.md, section 2):
+
+- a raion → that raion;
+- an oblast → every raion of that oblast (oblast-wide alerts cover all its raions);
+- Kyiv city → its own unit;
+- any other city zone → no unit: city zones are ignored unless Q16 promotes them to units, and the
+  raion's own alerts stand for them.
+"""
+
+import csv
+import functools
+import pathlib
+from dataclasses import dataclass
+
+from airalert.alarm_signal import Location
+
+REGISTRY = pathlib.Path(__file__).resolve().parent / "reference" / "units.csv"
+
+
+@dataclass(frozen=True)
+class Unit:
+    unit_id: str
+    oblast: str
+    name: str
+    kind: str
+    excluded: str  # reason, or "" if the unit is forecast
+
+
+def _normalise(name: str) -> str:
+    return " ".join(name.replace("’", "'").replace("ʼ", "'").split())
+
+
+def _oblast_name(name: str) -> str:
+    """'Харківська обл.' and 'Харківська область' both become 'Харківська область'."""
+    name = _normalise(name)
+    return name[: -len(" обл.")] + " область" if name.endswith(" обл.") else name
+
+
+@functools.cache
+def units() -> tuple[Unit, ...]:
+    with REGISTRY.open(encoding="utf-8") as f:
+        return tuple(Unit(r["unit_id"], r["oblast"], r["name"], r["kind"], r["excluded"]) for r in csv.DictReader(f))
+
+
+@functools.cache
+def _index() -> tuple[dict, dict]:
+    by_name, by_oblast = {}, {}
+    with REGISTRY.open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            for name in [r["name"], *filter(None, r["aliases"].split("|"))]:
+                by_name[(r["oblast"], _normalise(name))] = r["unit_id"]
+            if r["kind"] == "raion":
+                by_oblast.setdefault(r["oblast"], []).append(r["unit_id"])
+    return by_name, by_oblast
+
+
+class UnknownPlace(ValueError):
+    pass
+
+
+def resolve(location: Location) -> list[str]:
+    """Unit ids an alert at `location` covers. Raises UnknownPlace for names not in the registry."""
+    by_name, by_oblast = _index()
+    if location.level == "city":
+        return ["м. Київ"] if _normalise(location.name) in ("Київ", "м. Київ") else []
+    oblast = _oblast_name(location.oblast or "")
+    if location.level == "oblast":
+        if oblast not in by_oblast:
+            raise UnknownPlace(oblast)
+        return list(by_oblast[oblast])
+    unit_id = by_name.get((oblast, _normalise(location.name)))
+    if unit_id is None:
+        raise UnknownPlace(f"{location.name} ({oblast})")
+    return [unit_id]
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/scripts/build_unit_registry.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/units.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Build the registry and test name resolution
+
+```
+uv run python scripts/build_unit_registry.py && head -4 src/airalert/reference/units.csv && grep -c "permanent" src/airalert/reference/units.csv && grep -v ',,' src/airalert/reference/units.csv | grep raion | grep -v permanent && cat > tests/test_units.py <<'EOF'
+import pytest
+
+from airalert.alarm_signal import Location
+from airalert.units import UnknownPlace, resolve, units
+
+
+def test_registry_has_all_raions_and_kyiv():
+    all_units = units()
+    assert sum(u.kind == "raion" for u in all_units) == 122
+    assert [u.unit_id for u in all_units if u.kind == "city"] == ["м. Київ"]
+    assert {u.oblast for u in all_units if u.excluded} == {"Луганська область"}
+
+
+def test_raion_by_current_and_old_name_and_apostrophe():
+    assert resolve(Location("raion", "Самарівський район", "Дніпропетровська обл.")) == ["Дніпропетровська область/Самарівський район"]
+    assert resolve(Location("raion", "Новомосковський район", "Дніпропетровська область")) == ["Дніпропетровська область/Самарівський район"]
+    assert resolve(Location("raion", "Кам’янський район", "Дніпропетровська обл.")) == ["Дніпропетровська область/Кам'янський район"]
+
+
+def test_oblast_alert_covers_all_its_raions_but_not_kyiv_city():
+    covered = resolve(Location("oblast", "Київська обл.", "Київська обл."))
+    assert len(covered) == 7 and "м. Київ" not in covered
+
+
+def test_city_zones_map_to_no_unit_except_kyiv():
+    assert resolve(Location("city", "Київ", None)) == ["м. Київ"]
+    assert resolve(Location("city", "Запоріжжя", "Запорізька обл.")) == []
+
+
+def test_unknown_names_are_reported():
+    with pytest.raises(UnknownPlace):
+        resolve(Location("raion", "Вигаданий район", "Сумська обл."))
+EOF
+uv run pytest -q 2>&1 | tail -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+123 units written to /Users/david/proj/air-alert-forecast/src/airalert/reference/units.csv
+unit_id,oblast,name,kind,aliases,excluded
+Івано-Франківська область/Івано-Франківський район,Івано-Франківська область,Івано-Франківський район,raion,,
+Івано-Франківська область/Верховинський район,Івано-Франківська область,Верховинський район,raion,,
+Івано-Франківська область/Калуський район,Івано-Франківська область,Калуський район,raion,,
+4
+Волинська область/Володимирський район,Волинська область,Володимирський район,raion,Володимир-Волинський район,
+Дніпропетровська область/Самарівський район,Дніпропетровська область,Самарівський район,raion,Новомосковський район,
+Житомирська область/Звягельський район,Житомирська область,Звягельський район,raion,Новоград-Волинський район,
+Львівська область/Шептицький район,Львівська область,Шептицький район,raion,Червоноградський район,
+Харківська область/Берестинський район,Харківська область,Берестинський район,raion,Красноградський район,
+..........................                                               [100%]
+26 passed in 0.11s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:06:14 UTC)
+
+The registry has 123 units: 122 raions plus Kyiv city, with Luhansk's 4 raions marked excluded. Old names resolve to the current ones, and 26 tests pass. Committing.
+
+<details><summary>Tool call: Bash</summary>
+
+Commit the unit registry and check the download
+
+```
+git add -A scripts src tests && git commit -q -F - <<'EOF'
+Add unit registry: 122 raions plus Kyiv city, with renamed aliases
+
+- scripts/build_unit_registry.py builds src/airalert/reference/units.csv
+  from the official dataset's place list, pinned to one commit, plus five
+  raion renames found by matching names across our three sources
+- units.py maps alert places onto units: raion -> itself, oblast -> all
+  its raions, Kyiv -> its unit, other city zones -> none (Q16)
+- Luhansk raions are kept in the registry but marked excluded
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+b74cea1 Add unit registry: 122 raions plus Kyiv city, with renamed aliases
+  80,000 saved (up to 2023-08-09), 93 msg/s, about 103 min left
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check raion name uniqueness and official message shapes
+
+```
+python3 -I -c "
+import csv, collections
+rows=list(csv.DictReader(open('src/airalert/reference/units.csv')))
+c=collections.Counter(n for r in rows for n in [r['name'], *filter(None, r['aliases'].split('|'))])
+print('duplicate names:', [n for n,k in c.items() if k>1])"; python3 -I - <<'EOF'
+import json, re, collections
+ms = [json.loads(l) for l in open('/tmp/aaf_peek/survey/sample.jsonl')]
+c = collections.Counter()
+for m in ms:
+    if m['date'] < '2023': continue
+    first = m['text'].strip().split('\n')[0]
+    body = re.sub(r'^[^\wА-Яа-я]*\d{1,2}:\d{2}\s*', '', first)
+    body = re.sub(r' в (м\. )?[^.!(]*', ' в <P>', body)
+    c[body[:70]] += 1
+for t, n in c.most_common(25): print(n, t)
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+duplicate names: []
+843 Повітряна тривога в <P>
+626 Відбій тривоги в <P>.
+66 Відбій загрози артобстрілу в <P>.
+64 Загроза артобстрілу!
+46 Відбій тривоги в <P>
+22 Атака дронів-камікадзе
+12 УВАГА!!!
+10 Загроза ударних БпЛА
+9 Увага!
+9 Відбій атаки дронів-камікадзе
+9 Загроза ударних БпЛА в <P>!
+8 Відбій загрози ударних БпЛА
+7 БЕЗКОШТОВНА ЕВАКУАЦІЯ
+7 УВАГА !!!
+6 Загроза застосування КАБ
+6 Атака дронів-камікадзе типу Молнія
+5 Відбій загрози артобстрілу в <P>
+5 Відбій загрози застосування керованих авіаційних бомб (КАБів).
+3 Відбій загрози застосування КАБ
+2 Відбій загрози ударних БПЛА
+2 Загроза керованих авіабомб в <P>!
+1 УВАГА !!! у Запорізька область
+1 1 у Запорізька область.
+1 Загроза ударних БПЛА
+1 Радіаційна небезпека!
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check hashtags on official alert messages
+
+```
+python3 -I - <<'EOF'
+import json, re, collections
+ms = [json.loads(l) for l in open('/tmp/aaf_peek/survey/sample.jsonl')]
+c = collections.Counter(); ex = collections.Counter()
+for m in ms:
+    if m['date'] < '2023': continue
+    t = m['text']
+    if re.search(r'Повітряна тривога в|Відбій тривоги в', t):
+        last = t.strip().split('\n')[-1]
+        has = last.startswith('#')
+        c[has] += 1
+        if has: ex[re.sub(r'#[^\s]+', '#X', last)] += 1
+        else: print('NO HASHTAG:', t[:150].replace('\n', ' / '))
+print(c, ex.most_common(4))
+tags = collections.Counter(tag for m in ms for tag in re.findall(r'#(\S+)', m['text']))
+print([t for t in tags if 'район' not in t and 'область' not in t][:15])
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Counter({True: 1516}) [('#X', 1423), ('#X #X #X #X #X', 34), ('#X #X #X #X', 26), ('#X #X #X #X #X #X #X #X', 21)]
+['Уманська_територіальна_громада', 'м_Первомайськ_та_Первомайська_територіальна_громада', 'м_Старокостянтинів_та_Старокостянтинівська_територіальна_громада', 'Сквирська_територіальна_громада', 'м_Київ', 'м_Біла_Церква_та_Білоцерківська_територіальна_громада', 'м_Васильків_та_Васильківська_територіальна_громада', 'Гребінківська_територіальна_громада', 'м_Пирятин_та_Пирятинська_територіальна_громада', 'м_Кривий_Ріг_та_Криворізька_територіальна_громада', 'м_Вознесенськ_та_Вознесенська_територіальна_громада', 'Арбузинська_територіальна_громада', 'Кривоозерська_територіальна_громада', 'м_Нікополь_та_Нікопольська_територіальна_громада', 'м_Марганець_та_Марганецька_територіальна_громада']
+```
+
+</details>
+
+### Assistant (2026-10-12 20:06:49 UTC)
+
+All 1,516 sampled alert messages carry hashtags. Writing the official-channel parser, plus the escalation rule from Q17: an escalation with no open alert opens a flagged, implied alert.
+
+<details><summary>Tool call: Bash</summary>
+
+Add escalations to the tracker and loose name matching to units
+
+```
+python3 - <<'EOF'
+import pathlib
+# 1. ESCALATION kind in the shared message model
+p = pathlib.Path("src/airalert/alarm_signal.py"); s = p.read_text()
+old = 'START, END, CONTINUE, RETRACT, OTHER, UNKNOWN = "start", "end", "continue", "retract", "other", "unknown"'
+assert old in s
+s = s.replace(old, old + '\nESCALATION = "escalation"  # a heightened threat inside an alert (official channel only)')
+p.write_text(s)
+
+# 2. tracker: escalations never change an open alert; with nothing open they open a flagged implied alert
+p = pathlib.Path("src/airalert/alerts.py"); s = p.read_text()
+s = s.replace("from airalert.alarm_signal import CONTINUE, END, RETRACT, START, Location, Message",
+              "from airalert.alarm_signal import CONTINUE, END, ESCALATION, RETRACT, START, Location, Message")
+s = s.replace("- A continuation (\"тривога триває\") changes nothing.",
+              "- A continuation (\"тривога триває\") changes nothing.\n- An escalation (\"Загроза ударних БпЛА…\", official channel) never changes an open alert; with nothing open\n  it opens an alert flagged as implied.")
+s = s.replace("    max_color: str | None = None  # \"red\" if the alert was ever red, else \"yellow\" if ever yellow\n    restarts: int = 0",
+              "    max_color: str | None = None  # \"red\" if the alert was ever red, else \"yellow\" if ever yellow\n    restarts: int = 0\n    implied: bool = False  # opened by an escalation with no air raid alert open")
+old = "            elif message.kind == CONTINUE and not current:"
+assert old in s
+s = s.replace(old, """            elif message.kind == ESCALATION:
+                if current:
+                    history.stats["escalation during alert"] += 1
+                else:
+                    open_alerts[location] = Alert(location, time, message_id, implied=True)
+                    history.stats["implied alert from escalation"] += 1
+""" + old)
+p.write_text(s)
+
+# 3. loose name keys in the unit registry (hashtags drop apostrophes, hyphens and dots)
+p = pathlib.Path("src/airalert/units.py"); s = p.read_text()
+old = '''def _normalise(name: str) -> str:
+    return " ".join(name.replace("’", "'").replace("ʼ", "'").split())
+'''
+assert old in s
+s = s.replace(old, old + '''
+
+def _key(name: str) -> str:
+    """Loose match key: '#Кам'янський_район', 'Кам’янський район' and 'камянський район' all match."""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+''')
+s = s.replace('''                by_name[(r["oblast"], _normalise(name))] = r["unit_id"]''',
+              '''                by_name[(r["oblast"], _key(name))] = r["unit_id"]
+                by_name[(None, _key(name))] = r["unit_id"]  # raion names are unique nationwide''')
+old = '''    oblast = _oblast_name(location.oblast or "")
+    if location.level == "oblast":'''
+assert old in s
+s = s.replace(old, '''    oblast = _oblast_name(location.oblast) if location.oblast else None
+    if location.level == "oblast":''')
+s = s.replace('''    unit_id = by_name.get((oblast, _normalise(location.name)))''', '''    unit_id = by_name.get((oblast, _key(location.name)))''')
+s = s.replace('''    if location.level == "city":
+        return ["м. Київ"] if _normalise(location.name) in ("Київ", "м. Київ") else []''',
+'''    if location.level == "city":
+        return ["м. Київ"] if _key(location.name) in ("київ", "мкиїв") else []''')
+s = s.replace('''        if oblast not in by_oblast:''', '''        oblast = next((o for o in by_oblast if _key(o) == _key(oblast or "")), oblast)
+        if oblast not in by_oblast:''')
+p.write_text(s)
+EOF
+grep -n "def resolve" -A 18 src/airalert/units.py
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+70:def resolve(location: Location) -> list[str]:
+71-    """Unit ids an alert at `location` covers. Raises UnknownPlace for names not in the registry."""
+72-    by_name, by_oblast = _index()
+73-    if location.level == "city":
+74-        return ["м. Київ"] if _key(location.name) in ("київ", "мкиїв") else []
+75-    oblast = _oblast_name(location.oblast) if location.oblast else None
+76-    if location.level == "oblast":
+77-        oblast = next((o for o in by_oblast if _key(o) == _key(oblast or "")), oblast)
+78-        if oblast not in by_oblast:
+79-            raise UnknownPlace(oblast)
+80-        return list(by_oblast[oblast])
+81-    unit_id = by_name.get((oblast, _key(location.name)))
+82-    if unit_id is None:
+83-        raise UnknownPlace(f"{location.name} ({oblast})")
+84-    return [unit_id]
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/official_channel.py`
+
+```
+"""Read `@air_alert_ua` (the official channel, silent since 2026-09-07): the validation reference (ADR-0006).
+
+Messages look like
+
+    🔴 09:08 Повітряна тривога в Ізюмський район
+    Слідкуйте за подальшими повідомленнями.
+    #Ізюмський_район
+
+The places are read from the hashtag line, which every alert message has (also when several places are
+listed). The kind is read from the wording after the emoji and time, never from the emoji alone
+(DESIGN.md, "Message types in @air_alert_ua"):
+
+- "Повітряна тривога в …" starts an alert, "Відбій тривоги в …" ends one (🟡 = oblast all-clear while some
+  raion is still on alert; only the oblast-wide alert closes);
+- 🔴🔴 "Загроза ударних БпЛА / керованих авіабомб / Ракетна загроза …" are escalations inside an alert;
+- artillery, kamikaze-drone, urban-fighting and radiation messages are other threats;
+- announcements ("УВАГА!!!", evacuation) are unknown.
+"""
+
+import re
+
+from airalert.alarm_signal import END, ESCALATION, OTHER, START, UNKNOWN, Location, Message
+
+_PHRASES = [  # first match wins
+    (r"^відбій загроз|^відбій атаки", OTHER),  # end of an escalation or of a non-air threat: changes no alert
+    (r"^відбій тривоги", END),
+    (r"^повітряна тривога", START),
+    (r"^загроза (ударних бпла|керованих авіабомб|застосування каб)|^ракетна загроза", ESCALATION),
+    (r"артобстріл|дронів-камікадзе|вуличних боїв|радіаційн|хімічн", OTHER),
+]
+
+
+def _place(tag: str) -> Location:
+    name = tag.lstrip("#").replace("_", " ")
+    if name.endswith(" район"):
+        return Location("raion", name, None)
+    if name.endswith(" область"):
+        return Location("oblast", name, name)
+    if name.startswith("м "):  # "м Київ", "м Харків та Харківська територіальна громада"
+        name = "м. " + name[2:]
+    return Location("city", name, None)
+
+
+def classify(text: str | None) -> Message:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return Message(UNKNOWN, None, None, ())
+    body = re.sub(r"^[^\wА-Яа-яІіЇїЄєҐґ]*(\d{1,2}:\d{2}\s*)?", "", lines[0]).lower()
+    kind = next((k for pattern, k in _PHRASES if re.search(pattern, body)), UNKNOWN)
+    tags = re.findall(r"#\S+", lines[-1]) if lines[-1].startswith("#") else []
+    locations = tuple(_place(tag) for tag in tags)
+    if kind in (START, END, ESCALATION) and not locations:
+        return Message(UNKNOWN, None, None, ())
+    return Message(kind, None, None, locations)
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_official_channel.py`
+
+```
+from datetime import datetime, timedelta
+
+from airalert.alarm_signal import END, ESCALATION, OTHER, START, UNKNOWN, Location
+from airalert.alerts import build_alerts
+from airalert.official_channel import classify
+from airalert.units import resolve
+
+
+def test_raion_start_and_all_clear():
+    m = classify("🔴 09:08 Повітряна тривога в Ізюмський район\nСлідкуйте за подальшими повідомленнями.\n#Ізюмський_район")
+    assert (m.kind, m.locations) == (START, (Location("raion", "Ізюмський район", None),))
+    assert resolve(m.locations[0]) == ["Харківська область/Ізюмський район"]
+    assert classify("🟢 12:33 Відбій тривоги в Ізюмський район.\nСлідкуйте.\n#Ізюмський_район").kind == END
+
+
+def test_several_places_from_hashtags():
+    m = classify("🟢 12:33 Відбій тривоги в\n• Мелітопольський район\n• Василівський район\n#Мелітопольський_район #Василівський_район")
+    assert m.kind == END and [loc.name for loc in m.locations] == ["Мелітопольський район", "Василівський район"]
+
+
+def test_hashtag_without_apostrophe_resolves():
+    m = classify("🔴 10:00 Повітряна тривога в Кам'янський район\nСлідкуйте.\n#Камянський_район")
+    assert resolve(m.locations[0]) == ["Дніпропетровська область/Кам'янський район"]
+
+
+def test_kyiv_and_city_zones():
+    assert resolve(classify("🔴 05:51 Повітряна тривога в м. Київ\nСлідкуйте.\n#м_Київ").locations[0]) == ["м. Київ"]
+    kharkiv = classify("🔴 05:24 Повітряна тривога в м. Харків та Харківська територіальна громада\nСлідкуйте.\n"
+                       "#м_Харків_та_Харківська_територіальна_громада")
+    assert kharkiv.kind == START and resolve(kharkiv.locations[0]) == []
+
+
+def test_partial_all_clear_closes_the_oblast_alert():
+    m = classify("🟡 06:22 Відбій тривоги в Дніпропетровська область\n(тривога ще триває у якомусь районі)\n#Дніпропетровська_область")
+    assert m.kind == END and m.locations[0].level == "oblast"
+
+
+def test_escalations_and_other_threats():
+    zap = "#м_Запоріжжя_та_Запорізька_територіальна_громада"
+    assert classify(f"🔴 🔴 08:32 Загроза ударних БпЛА в м. Запоріжжя!\nУвага!\n{zap}").kind == ESCALATION
+    assert classify(f"🔴 🔴 22:45 Загроза керованих авіабомб в м. Запоріжжя!\nУвага!\n{zap}").kind == ESCALATION
+    assert classify(f"🔴 🔴 06:31 Ракетна загроза в м. Запоріжжя!\nУвага!\n{zap}").kind == ESCALATION
+    nik = "#м_Нікополь_та_Нікопольська_територіальна_громада"
+    assert classify(f"🔴 19:12 Загроза артобстрілу! Зараз у м. Нікополь\n{nik}").kind == OTHER
+    assert classify(f"🟢 19:44 Відбій загрози артобстрілу в м. Нікополь.\n{nik}").kind == OTHER
+    assert classify(f"🟢 08:00 Відбій загрози ударних БпЛА в м. Запоріжжя\n{zap}").kind == OTHER
+    assert classify("🟢 Увага!\nБЕЗКОШТОВНА ЕВАКУАЦІЯ").kind == UNKNOWN
+
+
+def test_escalation_inside_alert_keeps_its_times_and_without_alert_is_implied():
+    t0 = datetime(2026, 9, 6, 21, 0)
+    zap = "#м_Запоріжжя_та_Запорізька_територіальна_громада"
+    msgs = [
+        f"🔴 00:00 Повітряна тривога в м. Запоріжжя\nСлідкуйте.\n{zap}",
+        f"🔴 🔴 00:49 Загроза ударних БпЛА в м. Запоріжжя!\nУвага!\n{zap}",
+        f"🟢 02:48 Відбій тривоги в м. Запоріжжя.\nСлідкуйте.\n{zap}",
+        f"🔴 🔴 03:10 Загроза керованих авіабомб в м. Запоріжжя!\nУвага!\n{zap}",
+    ]
+    minutes = [0, 49, 168, 190]
+    h = build_alerts([(i, t0 + timedelta(minutes=m), classify(t)) for i, (t, m) in enumerate(zip(msgs, minutes))])
+    first, second = h.alerts
+    assert (first.started_at, first.finished_at, first.implied) == (t0, t0 + timedelta(minutes=168), False)
+    assert second.implied and second.finished_at is None
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/official_channel.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_official_channel.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Run all tests
+
+```
+uv run pytest -q 2>&1 | tail -15
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.................................                                        [100%]
+33 passed in 0.09s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:07:30 UTC)
+
+All 33 tests pass. Next I'm running the official parser over the 2,000-message sample, to look for unrecognised wording and place names it can't resolve.
+
+<details><summary>Tool call: Bash</summary>
+
+Classify the official-channel sample and check place names
+
+```
+uv run python - <<'EOF'
+import json, collections
+from airalert.official_channel import classify
+from airalert.units import resolve, UnknownPlace
+ms = [json.loads(l) for l in open('/tmp/aaf_peek/survey/sample.jsonl')]
+kinds = collections.Counter(); unknown_places = collections.Counter(); unk = collections.Counter()
+for m in ms:
+    c = classify(m['text']); kinds[c.kind] += 1
+    if c.kind == 'unknown': unk[m['text'].split('\n')[0][:50]] += 1
+    for loc in c.locations:
+        try: resolve(loc)
+        except UnknownPlace as e: unknown_places[str(e)] += 1
+print(kinds); print('unresolved places:', unknown_places.most_common(10)); print('unknown:', unk.most_common(10))
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Counter({'start': 966, 'end': 766, 'other': 198, 'unknown': 41, 'escalation': 29})
+unresolved places: []
+unknown: [('🟠 13:59 БЕЗКОШТОВНА ЕВАКУАЦІЯ', 3), ('🟠 14:00 БЕЗКОШТОВНА ЕВАКУАЦІЯ', 2), ('🟠 04:37 УВАГА!!!', 2), ('Channel created', 1), ('🟠 01:51 УВАГА !!! у Запорізька область', 1), ('🟢 02:53 1 у Запорізька область.', 1), ('🟠 11:35 Увага!', 1), ('🟢 11:57 Увага!', 1), ('🟠 19:11 Увага!', 1), ('🟠 20:08 Увага!', 1)]
+```
+
+</details>
+
+### Assistant (2026-10-12 20:07:35 UTC)
+
+Clean: 966 starts and 766 all-clears, matching the earlier survey exactly. Every place resolves, and the only unknown messages are announcements. Committing step 5.
+
+<details><summary>Tool call: Bash</summary>
+
+Commit step 5 and check the download
+
+```
+git add -A src tests && git commit -q -F - <<'EOF'
+Add official-channel parser and escalation handling
+
+- official_channel.py classifies @air_alert_ua messages by wording and
+  reads places from the hashtag line (raion names are unique nationwide)
+- alerts.py: escalations never change an open alert; with none open they
+  open a flagged implied alert (Q17)
+- units.py: loose name matching (hashtags drop apostrophes and hyphens)
+- On the 2,000-message sample: 966 starts, 766 all-clears, every place
+  resolves, unknowns are only announcements
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+e210ebb Add official-channel parser and escalation handling
+  90,000 saved (up to 2023-10-03), 93 msg/s, about 101 min left
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Add pandas, scikit-learn and LightGBM dependencies
+
+```
+uv add pandas pyarrow numpy scikit-learn lightgbm 2>&1 | tail -6
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+ + pyarrow==26.0.0
+ + python-dateutil==2.9.0.post0
+ + scikit-learn==1.9.1
+ + scipy==1.18.1
+ + six==1.17.0
+ + threadpoolctl==3.7.0
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/labels.py`
+
+```
+"""From raw channel messages to alert periods per unit: the source of labels and alert-history features.
+
+Pipeline: messages → classified (alarm_signal / official_channel) → alert periods per place (alerts.py)
+→ units (units.py: oblast-wide alerts cover all raions of the oblast, city zones other than Kyiv are dropped)
+→ periods merged per unit. A unit is on alert whenever any alert covering it is on, so overlapping periods
+(an oblast-wide alert plus the raion's own) are merged. Merging never moves a start later or an end
+earlier, so asking "was the unit on alert at t, and since when?" stays answerable from data before t.
+"""
+
+import json
+from collections import Counter
+
+import pandas as pd
+
+from airalert import alarm_signal, official_channel
+from airalert.alerts import build_alerts
+from airalert.settings import RAW_DIR, ROOT
+from airalert.units import UnknownPlace, resolve, units
+
+CLASSIFIERS = {"UkraineAlarmSignal": alarm_signal.classify, "air_alert_ua": official_channel.classify}
+INTERIM_DIR = ROOT / "data" / "interim"
+
+
+def read_channel(channel: str) -> list[dict]:
+    messages = []
+    for path in sorted((RAW_DIR / "telegram" / channel).glob("*.jsonl")):
+        with path.open(encoding="utf-8") as f:
+            messages.extend(json.loads(line) for line in f)
+    return sorted(messages, key=lambda m: m["id"])
+
+
+def unit_alerts_from_messages(messages: list[dict], classify) -> tuple[pd.DataFrame, Counter]:
+    """One row per (alert, unit it covers). `finished_at` is NaT for alerts still open when the data ends."""
+    parsed = [(m["id"], pd.Timestamp(m["date"]), classify(m["text"])) for m in messages if m.get("text")]
+    history = build_alerts(parsed)
+    excluded = {u.unit_id for u in units() if u.excluded}
+    rows, stats = [], history.stats
+    for alert in history.alerts:
+        try:
+            unit_ids = resolve(alert.location)
+        except UnknownPlace as error:
+            stats[f"unknown place: {error}"] += 1
+            continue
+        for unit_id in unit_ids:
+            if unit_id in excluded:
+                continue
+            rows.append({
+                "unit_id": unit_id,
+                "started_at": alert.started_at,
+                "finished_at": alert.finished_at,
+                "place_level": alert.location.level,
+                "place": alert.location.name,
+                "max_color": alert.max_color,
+                "implied": alert.implied,
+                "restarts": alert.restarts,
+            })
+    columns = ["unit_id", "started_at", "finished_at", "place_level", "place", "max_color", "implied", "restarts"]
+    frame = pd.DataFrame(rows, columns=columns)
+    for column in ("started_at", "finished_at"):
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    return frame, stats
+
+
+def merge_per_unit(alerts: pd.DataFrame, data_end: pd.Timestamp) -> pd.DataFrame:
+    """Union of alert periods per unit. Still-open alerts run to `data_end` and are flagged."""
+    open_end = alerts["finished_at"].isna()
+    alerts = alerts.assign(finished_at=alerts["finished_at"].fillna(data_end), open_at_end=open_end)
+    merged = []
+    for unit_id, group in alerts.sort_values("started_at").groupby("unit_id", sort=True):
+        start = end = None
+        is_open = False
+        for row in group.itertuples(index=False):
+            if start is not None and row.started_at <= end:
+                end, is_open = max(end, row.finished_at), is_open or row.open_at_end
+                continue
+            if start is not None:
+                merged.append((unit_id, start, end, is_open))
+            start, end, is_open = row.started_at, row.finished_at, row.open_at_end
+        if start is not None:
+            merged.append((unit_id, start, end, is_open))
+    return pd.DataFrame(merged, columns=["unit_id", "started_at", "finished_at", "open_at_end"])
+
+
+def build(channel: str) -> None:
+    """Write data/interim/<channel>_alerts.parquet (per alert and unit) and <channel>_merged.parquet."""
+    messages = read_channel(channel)
+    if not messages:
+        raise SystemExit(f"No downloaded messages for {channel}: run `download-telegram {channel}` first.")
+    alerts, stats = unit_alerts_from_messages(messages, CLASSIFIERS[channel])
+    data_end = pd.Timestamp(messages[-1]["date"])
+    merged = merge_per_unit(alerts, data_end)
+    INTERIM_DIR.mkdir(parents=True, exist_ok=True)
+    alerts.to_parquet(INTERIM_DIR / f"{channel}_alerts.parquet", index=False)
+    merged.assign(data_end=data_end).to_parquet(INTERIM_DIR / f"{channel}_merged.parquet", index=False)
+    print(f"{channel}: {len(messages):,} messages up to {data_end:%Y-%m-%d %H:%M} UTC → "
+          f"{len(alerts):,} unit alerts, {len(merged):,} merged periods for {merged.unit_id.nunique()} units")
+    for name, count in stats.most_common():
+        print(f"  {count:6,}  {name}")
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_labels.py`
+
+```
+import pandas as pd
+
+from airalert.alarm_signal import classify
+from airalert.labels import merge_per_unit, unit_alerts_from_messages
+
+T = lambda hhmm: f"2026-09-06T{hhmm}:00+00:00"  # noqa: E731
+OBLAST_START = "🚨 Сумська обл.\nПовітряна тривога. Прямуйте в укриття!"
+OBLAST_END = "🟢 Сумська обл.\nВідбій тривоги. Будьте обережні!"
+RAION_START = "🚨 Сумський район (Сумська обл.)\nПовітряна тривога. Прямуйте в укриття!"
+RAION_END = "🟢 Сумський район (Сумська обл.)\nВідбій тривоги. Будьте обережні!"
+
+
+def messages(*items):
+    return [{"id": i, "date": d, "text": t} for i, (d, t) in enumerate(items)]
+
+
+def test_oblast_alert_covers_every_raion_of_the_oblast():
+    alerts, _ = unit_alerts_from_messages(messages((T("10:00"), OBLAST_START), (T("10:30"), OBLAST_END)), classify)
+    assert len(alerts) == 5 and set(alerts.place_level) == {"oblast"}
+
+
+def test_luhansk_is_excluded_and_unknown_places_are_counted():
+    msgs = messages((T("10:00"), "🚨 Луганська обл.\nПовітряна тривога. Прямуйте в укриття!"),
+                    (T("10:05"), "🚨 Вигаданий район (Сумська обл.)\nПовітряна тривога. Прямуйте в укриття!"))
+    alerts, stats = unit_alerts_from_messages(msgs, classify)
+    assert alerts.empty and any(k.startswith("unknown place") for k in stats)
+
+
+def test_overlapping_oblast_and_raion_alerts_merge_per_unit():
+    msgs = messages((T("10:00"), OBLAST_START), (T("10:20"), RAION_START), (T("10:30"), OBLAST_END), (T("11:00"), RAION_END))
+    alerts, _ = unit_alerts_from_messages(msgs, classify)
+    merged = merge_per_unit(alerts, pd.Timestamp(T("12:00")))
+    sumy = merged[merged.unit_id == "Сумська область/Сумський район"]
+    assert len(sumy) == 1
+    assert (sumy.started_at.iloc[0], sumy.finished_at.iloc[0]) == (pd.Timestamp(T("10:00")), pd.Timestamp(T("11:00")))
+    other = merged[merged.unit_id == "Сумська область/Шосткинський район"]
+    assert other.finished_at.iloc[0] == pd.Timestamp(T("10:30"))
+
+
+def test_open_alert_runs_to_data_end_and_is_flagged():
+    alerts, _ = unit_alerts_from_messages(messages((T("10:00"), RAION_START)), classify)
+    merged = merge_per_unit(alerts, pd.Timestamp(T("12:00")))
+    assert merged.finished_at.iloc[0] == pd.Timestamp(T("12:00")) and merged.open_at_end.iloc[0]
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/labels.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_labels.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Run all tests
+
+```
+uv run pytest -q 2>&1 | tail -15
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.....................................                                    [100%]
+37 passed in 7.14s
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Add build-labels command and try it on data downloaded so far
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/__main__.py"); s = p.read_text()
+s = s.replace("from airalert import telegram\n", "from airalert import labels, telegram\n")
+s = s.replace('''    args = parser.parse_args()''', '''    build = commands.add_parser("build-labels", help="turn downloaded channel messages into alert periods per unit")
+    build.add_argument("channels", nargs="*", default=list(labels.CLASSIFIERS),
+                       help=f"channels to parse (default: {' '.join(labels.CLASSIFIERS)})")
+    args = parser.parse_args()''')
+s = s.replace('''        for channel in args.channels:
+            telegram.download(channel)''', '''        for channel in args.channels:
+            telegram.download(channel)
+    elif args.command == "build-labels":
+        for channel in args.channels:
+            labels.build(channel)''')
+p.write_text(s)
+EOF
+time uv run python -m airalert build-labels UkraineAlarmSignal
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+UkraineAlarmSignal: 103,696 messages up to 2023-12-18 16:12 UTC → 159,411 unit alerts, 159,411 merged periods for 119 units
+   1,024  restart while on alert
+     182  all-clear with no open alert
+      20  continuation with no open alert
+      11  retracted
+       3  retraction with no open alert
+uv run python -m airalert build-labels UkraineAlarmSignal  2.20s user 0.12s system 77% cpu 3.004 total
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Commit the label builder
+
+```
+git add -A pyproject.toml uv.lock src tests && git commit -q -F - <<'EOF'
+Add build-labels: alert periods per unit from downloaded messages
+
+- labels.py: messages -> classified -> alert periods per place -> units
+  (oblast-wide alerts cover all raions, Luhansk excluded, city zones other
+  than Kyiv dropped) -> merged per unit; writes data/interim parquet files
+- Dependencies: pandas, pyarrow, numpy, scikit-learn, lightgbm
+- First run on the partial download (to 2023-12): 119 units, every place
+  name resolved
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+21aab08 Add build-labels: alert periods per unit from downloaded messages
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/features.py`
+
+```
+"""Features and labels on the hourly grid (ADR-0001, DESIGN.md section 3).
+
+One row per (unit, forecast time t), where t is a whole hour. Every feature uses only what was known
+strictly before t:
+- an alert's start is known from its start time; its end only from its end time, so an alert still on at t
+  counts as ongoing, however long it later lasted;
+- per-hour aggregates are taken only over hours that ended by t.
+Labels look forward: `label_h{h}` is 1 if the unit is on alert at any moment of the hour starting at
+t + (h - 1) hours (Q7: any overlap counts). Labels whose hour ends after the data ends are missing.
+
+`reference_features` computes the same alert-history features naively, straight from the alert periods
+filtered by what was known at t. Tests check that both agree and that adding or changing data after t never
+changes a feature at t.
+"""
+
+import numpy as np
+import pandas as pd
+
+HORIZONS = (1, 2, 3, 6, 12, 24)  # Q10
+KYIV = "Europe/Kyiv"
+HOUR = pd.Timedelta(hours=1)
+LOOKBACKS_H = (1, 3, 6, 24)  # for counting alert starts
+SHARE_WINDOWS_H = (24, 168)  # for the share of time on alert
+CAP_MINUTES = 7 * 24 * 60  # "minutes since" features are capped at a week
+
+UNIT_FEATURES = (
+    ["on_alert", "alert_minutes_so_far", "minutes_since_all_clear"]
+    + [f"starts_last_{h}h" for h in LOOKBACKS_H]
+    + [f"alert_share_last_{h}h" for h in SHARE_WINDOWS_H]
+)
+
+
+def _seconds(times) -> np.ndarray:
+    return pd.DatetimeIndex(times).as_unit("s").asi8.astype(np.int64)
+
+
+class UnitTimeline:
+    """One unit's merged alert periods, answering questions about any set of times."""
+
+    def __init__(self, starts, ends):
+        self.s = _seconds(starts)
+        self.e = _seconds(ends)
+        self.done = np.concatenate([[0], np.cumsum(self.e - self.s)])  # total alert seconds of periods before i
+
+    def alert_seconds_before(self, x: np.ndarray) -> np.ndarray:
+        """Seconds on alert in (-inf, x), counting an ongoing alert only up to x."""
+        finished = np.searchsorted(self.e, x, side="right")  # periods that ended by x
+        partial = np.zeros_like(x)
+        has_next = finished < len(self.s)
+        idx = np.minimum(finished, len(self.s) - 1)
+        if len(self.s):
+            partial = np.where(has_next & (self.s[idx] < x), x - self.s[idx], 0)
+        return self.done[finished] + partial
+
+    def state_at(self, x: np.ndarray):
+        """For each x: on alert (all-clear not yet posted before x), start of that alert, end of the last finished one."""
+        last = np.searchsorted(self.s, x, side="left") - 1  # last period that started strictly before x
+        valid = last >= 0
+        idx = np.maximum(last, 0)
+        on = valid & (self.e[idx] >= x) if len(self.s) else np.zeros_like(x, dtype=bool)
+        start = np.where(on, self.s[idx] if len(self.s) else 0, -1)
+        last_end = np.where(valid & ~on, self.e[idx] if len(self.s) else 0, -1)
+        return on, start, last_end
+
+    def starts_between(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        return np.searchsorted(self.s, b, side="left") - np.searchsorted(self.s, a, side="left")
+
+
+def _unit_block(timeline: UnitTimeline, t: np.ndarray, slot_active: np.ndarray, k0: int) -> dict:
+    on, start, last_end = timeline.state_at(t)
+    out = {
+        "on_alert": on.astype(np.int8),
+        "alert_minutes_so_far": np.where(on, (t - start) / 60, 0.0),
+        "minutes_since_all_clear": np.where(on, 0.0, np.where(last_end >= 0, np.minimum((t - last_end) / 60, CAP_MINUTES), CAP_MINUTES)),
+    }
+    for h in LOOKBACKS_H:
+        out[f"starts_last_{h}h"] = timeline.starts_between(t - h * 3600, t)
+    before_t = timeline.alert_seconds_before(t)
+    for h in SHARE_WINDOWS_H:
+        out[f"alert_share_last_{h}h"] = (before_t - timeline.alert_seconds_before(t - h * 3600)) / (h * 3600)
+    k = np.arange(len(t)) + k0  # index of the hour starting at t in `slot_active`
+    for h in HORIZONS:
+        target = k + h - 1
+        out[f"label_h{h}"] = slot_active[target] if target.max() < len(slot_active) else np.where(
+            target < len(slot_active), slot_active[np.minimum(target, len(slot_active) - 1)], np.nan)
+        for lag, name in ((24, "day"), (168, "week")):  # was the target hour on alert a day / a week earlier?
+            out[f"target_active_{name}_ago_h{h}"] = slot_active[target - lag]
+    return out
+
+
+def build_grid(merged: pd.DataFrame, start, end, data_end) -> pd.DataFrame:
+    """Hourly rows for t in [start, end) for every unit in `merged` (columns unit_id, started_at, finished_at)."""
+    start, end, data_end = (pd.Timestamp(x).tz_convert("UTC") for x in (start, end, data_end))
+    hours = pd.date_range(start - 168 * HOUR, end + 24 * HOUR, freq="h", inclusive="left")  # with lookback and lookahead
+    k0 = 168
+    edges = _seconds(hours.append(pd.DatetimeIndex([hours[-1] + HOUR])))
+    t = edges[k0:k0 + int((end - start) / HOUR)]
+    complete = edges[1:] <= _seconds([data_end])[0]  # hours that ended before the data did
+
+    blocks = []
+    for unit_id, group in merged.sort_values("started_at").groupby("unit_id", sort=True):
+        timeline = UnitTimeline(group.started_at, group.finished_at)
+        seconds = timeline.alert_seconds_before(edges)
+        slot_active = np.where(complete, (np.diff(seconds) > 0).astype(float), np.nan)
+        block = _unit_block(timeline, t, slot_active, k0)
+        block["unit_id"] = unit_id
+        block["t"] = pd.to_datetime(t, unit="s", utc=True)
+        blocks.append(pd.DataFrame(block))
+    grid = pd.concat(blocks, ignore_index=True)
+    return _add_cross_unit_and_calendar(grid)
+
+
+def _add_cross_unit_and_calendar(grid: pd.DataFrame) -> pd.DataFrame:
+    grid["oblast"] = grid["unit_id"].str.split("/").str[0]
+    by_t = grid.groupby("t")
+    grid["national_on_alert_share"] = by_t["on_alert"].transform("mean")
+    grid["national_starts_last_1h"] = by_t["starts_last_1h"].transform("sum")
+    by_oblast = grid.groupby(["t", "oblast"])
+    grid["oblast_on_alert_share"] = by_oblast["on_alert"].transform("mean")  # same-oblast feature (Q11)
+    local = grid["t"].dt.tz_convert(KYIV)
+    grid["hour"], grid["weekday"], grid["month"] = local.dt.hour, local.dt.weekday, local.dt.month
+    for h in HORIZONS:
+        target = (grid["t"] + (h - 1) * HOUR).dt.tz_convert(KYIV)
+        grid[f"target_hour_h{h}"], grid[f"target_weekday_h{h}"] = target.dt.hour, target.dt.weekday
+    return grid
+
+
+def reference_features(merged: pd.DataFrame, unit_id: str, t: pd.Timestamp) -> dict:
+    """The alert-history features for one unit at one time, computed naively from what was known before t."""
+    periods = merged[(merged.unit_id == unit_id) & (merged.started_at < t)]  # starts known before t
+    ongoing = periods[periods.finished_at >= t]  # no all-clear before t
+    ended = periods[periods.finished_at < t]
+    on = len(ongoing) > 0
+    out = {
+        "on_alert": int(on),
+        "alert_minutes_so_far": (t - ongoing.started_at.min()).total_seconds() / 60 if on else 0.0,
+        "minutes_since_all_clear": 0.0 if on else min((t - ended.finished_at.max()).total_seconds() / 60, CAP_MINUTES)
+        if len(ended) else float(CAP_MINUTES),
+    }
+    for h in LOOKBACKS_H:
+        out[f"starts_last_{h}h"] = int((periods.started_at >= t - h * HOUR).sum())
+    for h in SHARE_WINDOWS_H:
+        window_start = t - h * HOUR
+        clipped_end = periods.finished_at.where(periods.finished_at < t, t)  # an ongoing alert counts only up to t
+        overlap = (clipped_end.clip(lower=window_start) - periods.started_at.clip(lower=window_start)).dt.total_seconds()
+        out[f"alert_share_last_{h}h"] = overlap.clip(lower=0).sum() / (h * 3600)
+    return out
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_features.py`
+
+```
+"""The no-leakage tests (ADR-0001): features agree with the naive as-of computation, and data after t never
+changes a feature at t."""
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from airalert.features import HORIZONS, UNIT_FEATURES, build_grid, reference_features
+
+START = pd.Timestamp("2026-08-01 00:00", tz="UTC")
+END = pd.Timestamp("2026-08-08 00:00", tz="UTC")
+DATA_END = pd.Timestamp("2026-08-10 00:00", tz="UTC")
+
+
+def random_periods(seed: int, units=("A/a", "A/b", "B/c"), n=60) -> pd.DataFrame:
+    rng = np.random.default_rng(seed)
+    rows = []
+    for unit in units:
+        t = START - pd.Timedelta(days=9)
+        for _ in range(n):
+            t += pd.Timedelta(minutes=int(rng.integers(5, 600)))
+            end = t + pd.Timedelta(minutes=int(rng.integers(1, 400)), seconds=int(rng.integers(0, 60)))
+            rows.append((unit, t, end))
+            t = end
+    return pd.DataFrame(rows, columns=["unit_id", "started_at", "finished_at"])
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_fast_features_match_the_naive_as_of_computation(seed):
+    merged = random_periods(seed)
+    grid = build_grid(merged, START, END, DATA_END)
+    rng = np.random.default_rng(seed)
+    for i in rng.choice(len(grid), size=60, replace=False):
+        row = grid.iloc[i]
+        expected = reference_features(merged, row.unit_id, row.t)
+        for name in UNIT_FEATURES:
+            assert row[name] == pytest.approx(expected[name], abs=1e-6), (name, row.unit_id, row.t)
+
+
+def change_everything_after(merged: pd.DataFrame, cutoff: pd.Timestamp, seed: int) -> pd.DataFrame:
+    """Rewrite the future: alerts that started after `cutoff` are replaced, and ends after it are moved."""
+    rng = np.random.default_rng(seed)
+    past = merged[merged.started_at < cutoff].copy()
+    later_end = past.finished_at >= cutoff
+    past.loc[later_end, "finished_at"] = cutoff + pd.to_timedelta(rng.integers(1, 2000, later_end.sum()), unit="min")
+    future = random_periods(seed + 100)
+    future = future[future.started_at > past.finished_at.max() + pd.Timedelta(minutes=1)]
+    return pd.concat([past, future], ignore_index=True)
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+def test_data_after_t_never_changes_features_at_t(seed):
+    merged = random_periods(seed)
+    cutoff = pd.Timestamp("2026-08-05 13:00", tz="UTC")
+    feature_columns = [c for c in build_grid(merged, START, END, DATA_END).columns if not c.startswith("label_")]
+    original = build_grid(merged, START, END, DATA_END)
+    rewritten = build_grid(change_everything_after(merged, cutoff, seed), START, END, DATA_END)
+    known = original.t <= cutoff
+    pd.testing.assert_frame_equal(original.loc[known, feature_columns].reset_index(drop=True),
+                                  rewritten.loc[known, feature_columns].reset_index(drop=True))
+    assert not original.loc[known, "label_h24"].equals(rewritten.loc[known, "label_h24"])  # labels do look ahead
+
+
+def test_labels_any_overlap_and_missing_after_data_end():
+    merged = pd.DataFrame({"unit_id": ["A/a"], "started_at": [pd.Timestamp("2026-08-03 10:59:30", tz="UTC")],
+                           "finished_at": [pd.Timestamp("2026-08-03 11:00:10", tz="UTC")]})
+    grid = build_grid(merged, START, END, pd.Timestamp("2026-08-07 12:00", tz="UTC")).set_index("t")
+    assert grid.loc["2026-08-03 10:00", "label_h1"] == 1  # 30 s overlap counts
+    assert grid.loc["2026-08-03 11:00", "label_h1"] == 1
+    assert grid.loc["2026-08-03 12:00", "label_h1"] == 0
+    assert np.isnan(grid.loc["2026-08-07 12:00", "label_h1"])  # that hour is after the data ends
+    assert set(f"label_h{h}" for h in HORIZONS) <= set(grid.columns)
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/features.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_features.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Run the feature and leakage tests
+
+```
+uv run pytest -q tests/test_features.py 2>&1 | tail -30
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.......                                                                  [100%]
+7 passed in 0.64s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:10:43 UTC)
+
+All 7 pass on the first run, which deserves suspicion. I'll deliberately break the code by planting a leak (letting a feature see an alert's future end), to confirm the tests catch it.
+
+<details><summary>Tool call: Bash</summary>
+
+Plant a leak to confirm the tests catch it, then restore
+
+```
+cp src/airalert/features.py /tmp/aaf_peek/features_backup.py && sed -i '' 's|"alert_minutes_so_far": np.where(on, (t - start) / 60, 0.0),|"alert_minutes_so_far": np.where(on, (timeline.e[np.maximum(np.searchsorted(timeline.s, t, side="left") - 1, 0)] - start) / 60, 0.0),|' src/airalert/features.py && grep -c "timeline.e\[np.maximum" src/airalert/features.py && uv run pytest -q tests/test_features.py 2>&1 | grep -E "passed|failed|FAILED" | head -8; cp /tmp/aaf_peek/features_backup.py src/airalert/features.py && uv run pytest -q 2>&1 | tail -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+1
+E                 comparison failed
+E                 comparison failed
+E                 comparison failed
+FAILED tests/test_features.py::test_fast_features_match_the_naive_as_of_computation[1]
+FAILED tests/test_features.py::test_fast_features_match_the_naive_as_of_computation[2]
+FAILED tests/test_features.py::test_fast_features_match_the_naive_as_of_computation[3]
+FAILED tests/test_features.py::test_data_after_t_never_changes_features_at_t[1]
+FAILED tests/test_features.py::test_data_after_t_never_changes_features_at_t[2]
+44 passed in 0.59s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:10:49 UTC)
+
+The tests work: the planted leak failed both the comparison test and the future-data test. With the code restored, all 44 pass. Next, a speed check on real data, using what's downloaded so far.
+
+<details><summary>Tool call: Bash</summary>
+
+Build the grid on real partial data and time it
+
+```
+uv run python - <<'EOF'
+import time, pandas as pd
+from airalert.features import build_grid
+m = pd.read_parquet("data/interim/UkraineAlarmSignal_merged.parquet")
+data_end = m.data_end.iloc[0]
+t0 = time.time()
+g = build_grid(m, "2023-03-01 00:00+00:00", "2023-12-01 00:00+00:00", data_end)
+print(f"{len(g):,} rows × {g.shape[1]} columns in {time.time()-t0:.1f}s; memory {g.memory_usage(deep=True).sum()/1e6:.0f} MB")
+print(g[["on_alert","label_h1","label_h24"]].mean().round(3).to_dict())
+print("P(alert next hour | on alert now) =", round(g[g.on_alert==1].label_h1.mean(),3), "| P(... | calm) =", round(g[g.on_alert==0].label_h1.mean(),3))
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+785,400 rows × 48 columns in 1.0s; memory 409 MB
+{'on_alert': 0.092, 'label_h1': 0.172, 'label_h24': 0.172}
+P(alert next hour | on alert now) = 1.0 | P(... | calm) = 0.088
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Make unit columns categorical, run tests, commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/features.py"); s = p.read_text()
+old = '    grid["oblast"] = grid["unit_id"].str.split("/").str[0]\n'
+assert old in s
+s = s.replace(old, '    grid["oblast"] = grid["unit_id"].str.split("/").str[0].astype("category")\n    grid["unit_id"] = grid["unit_id"].astype("category")\n')
+p.write_text(s)
+EOF
+uv run pytest -q 2>&1 | tail -1 && git add -A src tests && git commit -q -F - <<'EOF'
+Add hourly features and labels with no-leakage tests (ADR-0001)
+
+- features.py builds one row per (unit, whole hour t) with alert-history
+  features known before t (on alert, minutes so far, minutes since the
+  all-clear, starts in the last 1/3/6/24 h, share of time on alert in the
+  last day/week), same-oblast and national shares, calendar features, the
+  target hour a day and a week earlier, and labels for horizons 1, 2, 3, 6,
+  12 and 24 h (any overlap; missing after the data ends)
+- reference_features computes the same features naively from what was
+  known at t; tests check both agree and that rewriting data after t never
+  changes a feature at t. A deliberately planted leak fails both tests.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+44 passed in 0.60s
+74caac6 Add hourly features and labels with no-leakage tests (ADR-0001)
+  110,000 saved (up to 2024-01-16), 93 msg/s, about 98 min left
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/models.py`
+
+```
+"""Forecasting models for one horizon: two baselines, logistic regression and LightGBM.
+
+Every model has `fit(frame, y)` and `predict(frame) -> probability of an alert in the target hour`.
+`frame` holds the features of `feature_columns()`, with the horizon-specific ones already renamed
+(target_hour, target_weekday, target_active_day_ago, target_active_week_ago).
+"""
+
+import numpy as np
+import pandas as pd
+
+from airalert.features import UNIT_FEATURES
+
+NUMERIC = UNIT_FEATURES + [
+    "national_on_alert_share", "national_starts_last_1h", "oblast_on_alert_share",
+    "target_active_day_ago", "target_active_week_ago",
+]
+CALENDAR = ["target_hour", "target_weekday", "month"]
+CATEGORICAL = ["unit_id", "oblast"]
+
+
+def feature_columns() -> list[str]:
+    return NUMERIC + CALENDAR + CATEGORICAL
+
+
+class Persistence:
+    """'Same as now': alert in the target hour if on alert at t."""
+
+    name = "persistence"
+
+    def fit(self, frame, y):
+        return self
+
+    def predict(self, frame):
+        return frame["on_alert"].to_numpy(dtype=float)
+
+
+class HistoricalRate:
+    """Share of the last 4 weeks of training hours with an alert, per unit, target hour and weekday."""
+
+    name = "historical_rate"
+
+    def __init__(self, window=pd.Timedelta(days=28)):
+        self.window = window
+
+    def fit(self, frame, y):
+        recent = frame["t"] >= frame["t"].max() - self.window
+        data = frame.loc[recent, ["unit_id", "target_hour", "target_weekday"]].assign(y=np.asarray(y)[recent.to_numpy()])
+        self.by_slot = data.groupby(["unit_id", "target_hour", "target_weekday"], observed=True)["y"].mean()
+        self.by_unit = data.groupby("unit_id", observed=True)["y"].mean()
+        self.overall = data["y"].mean()
+        return self
+
+    def predict(self, frame):
+        keys = pd.MultiIndex.from_frame(frame[["unit_id", "target_hour", "target_weekday"]].astype(object))
+        p = self.by_slot.reindex(keys).to_numpy()
+        p = np.where(np.isnan(p), self.by_unit.reindex(frame["unit_id"].astype(object)).to_numpy(), p)
+        return np.where(np.isnan(p), self.overall, p)
+
+
+class Logistic:
+    name = "logistic"
+
+    def fit(self, frame, y):
+        from sklearn.compose import ColumnTransformer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+        encode = ColumnTransformer([
+            ("numeric", StandardScaler(), NUMERIC),
+            ("onehot", OneHotEncoder(handle_unknown="ignore"), CALENDAR + ["unit_id"]),
+        ])
+        self.model = make_pipeline(encode, LogisticRegression(max_iter=300))
+        self.model.fit(frame, y)
+        return self
+
+    def predict(self, frame):
+        return self.model.predict_proba(frame)[:, 1]
+
+
+class LightGBM:
+    name = "lightgbm"
+
+    def __init__(self, **params):
+        self.params = {"n_estimators": 300, "learning_rate": 0.05, "num_leaves": 63, "min_child_samples": 100,
+                       "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8, "verbose": -1, **params}
+
+    def fit(self, frame, y):
+        import lightgbm as lgb
+
+        self.model = lgb.LGBMClassifier(**self.params)
+        self.model.fit(frame[feature_columns()], y, categorical_feature=CATEGORICAL)
+        return self
+
+    def predict(self, frame):
+        return self.model.predict_proba(frame[feature_columns()])[:, 1]
+
+
+MODELS = {m.name: m for m in (Persistence, HistoricalRate, Logistic, LightGBM)}
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/backtest.py`
+
+```
+"""Walk-forward backtest (DESIGN.md sections 3 and 6, Q9).
+
+For every week of the evaluation period, each model is trained on rows known before the week starts and then
+forecasts every hour of that week. A training row for time t and horizon h is only used if its label hour
+ended by the cutoff (t + h hours <= cutoff), so no outcome after the cutoff reaches training.
+"""
+
+import time
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import average_precision_score, brier_score_loss, log_loss, roc_auc_score
+
+from airalert.features import HORIZONS, HOUR, KYIV
+from airalert.models import MODELS, feature_columns
+
+# Pinned dates (Q4, Q9), Kyiv time.
+TRAIN_START = pd.Timestamp("2025-08-01", tz=KYIV)
+PERIODS = {
+    "validation": (pd.Timestamp("2026-08-17", tz=KYIV), pd.Timestamp("2026-09-14", tz=KYIV)),
+    "test": (pd.Timestamp("2026-09-14", tz=KYIV), pd.Timestamp("2026-10-12", tz=KYIV)),
+}
+
+
+def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
+    """The grid with horizon-h columns renamed to the generic names the models use."""
+    renamed = grid.rename(columns={
+        f"target_hour_h{h}": "target_hour", f"target_weekday_h{h}": "target_weekday",
+        f"target_active_day_ago_h{h}": "target_active_day_ago", f"target_active_week_ago_h{h}": "target_active_week_ago",
+        f"label_h{h}": "label",
+    })
+    return renamed[["t", "label", *feature_columns()]]
+
+
+def weeks(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    edges = pd.date_range(start, end, freq="7D")
+    return list(zip(edges[:-1], edges[1:]))
+
+
+def run(grid: pd.DataFrame, period: str, model_names, horizons=HORIZONS, train_start=TRAIN_START) -> pd.DataFrame:
+    """Predictions for every (model, horizon, unit, hour) of the period."""
+    start, end = PERIODS[period] if isinstance(period, str) else period
+    week_list = weeks(start, end)
+    total_fits = len(week_list) * len(horizons) * len(model_names)
+    results, done, started = [], 0, time.monotonic()
+    for week_start, week_end in week_list:
+        for h in horizons:
+            frame = horizon_frame(grid, h)
+            train = frame[(frame.t >= train_start) & (frame.t + h * HOUR <= week_start) & frame.label.notna()]
+            test = frame[(frame.t >= week_start) & (frame.t < week_end) & frame.label.notna()]
+            assert (train.t + h * HOUR <= week_start).all()  # the label cutoff
+            for name in model_names:
+                model = MODELS[name]().fit(train, train.label.to_numpy(dtype=int))
+                results.append(pd.DataFrame({
+                    "model": name, "horizon": h, "week": week_start, "unit_id": test.unit_id.astype(str).to_numpy(),
+                    "t": test.t.to_numpy(), "on_alert": test.on_alert.to_numpy(), "y": test.label.to_numpy(dtype=int),
+                    "p": np.clip(model.predict(test), 0, 1),
+                }))
+                done += 1
+                if done == 1 or done % 10 == 0:
+                    per_fit = (time.monotonic() - started) / done
+                    print(f"  {done}/{total_fits} fits, about {per_fit * (total_fits - done) / 60:.0f} min left", flush=True)
+    return pd.concat(results, ignore_index=True)
+
+
+def near_permanent_units(grid: pd.DataFrame, start, end, threshold=0.9) -> set[str]:
+    """Units on alert in at least 90% of the period's hours (Q8). Decided on the validation period only."""
+    period = grid[(grid.t >= start) & (grid.t < end)]
+    share = period.groupby("unit_id", observed=True)["on_alert"].mean()
+    return set(share[share >= threshold].index.astype(str))
+
+
+def _metrics(y, p) -> dict:
+    p_clip = np.clip(p, 1e-4, 1 - 1e-4)
+    both = len(np.unique(y)) == 2
+    return {
+        "n": len(y), "base_rate": float(np.mean(y)), "brier": brier_score_loss(y, p), "log_loss": log_loss(y, p_clip, labels=[0, 1]),
+        "roc_auc": roc_auc_score(y, p) if both else np.nan, "pr_auc": average_precision_score(y, p) if both else np.nan,
+    }
+
+
+def score(predictions: pd.DataFrame, exclude_units=frozenset()) -> pd.DataFrame:
+    """Metrics per model and horizon, for all rows and separately for units calm / on alert at t."""
+    rows = []
+    kept = predictions[~predictions.unit_id.isin(exclude_units)]
+    for (model, h), group in kept.groupby(["model", "horizon"]):
+        for subset, part in (("all", group), ("calm at t", group[group.on_alert == 0]), ("on alert at t", group[group.on_alert == 1])):
+            if len(part):
+                rows.append({"model": model, "horizon": h, "subset": subset, **_metrics(part.y.to_numpy(), part.p.to_numpy())})
+    return pd.DataFrame(rows)
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_backtest.py`
+
+```
+import numpy as np
+import pandas as pd
+
+from airalert.backtest import near_permanent_units, run, score
+from airalert.features import build_grid
+
+START = pd.Timestamp("2026-07-01", tz="UTC")
+PERIOD = (pd.Timestamp("2026-08-03", tz="UTC"), pd.Timestamp("2026-08-17", tz="UTC"))
+
+
+def synthetic_periods(seed=0) -> pd.DataFrame:
+    """Units with a daily rhythm: alerts tend to start around 02:00, so time of day is predictable."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for unit in ("A/a", "A/b", "B/c", "B/d"):
+        for day in pd.date_range("2026-06-20", "2026-08-25", freq="D", tz="UTC"):
+            if rng.random() < 0.8:
+                start = day + pd.Timedelta(hours=2, minutes=int(rng.integers(0, 60)))
+                rows.append((unit, start, start + pd.Timedelta(minutes=int(rng.integers(20, 180)))))
+    rows.append(("B/d", pd.Timestamp("2026-06-01", tz="UTC"), pd.Timestamp("2026-09-01", tz="UTC")))  # always on alert
+    return pd.DataFrame(rows, columns=["unit_id", "started_at", "finished_at"])
+
+
+def test_walk_forward_runs_every_model_and_beats_nothing_silly():
+    grid = build_grid(synthetic_periods(), START, PERIOD[1], pd.Timestamp("2026-08-26", tz="UTC"))
+    predictions = run(grid, PERIOD, ["persistence", "historical_rate", "logistic", "lightgbm"], horizons=(1, 6), train_start=START)
+    assert set(predictions.model) == {"persistence", "historical_rate", "logistic", "lightgbm"}
+    assert predictions.p.between(0, 1).all()
+    assert predictions.week.nunique() == 2 and predictions.t.min() >= PERIOD[0] and predictions.t.max() < PERIOD[1]
+    metrics = score(predictions).set_index(["model", "horizon", "subset"])
+    # At 6 h ahead, the daily rhythm makes the historical rate far better than "same as now".
+    assert metrics.loc[("historical_rate", 6, "all"), "brier"] < metrics.loc[("persistence", 6, "all"), "brier"]
+
+
+def test_near_permanent_units_and_excluding_them():
+    grid = build_grid(synthetic_periods(), START, PERIOD[1], pd.Timestamp("2026-08-26", tz="UTC"))
+    assert near_permanent_units(grid, *PERIOD) == {"B/d"}
+    predictions = run(grid, PERIOD, ["persistence"], horizons=(1,), train_start=START)
+    assert score(predictions, exclude_units={"B/d"}).n.sum() < score(predictions).n.sum()
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/models.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/backtest.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_backtest.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Run the backtest tests
+
+```
+uv run pytest -q tests/test_backtest.py 2>&1 | tail -30
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+_________________ test_near_permanent_units_and_excluding_them _________________
+
+    def test_near_permanent_units_and_excluding_them():
+        grid = build_grid(synthetic_periods(), START, PERIOD[1], pd.Timestamp("2026-08-26", tz="UTC"))
+>       assert near_permanent_units(grid, *PERIOD) == {"B/d"}
+E       AssertionError: assert set() == {'B/d'}
+E         
+E         Extra items in the right set:
+E         'B/d'
+E         Use -v to get more diff
+
+tests/test_backtest.py:37: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_backtest.py::test_near_permanent_units_and_excluding_them
+1 failed, 1 passed in 18.11s
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Merge overlapping periods inside the feature builder and rerun tests
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/features.py"); s = p.read_text()
+old = '''class UnitTimeline:
+    """One unit's merged alert periods, answering questions about any set of times."""
+
+    def __init__(self, starts, ends):
+        self.s = _seconds(starts)
+        self.e = _seconds(ends)
+'''
+new = '''def _merge(s: np.ndarray, e: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Union of periods sorted by start. Merging never moves a start later, so it is safe for as-of queries."""
+    merged_s, merged_e = [], []
+    for start, end in zip(s, e):
+        if merged_e and start <= merged_e[-1]:
+            merged_e[-1] = max(merged_e[-1], end)
+        else:
+            merged_s.append(start)
+            merged_e.append(end)
+    return np.array(merged_s, dtype=np.int64), np.array(merged_e, dtype=np.int64)
+
+
+class UnitTimeline:
+    """One unit's alert periods (overlaps merged), answering questions about any set of times."""
+
+    def __init__(self, starts, ends):
+        order = np.argsort(_seconds(starts), kind="stable")
+        self.s, self.e = _merge(_seconds(starts)[order], _seconds(ends)[order])
+'''
+assert old in s; s = s.replace(old, new); p.write_text(s)
+EOF
+uv run pytest -q 2>&1 | tail -2
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+..............................................                           [100%]
+46 passed in 6.80s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:12:42 UTC)
+
+All 46 tests pass. Adding a `backtest` command, then committing.
+
+<details><summary>Tool call: Bash</summary>
+
+Add the backtest command, run tests, commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/backtest.py"); s = p.read_text()
+s += '''
+
+def main(period: str, model_names, channel: str = "UkraineAlarmSignal", horizons=HORIZONS, train_start=TRAIN_START) -> None:
+    """Build the grid from the label periods, run the walk-forward backtest and write predictions and metrics."""
+    from airalert.features import build_grid
+    from airalert.labels import INTERIM_DIR
+    from airalert.settings import ROOT
+
+    merged = pd.read_parquet(INTERIM_DIR / f"{channel}_merged.parquet")
+    data_end = merged.data_end.iloc[0]
+    start, end = PERIODS[period]
+    if data_end < end + 24 * HOUR:
+        print(f"Warning: data ends {data_end:%Y-%m-%d %H:%M} UTC, before the {period} period's last labels.")
+    grid = build_grid(merged, train_start - 168 * HOUR, end, data_end)
+    print(f"{period}: {start:%Y-%m-%d} → {end:%Y-%m-%d}, {len(grid):,} grid rows, models: {', '.join(model_names)}", flush=True)
+    predictions = run(grid, period, model_names, horizons, train_start)
+
+    results_dir, report_dir = ROOT / "data" / "results", ROOT / "reports" / period
+    results_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    predictions.to_parquet(results_dir / f"{period}_predictions.parquet", index=False)
+    permanent = near_permanent_units(grid, *PERIODS["validation"])  # chosen on validation only (Q8)
+    metrics = pd.concat([score(predictions).assign(units="all"),
+                         score(predictions, exclude_units=permanent).assign(units="without near-permanent")])
+    metrics.to_csv(report_dir / "metrics.csv", index=False)
+    summary = metrics[(metrics.subset == "all") & (metrics.units == "all")].pivot(index="horizon", columns="model", values="brier")
+    print(f"Near-permanent units (validation): {len(permanent)}\\nBrier score by horizon (lower is better):\\n{summary.round(4)}")
+'''
+p.write_text(s)
+p = pathlib.Path("src/airalert/__main__.py"); s = p.read_text()
+s = s.replace("from airalert import labels, telegram\n", "from airalert import backtest, labels, telegram\nfrom airalert.models import MODELS\n")
+s = s.replace('''    args = parser.parse_args()''', '''    bt = commands.add_parser("backtest", help="walk-forward backtest on the validation or test period")
+    bt.add_argument("period", choices=list(backtest.PERIODS))
+    bt.add_argument("--models", nargs="+", default=list(MODELS), choices=list(MODELS))
+    args = parser.parse_args()''')
+s = s.replace('''    elif args.command == "build-labels":''', '''    elif args.command == "backtest":
+        backtest.main(args.period, args.models)
+    elif args.command == "build-labels":''')
+p.write_text(s)
+EOF
+uv run python -m airalert backtest --help | head -5 && uv run pytest -q 2>&1 | tail -1 && git add -A src tests && git commit -q -F - <<'EOF'
+Add walk-forward backtest, baselines and models
+
+- models.py: Persistence and Historical-rate baselines, logistic
+  regression and LightGBM behind one fit/predict interface
+- backtest.py: weekly walk-forward over the pinned validation and test
+  periods with the label cutoff (t + h <= cutoff) asserted, a running time
+  estimate, and metrics per horizon (Brier, log loss, ROC-AUC, PR-AUC)
+  for all rows and for units calm / on alert at t, with and without
+  near-permanent units (chosen on validation, Q8)
+- features.py merges overlapping periods itself instead of assuming it
+- `python -m airalert backtest validation|test`
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+usage: airalert backtest [-h]
+                         [--models {persistence,historical_rate,logistic,lightgbm} [{persistence,historical_rate,logistic,lightgbm} ...]]
+                         {validation,test}
+
+positional arguments:
+46 passed in 6.80s
+09bd8ca Add walk-forward backtest, baselines and models
+  120,000 saved (up to 2024-03-03), 93 msg/s, about 96 min left
+```
+
+</details>
+
+### Assistant (2026-10-12 20:13:07 UTC)
+
+The backtest harness is committed (`09bd8ca`). Next is step 9, the neighbour map. Looking up OCHA's raion boundary data on HDX and its licence.
+
+<details><summary>Tool call: Bash</summary>
+
+Look up the OCHA Ukraine boundary dataset on HDX
+
+```
+curl -s "https://data.humdata.org/api/3/action/package_show?id=cod-ab-ukr" | python3 -c "
+import sys,json; d=json.load(sys.stdin)['result']
+print(d.get('title')); print('licence:', d.get('license_title'), d.get('license_id')); print('updated:', d.get('last_modified'))
+for r in d['resources']: print('-', r['name'], r.get('format'), r.get('size'), r['url'][:140])
+" 2>&1 | head -25
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Ukraine - Subnational Administrative Boundaries
+licence: Creative Commons Attribution for Intergovernmental Organisations (CC BY-IGO) cc-by-igo
+updated: 2026-01-26T16:30:18.293101
+- ukr_admin_boundaries.gdb.zip Geodatabase 41420103 https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/51ca7001-908b-4f57-be58-e85e10c6d3c4/download/ukr_admin_bound
+- ukr_admin_boundaries.shp.zip SHP 81538791 https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/2b38131d-5dd6-4b0f-b4c6-4aecc67f179d/download/ukr_admin_bound
+- ukr_admin_boundaries.geojson.zip GeoJSON 83953609 https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/681beb86-391b-4a08-8140-ca52e80fcdce/download/ukr_admin_bound
+- ukr_admin_boundaries.xlsx XLSX 6306180 https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/c0f3df90-f167-43d1-93c4-b2e3738dbec3/download/ukr_admin_bound
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Download the OCHA boundary shapefiles and list admin-2 layers
+
+```
+mkdir -p /Users/david/proj/air-alert-forecast/data/raw/geo && cd /Users/david/proj/air-alert-forecast/data/raw/geo && curl -sL -o ukr_admin_boundaries.shp.zip "https://data.humdata.org/dataset/d23f529f-31e4-4021-a65b-13987e5cfb42/resource/2b38131d-5dd6-4b0f-b4c6-4aecc67f179d/download/ukr_admin_boundaries.shp.zip" && ls -la && unzip -l ukr_admin_boundaries.shp.zip | grep -i "adm2\|admin2" | head
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+total 163928
+drwxr-xr-x@ 3 david  staff        96 Oct 12 23:13 .
+drwxr-xr-x@ 6 david  staff       192 Oct 12 23:13 ..
+-rw-r--r--@ 1 david  staff  81538791 Oct 12 23:14 ukr_admin_boundaries.shp.zip
+  9787324  01-26-2026 16:28   ukr_admin2.shp
+        5  01-26-2026 16:28   ukr_admin2.cpg
+   235605  01-26-2026 16:28   ukr_admin2.dbf
+      145  01-26-2026 16:28   ukr_admin2.prj
+     1212  01-26-2026 16:28   ukr_admin2.shx
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/scripts/build_neighbours.py`
+
+```
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["geopandas>=1.0", "pyogrio"]
+# ///
+"""Build src/airalert/reference/neighbours.csv: pairs of units that share a border (Q11).
+
+Boundaries: OCHA, "Ukraine - Subnational Administrative Boundaries" (admin level 2), HDX, CC BY-IGO,
+https://data.humdata.org/dataset/cod-ab-ukr. Only the derived pairs are committed, not the maps.
+
+Usage: uv run scripts/build_neighbours.py data/raw/geo/ukr_admin_boundaries.shp.zip
+(geopandas is needed only here, so it is declared inline instead of as a project dependency.)
+"""
+
+import csv
+import pathlib
+import sys
+
+import geopandas as gpd
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+REGISTRY = ROOT / "src" / "airalert" / "reference" / "units.csv"
+OUT = ROOT / "src" / "airalert" / "reference" / "neighbours.csv"
+
+
+def key(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def main(zip_path: str) -> None:
+    with REGISTRY.open(encoding="utf-8") as f:
+        registry = list(csv.DictReader(f))
+    by_key = {}
+    for row in registry:
+        for name in [row["name"], *filter(None, row["aliases"].split("|"))]:
+            by_key[key(name)] = row["unit_id"]
+    by_key[key("Київ")] = by_key[key("м. Київ")] = "м. Київ"
+
+    raions = gpd.read_file(f"zip://{zip_path}!ukr_admin2.shp")
+    name_column = next(c for c in raions.columns if c.lower() in ("adm2_ua", "adm2_name1", "adm2_uk"))
+    raions["unit_id"] = raions[name_column].map(lambda n: by_key.get(key(n)) or by_key.get(key(f"{n} район")))
+    unmatched = sorted(raions.loc[raions.unit_id.isna(), name_column])
+    print(f"{len(raions)} admin-2 areas, {raions.unit_id.notna().sum()} matched to units; unmatched: {unmatched}")
+
+    raions = raions[raions.unit_id.notna()].to_crs(6381)  # Ukraine TM zone, metres
+    raions["geometry"] = raions.geometry.buffer(50)  # 50 m tolerance for tiny gaps between neighbouring polygons
+    pairs = gpd.sjoin(raions[["unit_id", "geometry"]], raions[["unit_id", "geometry"]], predicate="intersects")
+    pairs = sorted({(a, b) for a, b in zip(pairs.unit_id_left, pairs.unit_id_right) if a != b})
+    with OUT.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["unit_id", "neighbour_id"])
+        writer.writerows(pairs)
+    counts = {}
+    for a, _ in pairs:
+        counts[a] = counts.get(a, 0) + 1
+    missing = [r["unit_id"] for r in registry if r["unit_id"] not in counts]
+    print(f"{len(pairs)} neighbour pairs written to {OUT}; neighbours per unit {min(counts.values())}–{max(counts.values())}; "
+          f"units without neighbours: {missing}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
+
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect the admin-2 layer's columns
+
+```
+cd /Users/david/proj/air-alert-forecast && uv run -q --with geopandas --with pyogrio python -c "
+import geopandas as gpd; g=gpd.read_file('zip://data/raw/geo/ukr_admin_boundaries.shp.zip!ukr_admin2.shp'); print(g.columns.tolist()); print(g.head(3).drop(columns='geometry').to_string())"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/scripts/build_neighbours.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+['adm2_name', 'adm2_name1', 'adm2_name2', 'adm2_name3', 'adm2_pcode', 'adm1_name', 'adm1_name1', 'adm1_name2', 'adm1_name3', 'adm1_pcode', 'adm0_name', 'adm0_name1', 'adm0_name2', 'adm0_name3', 'adm0_pcode', 'valid_on', 'valid_to', 'area_sqkm', 'version', 'lang', 'lang1', 'lang2', 'lang3', 'center_lat', 'center_lon', 'geometry']
+          adm2_name       adm2_name1 adm2_name2 adm2_name3 adm2_pcode                      adm1_name                 adm1_name1 adm1_name2 adm1_name3 adm1_pcode adm0_name adm0_name1 adm0_name2 adm0_name3 adm0_pcode   valid_on valid_to    area_sqkm version lang lang1 lang2 lang3  center_lat  center_lon
+0  Bakhchysaraiskyi  Бахчисарайський       None       None     UA0102  Autonomous Republic of Crimea  Автономна Республіка Крим       None       None       UA01   Ukraine    Україна       None       None         UA 2025-09-01      NaT  2381.307249     v05   en    uk  None  None         NaN         NaN
+1       Bilohirskyi     Білогірський       None       None     UA0104  Autonomous Republic of Crimea  Автономна Республіка Крим       None       None       UA01   Ukraine    Україна       None       None         UA 2025-09-01      NaT  2929.480534     v05   en    uk  None  None         NaN         NaN
+2      Dzhankoiskyi     Джанкойський       None       None     UA0106  Autonomous Republic of Crimea  Автономна Республіка Крим       None       None       UA01   Ukraine    Україна       None       None         UA 2025-09-01      NaT  2173.954032     v05   en    uk  None  None         NaN         NaN
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Build the neighbour table from the boundaries
+
+```
+uv run scripts/build_neighbours.py data/raw/geo/ukr_admin_boundaries.shp.zip 2>&1 | tail -5 && head -5 src/airalert/reference/neighbours.csv && grep "^м. Київ" src/airalert/reference/neighbours.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Installed 10 packages in 22ms
+139 admin-2 areas, 122 matched to units; unmatched: ['Євпаторійський', 'Алчевський', 'Бахчисарайський', 'Білогірський', 'Джанкойський', 'Довжанський', 'Керченський', 'Курманський', 'Луганський', 'Перекопський', 'Ровеньківський', 'Севастополь', 'Сіверськодонецький', 'Сімферопольський', 'Феодосійський', 'Чорнобильська зона відчуження', 'Ялтинський']
+612 neighbour pairs written to /Users/david/proj/air-alert-forecast/src/airalert/reference/neighbours.csv; neighbours per unit 1–9; units without neighbours: ['Луганська область/Сєвєродонецький район']
+unit_id,neighbour_id
+Івано-Франківська область/Івано-Франківський район,Івано-Франківська область/Калуський район
+Івано-Франківська область/Івано-Франківський район,Івано-Франківська область/Коломийський район
+Івано-Франківська область/Івано-Франківський район,Івано-Франківська область/Надвірнянський район
+Івано-Франківська область/Івано-Франківський район,Закарпатська область/Тячівський район
+м. Київ,Київська область/Бориспільський район
+м. Київ,Київська область/Броварський район
+м. Київ,Київська область/Бучанський район
+м. Київ,Київська область/Вишгородський район
+м. Київ,Київська область/Обухівський район
+м. Київ,Київська область/Фастівський район
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Add neighbour features with a test
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/features.py"); s = p.read_text()
+old = '''def _add_cross_unit_and_calendar(grid: pd.DataFrame) -> pd.DataFrame:
+    grid["oblast"] = grid["unit_id"].str.split("/").str[0].astype("category")
+    grid["unit_id"] = grid["unit_id"].astype("category")
+    by_t = grid.groupby("t")'''
+new = '''NEIGHBOURS = pathlib.Path(__file__).resolve().parent / "reference" / "neighbours.csv"
+
+
+def _add_neighbours(grid: pd.DataFrame) -> pd.DataFrame:
+    """Share of a unit's neighbours (shared border, Q11) on alert at t, and their alert starts in the last hour."""
+    pairs = pd.read_csv(NEIGHBOURS)
+    units = pd.Index(sorted(grid["unit_id"].unique()))
+    pairs = pairs[pairs.unit_id.isin(units) & pairs.neighbour_id.isin(units)]
+    adjacency = np.zeros((len(units), len(units)))
+    adjacency[units.get_indexer(pairs.unit_id), units.get_indexer(pairs.neighbour_id)] = 1
+    degree = adjacency.sum(axis=1, keepdims=True)
+    for column, name, normalise in (("on_alert", "neighbour_on_alert_share", True), ("starts_last_1h", "neighbour_starts_last_1h", False)):
+        wide = grid.pivot(index="t", columns="unit_id", values=column).reindex(columns=units).fillna(0).to_numpy()
+        weights = np.divide(adjacency, degree, out=np.zeros_like(adjacency), where=degree > 0) if normalise else adjacency
+        values = pd.DataFrame(wide @ weights.T, index=grid["t"].drop_duplicates().sort_values().to_numpy(), columns=units)
+        long = values.stack().rename(name).reset_index().rename(columns={"level_0": "t", "level_1": "unit_id"})
+        long.columns = ["t", "unit_id", name]
+        grid = grid.merge(long, on=["t", "unit_id"], how="left")
+    return grid
+
+
+def _add_cross_unit_and_calendar(grid: pd.DataFrame) -> pd.DataFrame:
+    grid = _add_neighbours(grid)
+    grid["oblast"] = grid["unit_id"].str.split("/").str[0].astype("category")
+    grid["unit_id"] = grid["unit_id"].astype("category")
+    by_t = grid.groupby("t")'''
+assert old in s; s = s.replace(old, new)
+s = s.replace("import numpy as np\nimport pandas as pd\n", "import pathlib\n\nimport numpy as np\nimport pandas as pd\n", 1)
+p.write_text(s)
+m = pathlib.Path("src/airalert/models.py"); ms = m.read_text()
+old = '    "national_on_alert_share", "national_starts_last_1h", "oblast_on_alert_share",\n'
+assert old in ms
+ms = ms.replace(old, '    "national_on_alert_share", "national_starts_last_1h", "oblast_on_alert_share",\n    "neighbour_on_alert_share", "neighbour_starts_last_1h",\n')
+m.write_text(ms)
+t = pathlib.Path("tests/test_features.py"); ts = t.read_text()
+ts += '''
+
+def test_neighbour_share_uses_shared_borders_and_known_state():
+    kyiv_neighbours = ["Київська область/Бориспільський район", "Київська область/Броварський район"]
+    merged = pd.DataFrame({
+        "unit_id": ["м. Київ", *kyiv_neighbours],
+        "started_at": pd.to_datetime(["2026-08-02 00:00", "2026-08-03 09:30", "2026-08-03 11:30"], utc=True),
+        "finished_at": pd.to_datetime(["2026-08-02 01:00", "2026-08-03 12:30", "2026-08-03 12:30"], utc=True),
+    })
+    grid = build_grid(merged, START, END, DATA_END)
+    kyiv = grid[grid.unit_id == "м. Київ"].set_index("t")
+    assert kyiv.loc["2026-08-03 10:00", "neighbour_on_alert_share"] == 0.5  # one of its two known neighbours
+    assert kyiv.loc["2026-08-03 12:00", "neighbour_on_alert_share"] == 1.0
+    assert kyiv.loc["2026-08-03 12:00", "neighbour_starts_last_1h"] == 1
+    assert kyiv.loc["2026-08-03 13:00", "neighbour_on_alert_share"] == 0.0
+'''
+t.write_text(ts)
+EOF
+uv run pytest -q 2>&1 | tail -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+...............................................                          [100%]
+47 passed in 7.28s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:15:30 UTC)
+
+All 47 tests pass. A quick speed check on real data, then I'll add the attribution and commit.
+
+<details><summary>Tool call: Bash</summary>
+
+Check speed on real data, add attribution, commit
+
+```
+uv run python -c "
+import time, pandas as pd
+from airalert.features import build_grid
+m = pd.read_parquet('data/interim/UkraineAlarmSignal_merged.parquet')
+t0=time.time(); g=build_grid(m,'2023-03-01 00:00+00:00','2023-12-01 00:00+00:00',m.data_end.iloc[0]); print(len(g), g.shape[1], f'{time.time()-t0:.1f}s', g[['neighbour_on_alert_share','oblast_on_alert_share']].mean().round(3).to_dict())" && python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("README.md"); s = p.read_text()
+s += """
+## Sources and attribution
+
+- Alert labels: Telegram channel [`@UkraineAlarmSignal`](https://t.me/UkraineAlarmSignal) (єТривога), checked against the official channel [`@air_alert_ua`](https://t.me/air_alert_ua) and [alerts.in.ua](https://alerts.in.ua).
+- Raion list: [ukrainian-air-raid-sirens-dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset) by Vadym Klymenko (MIT).
+- Raion borders for the neighbour table: OCHA, [Ukraine – Subnational Administrative Boundaries](https://data.humdata.org/dataset/cod-ab-ukr), HDX, CC BY-IGO. Only the derived neighbour pairs (`src/airalert/reference/neighbours.csv`) are in this repo.
+"""
+p.write_text(s)
+EOF
+git add -A scripts src tests README.md && git commit -q -F - <<'EOF'
+Add neighbour table and neighbour features (Q11)
+
+- scripts/build_neighbours.py: units sharing a border, from OCHA admin-2
+  boundaries (HDX, CC BY-IGO); 612 pairs, 1-9 neighbours per raion,
+  Kyiv borders its 6 surrounding raions
+- features: share of neighbours on alert at t and their alert starts in
+  the last hour; test with Kyiv and two neighbours
+- README: sources and attribution
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+785400 50 1.3s {'neighbour_on_alert_share': 0.091, 'oblast_on_alert_share': 0.092}
+2afd104 Add neighbour table and neighbour features (Q11)
+  130,000 saved (up to 2024-04-07), 93 msg/s, about 94 min left
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/validation.py`
+
+```
+"""Label-quality checks: our label source against independent records (Q20, Q2, ADR-0006).
+
+Alert starts and all-clears are compared per unit: an event in one source counts as found if the other source
+has the same kind of event for the same unit within 5 minutes. Both directions are reported per month, against
+the pass mark fixed in advance (Q20): at least 98% each way, every month.
+
+- Q20: `@UkraineAlarmSignal` vs the official channel `@air_alert_ua`, 2023-01 to 2026-08.
+- Q2: `@UkraineAlarmSignal` vs alerts.in.ua over the test period (the official channel is silent there).
+"""
+
+import glob
+import json
+
+import numpy as np
+import pandas as pd
+
+from airalert.alarm_signal import Location
+from airalert.settings import RAW_DIR
+from airalert.units import UnknownPlace, resolve, units
+
+PASS_MARK = 0.98
+TOLERANCE = pd.Timedelta(minutes=5)
+
+
+def events(alerts: pd.DataFrame) -> pd.DataFrame:
+    """Start and all-clear events per unit, one row per distinct (unit, kind, time)."""
+    starts = alerts[["unit_id", "started_at"]].rename(columns={"started_at": "time"}).assign(kind="start")
+    ends = alerts.dropna(subset=["finished_at"])[["unit_id", "finished_at"]].rename(columns={"finished_at": "time"}).assign(kind="end")
+    return pd.concat([starts, ends]).drop_duplicates().sort_values("time", ignore_index=True)
+
+
+def found_share(source: pd.DataFrame, other: pd.DataFrame, tolerance=TOLERANCE) -> pd.Series:
+    """For each event in `source`: is there an event of the same kind and unit in `other` within `tolerance`?"""
+    found = np.zeros(len(source), dtype=bool)
+    for (unit_id, kind), group in source.groupby(["unit_id", "kind"]):
+        times = np.sort(other.loc[(other.unit_id == unit_id) & (other.kind == kind), "time"].to_numpy())
+        if not len(times):
+            continue
+        x = group.time.to_numpy()
+        i = np.clip(np.searchsorted(times, x), 1, len(times)) - 1
+        nearest = np.minimum(np.abs(times[i] - x), np.abs(times[np.minimum(i + 1, len(times) - 1)] - x))
+        found[group.index.to_numpy() if source.index.equals(pd.RangeIndex(len(source))) else source.index.get_indexer(group.index)] = nearest <= tolerance.to_timedelta64()
+    return pd.Series(found, index=source.index)
+
+
+def monthly_report(labels: pd.DataFrame, reference: pd.DataFrame, start, end) -> pd.DataFrame:
+    """Per month and event kind: share of reference events found in the labels, and the other way round."""
+    start, end = pd.Timestamp(start, tz="UTC"), pd.Timestamp(end, tz="UTC")
+    window = lambda ev: ev[(ev.time >= start) & (ev.time < end)].reset_index(drop=True)  # noqa: E731
+    ours, theirs = window(events(labels)), window(events(reference))
+    theirs["found"] = found_share(theirs, ours).to_numpy()
+    ours["found"] = found_share(ours, theirs).to_numpy()
+    rows = []
+    for direction, ev in (("reference found in labels", theirs), ("labels found in reference", ours)):
+        month = ev.time.dt.tz_convert("Europe/Kyiv").dt.strftime("%Y-%m")
+        for (m, kind), group in ev.groupby([month, ev.kind]):
+            rows.append({"month": m, "kind": kind, "direction": direction, "events": len(group), "found": group.found.mean()})
+    report = pd.DataFrame(rows)
+    report["passes"] = report.found >= PASS_MARK
+    return report
+
+
+def alerts_in_ua_alerts() -> pd.DataFrame:
+    """alerts.in.ua air raid alerts as unit alerts (same shape as labels.unit_alerts_from_messages).
+
+    Raions map to themselves and oblasts to all their raions; Kyiv city to its unit. Other city and hromada
+    records are dropped, as in our labels (Q16). Snapshots overlap, so alerts are de-duplicated by id.
+    """
+    excluded = {u.unit_id for u in units() if u.excluded}
+    seen, rows = set(), []
+    for path in sorted(glob.glob(str(RAW_DIR / "alerts_in_ua" / "*" / "*.json"))):
+        for alert in json.load(open(path, encoding="utf-8"))["alerts"]:
+            if alert["id"] in seen or alert["alert_type"] != "air_raid":
+                continue
+            seen.add(alert["id"])
+            level = {"raion": "raion", "oblast": "oblast", "city": "city"}.get(alert["location_type"])
+            if level is None:
+                continue
+            oblast = alert.get("location_oblast")
+            name = alert["location_title"] if level != "oblast" else oblast
+            try:
+                unit_ids = resolve(Location(level, name, oblast))
+            except UnknownPlace:
+                continue
+            for unit_id in unit_ids:
+                if unit_id not in excluded:
+                    rows.append({"unit_id": unit_id, "started_at": alert["started_at"], "finished_at": alert["finished_at"]})
+    frame = pd.DataFrame(rows, columns=["unit_id", "started_at", "finished_at"])
+    for column in ("started_at", "finished_at"):
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    return frame
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_validation.py`
+
+```
+import pandas as pd
+
+from airalert.validation import monthly_report
+
+
+def alerts(rows):
+    return pd.DataFrame([(u, pd.Timestamp(s, tz="UTC"), pd.Timestamp(e, tz="UTC") if e else pd.NaT) for u, s, e in rows],
+                        columns=["unit_id", "started_at", "finished_at"])
+
+
+def test_events_match_within_five_minutes_in_both_directions():
+    reference = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:40:00"),
+                        ("A/a", "2026-08-02 10:00:00", "2026-08-02 11:00:00"),
+                        ("A/b", "2026-08-03 10:00:00", "2026-08-03 10:30:00")])
+    labels = alerts([("A/a", "2026-08-01 10:00:20", "2026-08-01 10:40:30"),  # 20-30 s later: found
+                     ("A/a", "2026-08-02 10:07:00", "2026-08-02 11:00:10"),  # start 7 min later: not found
+                     ("A/c", "2026-08-03 10:00:00", "2026-08-03 10:30:00")])  # another unit: not found
+    report = monthly_report(labels, reference, "2026-08-01", "2026-09-01").set_index(["direction", "kind"])
+    assert report.loc[("reference found in labels", "start"), "found"] == 1 / 3
+    assert report.loc[("reference found in labels", "end"), "found"] == 2 / 3
+    assert report.loc[("labels found in reference", "end"), "found"] == 2 / 3
+    assert not report.passes.any()
+
+
+def test_identical_sources_pass():
+    same = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:40:00"), ("A/b", "2026-08-05 01:00:00", None)])
+    assert monthly_report(same, same, "2026-08-01", "2026-09-01").passes.all()
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/validation.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_validation.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Simplify the matching index and run tests
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/validation.py"); s = p.read_text()
+old = "        found[group.index.to_numpy() if source.index.equals(pd.RangeIndex(len(source))) else source.index.get_indexer(group.index)] = nearest <= tolerance.to_timedelta64()\n    return pd.Series(found, index=source.index)"
+assert old in s
+s = s.replace(old, "        found[source.index.get_indexer(group.index)] = nearest <= tolerance.to_timedelta64()\n    return pd.Series(found, index=source.index)")
+p.write_text(s)
+EOF
+uv run pytest -q 2>&1 | tail -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.................................................                        [100%]
+49 passed in 7.10s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:16:24 UTC)
+
+All 49 tests pass. Adding a `check-labels` command that writes the reports, then committing.
+
+<details><summary>Tool call: Bash</summary>
+
+Add check-labels command, test, commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/validation.py"); s = p.read_text()
+s += '''
+
+def main() -> None:
+    """Write reports/label_quality/official_by_month.csv (Q20) and alerts_in_ua_test_period.csv (Q2)."""
+    from airalert.backtest import PERIODS
+    from airalert.labels import INTERIM_DIR
+    from airalert.settings import ROOT
+
+    out = ROOT / "reports" / "label_quality"
+    out.mkdir(parents=True, exist_ok=True)
+    labels = pd.read_parquet(INTERIM_DIR / "UkraineAlarmSignal_alerts.parquet")
+    official_path = INTERIM_DIR / "air_alert_ua_alerts.parquet"
+    if official_path.exists():
+        report = monthly_report(labels, pd.read_parquet(official_path), "2023-01-01", "2026-09-01")
+        report.to_csv(out / "official_by_month.csv", index=False)
+        failing = report[~report.passes]
+        print(f"Q20: {len(report)} month × kind × direction rows, {len(failing)} below the {PASS_MARK:.0%} pass mark")
+        if len(failing):
+            print(failing.sort_values("found").head(15).to_string(index=False))
+    else:
+        print("Q20 skipped: run `build-labels air_alert_ua` first.")
+    start, end = PERIODS["test"]
+    report = monthly_report(labels, alerts_in_ua_alerts(), start.tz_convert("UTC").tz_localize(None), end.tz_convert("UTC").tz_localize(None))
+    report.to_csv(out / "alerts_in_ua_test_period.csv", index=False)
+    print("Q2 (test period, vs alerts.in.ua):")
+    print(report.to_string(index=False))
+'''
+p.write_text(s)
+p = pathlib.Path("src/airalert/__main__.py"); s = p.read_text()
+s = s.replace("from airalert import backtest, labels, telegram\n", "from airalert import backtest, labels, telegram, validation\n")
+s = s.replace('''    args = parser.parse_args()''', '''    commands.add_parser("check-labels", help="compare labels with the official channel (Q20) and alerts.in.ua (Q2)")
+    args = parser.parse_args()''')
+s = s.replace('''    elif args.command == "backtest":''', '''    elif args.command == "check-labels":
+        validation.main()
+    elif args.command == "backtest":''')
+p.write_text(s)
+EOF
+uv run python -m airalert --help | sed -n 3,4p && uv run pytest -q 2>&1 | tail -1 && git add -A src tests && git commit -q -F - <<'EOF'
+Add label-quality checks (Q20 official channel, Q2 alerts.in.ua)
+
+- validation.py compares alert starts and all-clears per unit within
+  5 minutes, both directions, per month, against the 98% pass mark
+- alerts.in.ua air raid alerts are mapped to units the same way as our
+  labels (oblast -> raions, Kyiv, other city/hromada records dropped)
+- `python -m airalert check-labels` writes reports/label_quality/
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Command-line entry point: `uv run python -m airalert <command>`.
+49 passed in 6.89s
+8a0fa7d Add label-quality checks (Q20 official channel, Q2 alerts.in.ua)
+  140,000 saved (up to 2024-05-14), 93 msg/s, about 92 min left
+```
+
+</details>
+
+### Assistant (2026-10-12 20:16:56 UTC)
+
+The label checks are committed (`8a0fa7d`). Before reporting, I'm updating the implementation plan's statuses in the design doc.
+
+<details><summary>Tool call: Bash</summary>
+
+Update plan statuses in the design doc and commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("docs/DESIGN.md"); s = p.read_text()
+repl = {
+"| open |\n| 4 |": None,
+}
+lines = s.split("\n")
+status = {
+ "| 3 |": "done (`units.py`, 122 raions + Kyiv, renamed aliases)",
+ "| 4 |": "code done (`alarm_signal.py`, `alerts.py`, `labels.py`); full run after the download",
+ "| 5 |": "code done (`official_channel.py`); full run after the download",
+ "| 6 |": "code done (`validation.py`, `check-labels`); blocked on downloads",
+ "| 7 |": "code done (`validation.py`); blocked on the label channel's download",
+ "| 9 |": "done (`reference/neighbours.csv`, 612 pairs)",
+ "| 10 |": "done (`features.py`, leakage tests)",
+ "| 11 |": "code done (`features.py`); real run after the download",
+ "| 12 |": "code done (`backtest.py`, `models.py`); results blocked",
+ "| 13 |": "model code done (`models.py`); experiments blocked",
+}
+for i, line in enumerate(lines):
+    for prefix, new in status.items():
+        if line.startswith(prefix):
+            cells = line.split(" | ")
+            cells[-1] = new + " |"
+            lines[i] = " | ".join(cells)
+p.write_text("\n".join(lines))
+EOF
+sed -n '/## 7. Implementation plan/,$p' docs/DESIGN.md | grep "^| [0-9]" | cut -c1-60,200-; git add docs/DESIGN.md && git commit -q -m "Update implementation plan statuses
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git log --oneline | head -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+| 1 | Download alerts.in.ua history | — | done (27 locations
+| 2 | Download Telegram channels (`@UkraineAlarmSignal`, `@a
+| 3 | **Unit registry:** every raion with its oblast and nams) |
+| 4 | **Label parser for `@UkraineAlarmSignal`:** message clp export for development | code done (`alarm_signal.py`, `alerts.py`, `labels.py`); full run after the download |
+| 5 | **Parser for `@air_alert_ua`:** the same rules, for va
+| 6 | **Q20 label check:** channel vs official, month by mon
+| 7 | **Q2 cross-check:** channel vs alerts.in.ua over the t
+| 8 | **Q16 city units:** apply the rule (label accuracy, di
+| 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, 
+| 10 | **As-of view and the leakage test (ADR-0001):** featu
+| 11 | **Grid, labels and alert-history features** for any f
+| 12 | **Backtest harness:** weekly walk-forward, Persistenc; results blocked |
+| 13 | **Models:** logistic regression, LightGBM; training-scked |
+| 14 | **Telegram features (Q12):** place-name list (КАТОТТГ
+| 15 | **Telegram ablation** on validation, then the single 
+| 16 | **Final run:** `update-data`, pinned test period, fig
+0f96083 Update implementation plan statuses
+```
+
+</details>
+
+### Assistant (2026-10-12 20:17:13 UTC)
+
+Everything that doesn't need the full download is now implemented: 10 commits, 49 tests passing.
+
+## What's built
+
+| Step | What | Checked on real data |
+|---|---|---|
+| 3 | **Unit registry:** 122 raions + Kyiv, five renamed raions recognised by both names (Новомосковський → Самарівський, …), Luhansk marked excluded | Every raion name in all three sources resolves |
+| 5 | **Official-channel parser:** reads places from the hashtags; drone, guided-bomb and missile threat messages treated as escalations within an alert, as Q17 decided | 2,000-message sample: 966 starts and 766 all-clears, the same counts as the earlier survey; every place resolves |
+| 4 | **`build-labels`:** messages → alert periods per unit; an oblast-wide alert covers all its raions | Data downloaded so far (to Dec 2023): 119 units, no unknown places, 3 seconds |
+| 10–11 | **Features and labels** per unit and hour, using only data known before *t*: current alert and its length, time since the last all-clear, recent alert starts, share of time on alert, oblast, neighbours, country-wide, calendar, the same hour a day and a week ago | 785,000 rows in about 1 second |
+| — | **Leakage tests:** the fast feature code must match a naive "what was known at *t*" computation, and rewriting data after *t* must change no feature at *t* | **I planted a deliberate leak, and both tests failed as they should** |
+| 9 | **Neighbour table** from OCHA borders: 612 pairs, 1–9 neighbours per raion | Kyiv borders its 6 surrounding raions; attribution added to the README |
+| 12–13 | **Backtest:** weekly retraining with the label-cutoff rule enforced in code; two baselines, logistic regression and LightGBM; metrics per horizon, split into calm and on-alert, with and without near-permanent raions; time estimates printed while running | End-to-end test on synthetic data |
+| 6–7 | **`check-labels`:** month-by-month comparison with the official record against the 98% pass mark (Q20), and with alerts.in.ua for the test period (Q2) | Tests only; needs the downloads |
+
+**Two problems I found and fixed along the way:**
+- **Overlapping alert periods.** The feature code assumed a unit's alert periods never overlap. Nothing guaranteed that, and a test caught it, so the feature builder now merges overlaps itself.
+- **The next-hour label when already on alert.** If a unit is on alert at *t*, the next-hour label is 1 by definition, because the ongoing alert overlaps that hour. This makes the calm/on-alert split essential: **the real forecasting question is the calm hours**, where alerts start in only about 9% of cases.
+
+## Download status
+
+`@UkraineAlarmSignal`: **140,000 of 654,325** messages (up to May 2024), steady at 93 per second, **about 1.5 h left** for this channel and about 3 h for all four. Background tasks here stop after 2 hours, so when that happens I'll restart the command, and it continues where it stopped.
+
+## Next
+
+- **Now, unblocked:** step 14, the place-name list for the Telegram features. It uses the official КАТОТТГ register to map cities and villages to their raion, plus grammatical forms (Харків / Харкова / Харківщина). The threat-type rules wait for `@kpszsu` and `@deraketaua`, the last two channels in the queue.
+- **When `@UkraineAlarmSignal` finishes:** `build-labels`, then the alerts.in.ua cross-check (Q2), then a first **validation backtest** with the baselines, logistic regression and LightGBM.
+- **When `@air_alert_ua` finishes:** the month-by-month label check (Q20), the missing-all-clear rule, and the city-zone decision (Q16).
+
+Should I continue with step 14?
+
+---
+
+## User (2026-10-12 20:20:51 UTC)
+
+Ok, great! Implement the part that is unblocked now, and write the text transcript of this whole chat. Every message should stay.
+
+### Assistant (2026-10-12 20:21:06 UTC)
+
+I'll start with the transcript, since that's mechanical. First, checking where this session's conversation history is stored.
+
+<details><summary>Tool call: Bash</summary>
+
+List session transcript files and their contents
+
+```
+ls -la ~/.claude/projects/-Users-david-proj-air-alert-forecast/; for f in ~/.claude/projects/-Users-david-proj-air-alert-forecast/*.jsonl; do echo "== $f"; python3 -I -c "
+import json,sys,collections
+c=collections.Counter(); first=last=None
+for line in open(sys.argv[1]):
+    d=json.loads(line); c[d.get('type')]+=1
+    ts=d.get('timestamp'); first=first or ts; last=ts or last
+print(dict(c), first, last)" "$f"; done
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+total 10272
+drwxr-xr-x@  4 david  staff      128 Oct 12 17:10 .
+drwxr-xr-x@ 13 david  staff      416 Oct 12 17:10 ..
+-rw-------@  1 david  staff  4827475 Oct 12 23:20 c791d226-99bf-4d5c-b170-7216b394d86f.jsonl
+drwxr-xr-x@  6 david  staff      192 Oct 12 21:44 memory
+== /Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f.jsonl
+{'queue-operation': 50, 'user': 319, 'attachment': 408, 'atis-latch': 116, 'last-prompt': 117, 'ai-title': 115, 'assistant': 581, 'cost-state': 2, 'mode': 101} 2026-10-12T14:10:12.369Z 2026-10-12T20:20:51.719Z
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect transcript record structure and list human messages
+
+```
+python3 -I - <<'EOF'
+import json, collections
+path = "/Users/david/.claude/projects/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f.jsonl"
+types = collections.Counter(); n = 0
+for line in open(path):
+    d = json.loads(line)
+    if d.get("type") not in ("user", "assistant"): continue
+    content = d["message"]["content"]
+    if isinstance(content, str): types[(d["type"], "str")] += 1; continue
+    for part in content: types[(d["type"], part.get("type"))] += 1
+    if d["type"] == "user" and n < 3 and not any(p.get("type") == "tool_result" for p in content):
+        n += 1; print(json.dumps({k: d[k] for k in d if k not in ("message",)}, ensure_ascii=False)[:400]); print(str(content)[:300]); print()
+print(types)
+human = []
+for line in open(path):
+    d = json.loads(line)
+    if d.get("type") == "user":
+        c = d["message"]["content"]
+        text = c if isinstance(c, str) else " ".join(p.get("text", "") for p in c if p.get("type") == "text")
+        if text.strip() and not d.get("isMeta"): human.append((d["timestamp"][:16], text.strip()[:70].replace("\n", " ")))
+print(len(human)); [print(h) for h in human]
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+{"parentUuid": "cc1e8635-5c04-4dbd-a89d-2363bf15b7b9", "isSidechain": false, "promptId": "f9f7d76b-f2db-4474-a290-6332e0529823", "type": "user", "isMeta": true, "turnCompanion": true, "uuid": "ed9fc5b9-83a6-492c-911c-5090538d2db8", "timestamp": "2026-10-12T17:07:53.224Z", "sourceToolUseID": "toolu_01R92xoKtbLR6uzKtN43nPrY", "userType": "external", "entrypoint": "sdk-ts", "cwd": "/Users/david/proj/
+[{'type': 'text', 'text': 'Base directory for this skill: /Users/david/.claude/plugins/cache/claude-plugins-official/mattpocock-skills/1.2.3/skills/engineering/domain-modeling\n\n# Domain Modeling\n\nActively build and sharpen the project\'s domain model as you design. This is the *active* disciplin
+
+Counter({('assistant', 'tool_use'): 294, ('user', 'tool_result'): 294, ('assistant', 'thinking'): 215, ('assistant', 'text'): 75, ('user', 'str'): 25, ('user', 'text'): 1})
+25
+('2026-10-12T14:10', "I'm doing a Stage 2 selection task for KSE; here is the email I got wi")
+('2026-10-12T14:27', '1. Target and horizon: Please explain the options. What is this questi')
+('2026-10-12T14:52', '1. Target and horizon: A few questions: Can we use all four of the pro')
+('2026-10-12T16:34', '1. Got the horizon meaning.  2. Raion level has a short history: Got i')
+('2026-10-12T17:06', '1. I do have an alerts.in.ua API token, so we can download the data th')
+('2026-10-12T17:30', "I like this approach; let's keep it. Question about OBLAST_UIDS in our")
+('2026-10-12T17:41', 'Before I answer a/b, how did you confirm that messages like "Загроза а')
+('2026-10-12T17:49', 'So, a) will fix the issue with time overwrites and keep the type of th')
+('2026-10-12T18:03', 'I agree with a) and q17 proposals; they look logical. One more questio')
+('2026-10-12T18:11', 'Check the volunteer_data set from ukrainian-air-raid-sirens-dataset; i')
+('2026-10-12T18:30', 'When did this channel start posting information about the alerts? Mayb')
+('2026-10-12T18:42', 'If the channel is very close to the official alerts since 23 and has a')
+('2026-10-12T18:55', '1. Why do we need alerts.in.ua for now? We pull data from UkraineAlarm')
+('2026-10-12T19:07', "1. Can't we use UkraineAlarmSignal for checks during the test period? ")
+('2026-10-12T19:14', 'Expand the questions that remain (the Q ones), hold on a bit for alert')
+('2026-10-12T19:30', 'Q7: any overlap, Q8: keep in training, report both, Q6: why do we need')
+('2026-10-12T19:39', 'Context handoff (delta_since_target_last_seen): Provider context hando')
+('2026-10-12T19:44', '<task-notification> <task-id>bkcoyl33w</task-id> <tool-use-id>toolu_01')
+('2026-10-12T19:46', 'Will I not get banned for that? Can I use not my main account for that')
+('2026-10-12T19:47', 'I should use the telegram account itself, right&')
+('2026-10-12T19:50', 'Logged in, you can start the download and put it in the background.')
+('2026-10-12T19:52', "Let's do that. What is the implementation plan? Which of them are bloc")
+('2026-10-12T20:01', '1. Confirm, but explain how you do that. 2. Confirm Tell me how the ba')
+('2026-10-12T20:04', 'Go implement')
+('2026-10-12T20:20', 'Ok, great! Implement the part that is unblocked now, and write the tex')
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/scripts/export_conversation.py`
+
+```
+"""Export the AI conversation (Claude Code session logs) to docs/ai-conversation.md (Q14).
+
+Every user message, assistant reply, tool call and tool result is kept, in order. Left out: the model's
+internal reasoning ("thinking") and the hidden harness context (<system-reminder> blocks), which are not
+messages. Values from .env (API tokens) are replaced with <redacted>; the script fails if any remain.
+Very long tool outputs are shortened to their first and last part, marked as such; pass
+--full-tool-output to keep them whole.
+
+Usage: uv run python scripts/export_conversation.py [--full-tool-output]
+"""
+
+import argparse
+import json
+import pathlib
+import re
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+LOG_DIR = pathlib.Path.home() / ".claude" / "projects" / ("-" + str(ROOT).strip("/").replace("/", "-").replace("_", "-"))
+OUT = ROOT / "docs" / "ai-conversation.md"
+TOOL_OUTPUT_LIMIT = 6000
+
+
+def secrets() -> list[str]:
+    env = ROOT / ".env"
+    if not env.exists():
+        return []
+    values = [line.partition("=")[2].strip().strip("\"'") for line in env.read_text().splitlines() if "=" in line]
+    return [v for v in values if len(v) >= 6]
+
+
+def text_of(content) -> str:
+    if isinstance(content, str):
+        return content
+    parts = []
+    for part in content:
+        if part.get("type") == "text":
+            parts.append(part["text"])
+        elif part.get("type") == "image":
+            parts.append("[image]")
+        elif part.get("type") == "tool_reference":
+            parts.append(f"[tool loaded: {part.get('tool_name')}]")
+    return "\n".join(parts)
+
+
+def without_harness_context(text: str) -> str:
+    return re.sub(r"<system-reminder>.*?</system-reminder>", "", text, flags=re.S).strip()
+
+
+def shorten(text: str, full: bool) -> str:
+    if full or len(text) <= TOOL_OUTPUT_LIMIT:
+        return text
+    half = TOOL_OUTPUT_LIMIT // 2
+    return f"{text[:half]}\n\n[… {len(text) - TOOL_OUTPUT_LIMIT:,} characters shortened in this export …]\n\n{text[-half:]}"
+
+
+def fence(text: str) -> str:
+    longest = max((len(m) for m in re.findall(r"`+", text)), default=0)
+    ticks = "`" * max(3, longest + 1)
+    return f"{ticks}\n{text}\n{ticks}"
+
+
+def tool_call_text(part: dict) -> str:
+    data = part.get("input", {})
+    if part["name"] == "Bash" and "command" in data:
+        head = f"{data.get('description', '')}\n\n" if data.get("description") else ""
+        return head + fence(data["command"])
+    if part["name"] in ("Write",) and "content" in data:
+        return f"`{data.get('file_path')}`\n\n" + fence(data["content"])
+    return fence(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def records():
+    rows = []
+    for path in sorted(LOG_DIR.glob("*.jsonl")):
+        with path.open(encoding="utf-8") as f:
+            rows.extend(json.loads(line) for line in f)
+    rows = [r for r in rows if r.get("type") in ("user", "assistant") and not r.get("isSidechain")]
+    return sorted(rows, key=lambda r: r["timestamp"])
+
+
+def main(full_tool_output: bool) -> None:
+    blocks = [
+        "# AI conversation\n",
+        "Full record of the conversation with Claude (Claude Code) while building this project, exported from the "
+        "session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool "
+        "result is included in order. Not included: the model's internal reasoning and hidden harness context. "
+        "API tokens are redacted, and very long tool outputs are shortened (marked where it happens).\n",
+    ]
+    counts = {"user": 0, "assistant": 0, "tool call": 0, "tool result": 0}
+    for r in records():
+        time = r["timestamp"][:19].replace("T", " ") + " UTC"
+        content = r["message"]["content"]
+        if r["type"] == "user":
+            if isinstance(content, list) and any(p.get("type") == "tool_result" for p in content):
+                for part in content:
+                    if part.get("type") == "tool_result":
+                        result = shorten(text_of(part.get("content") or ""), full_tool_output)
+                        error = " (error)" if part.get("is_error") else ""
+                        blocks.append(f"<details><summary>Tool result{error}</summary>\n\n{fence(result)}\n\n</details>\n")
+                        counts["tool result"] += 1
+                continue
+            text = without_harness_context(text_of(content))
+            if not text:
+                continue
+            if r.get("isMeta"):
+                blocks.append(f"<details><summary>System: skill instructions loaded ({time})</summary>\n\n{fence(text)}\n\n</details>\n")
+            elif text.startswith("<task-notification>"):
+                blocks.append(f"**System notification** ({time}): background task finished.\n\n{fence(text)}\n")
+            else:
+                blocks.append(f"---\n\n## User ({time})\n\n{text}\n")
+                counts["user"] += 1
+        else:
+            for part in content if isinstance(content, list) else [{"type": "text", "text": content}]:
+                if part.get("type") == "text" and part["text"].strip():
+                    blocks.append(f"### Assistant ({time})\n\n{part['text'].strip()}\n")
+                    counts["assistant"] += 1
+                elif part.get("type") == "tool_use":
+                    blocks.append(f"<details><summary>Tool call: {part['name']}</summary>\n\n{tool_call_text(part)}\n\n</details>\n")
+                    counts["tool call"] += 1
+    document = "\n".join(blocks)
+    for value in secrets():
+        document = document.replace(value, "<redacted>")
+    assert not any(value in document for value in secrets())
+    OUT.write_text(document, encoding="utf-8")
+    print(f"Wrote {OUT.relative_to(ROOT)}: " + ", ".join(f"{n} {k}s" for k, n in counts.items()))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--full-tool-output", action="store_true")
+    main(parser.parse_args().full_tool_output)
+
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Export the conversation and check for leaked secrets or emails
+
+```
+uv run python scripts/export_conversation.py && wc -c docs/ai-conversation.md && grep -c "^## User" docs/ai-conversation.md && grep -n "dgoatclaude\|dkovalenko1@\|api_hash\s*=\s*[0-9a-f]" docs/ai-conversation.md | head; grep -o "<redacted>" docs/ai-conversation.md | wc -l; grep -n "^## User" docs/ai-conversation.md | head -3
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/scripts/export_conversation.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
