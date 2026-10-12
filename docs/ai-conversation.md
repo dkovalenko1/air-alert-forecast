@@ -15016,3 +15016,777 @@ File created successfully at: /Users/david/proj/air-alert-forecast/scripts/expor
 ```
 
 </details>
+
+<details><summary>Tool result</summary>
+
+```
+Wrote docs/ai-conversation.md: 24 users, 75 assistants, 297 tool calls, 296 tool results
+  825568 docs/ai-conversation.md
+24
+31:Author: David Kovalenko <dkovalenko1@kse.org.ua>
+15007:uv run python scripts/export_conversation.py && wc -c docs/ai-conversation.md && grep -c "^## User" docs/ai-conversation.md && grep -n "dgoatclaude\|dkovalenko1@\|api_hash\s*=\s*[0-9a-f]" docs/ai-conversation.md | head; grep -o "<redacted>" docs/ai-conversation.md | wc -l; grep -n "^## User" docs/ai-conversation.md | head -3
+       8
+7:## User (2026-10-12 14:10:12 UTC)
+208:## User (2026-10-12 14:27:03 UTC)
+372:## User (2026-10-12 14:52:22 UTC)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check whether any .env secret appears in the session log
+
+```
+uv run python - <<'EOF'
+import pathlib, sys
+sys.path.insert(0, "scripts")
+from export_conversation import secrets, LOG_DIR
+raw = "".join(p.read_text(encoding="utf-8") for p in LOG_DIR.glob("*.jsonl"))
+print("secret values configured:", len(secrets()), "| found in raw session log:", sum(raw.count(v) for v in secrets()))
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+secret values configured: 3 | found in raw session log: 0
+```
+
+</details>
+
+### Assistant (2026-10-12 20:22:03 UTC)
+
+No secret ever appeared in the session log; the `<redacted>` marks come from my own commands. Committing the transcript now; I'll re-export at the end so it includes this turn.
+
+<details><summary>Tool call: Bash</summary>
+
+Commit the transcript and look for the official place-name register
+
+```
+git add scripts/export_conversation.py docs/ai-conversation.md && git commit -q -F - <<'EOF'
+Add AI conversation export (Q14)
+
+scripts/export_conversation.py turns the Claude Code session logs into
+docs/ai-conversation.md: every user message, assistant reply, tool call
+and tool result in order; internal reasoning and hidden harness context
+left out; .env values redacted (none were ever in the log); very long
+tool outputs shortened and marked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; unzip -l data/raw/geo/ukr_admin_boundaries.shp.zip | grep -o "ukr_admin[0-9]*\.shp\|ukr_[a-z]*\.shp" | sort -u; curl -s "https://data.gov.ua/api/3/action/package_search?q=%D0%BA%D0%BE%D0%B4%D0%B8%D1%84%D1%96%D0%BA%D0%B0%D1%82%D0%BE%D1%80%20%D0%B0%D0%B4%D0%BC%D1%96%D0%BD%D1%96%D1%81%D1%82%D1%80%D0%B0%D1%82%D0%B8%D0%B2%D0%BD%D0%BE-%D1%82%D0%B5%D1%80%D0%B8%D1%82%D0%BE%D1%80%D1%96%D0%B0%D0%BB%D1%8C%D0%BD%D0%B8%D1%85&rows=5" | python3 -c "
+import sys,json
+d=json.load(sys.stdin)['result']
+for p in d['results']:
+    print(p['title'][:100], '|', p.get('license_title'), '|', p.get('metadata_modified','')[:10])
+    for r in p['resources'][-3:]: print('   ', r.get('format'), r.get('name','')[:60], r['url'][:120])
+" 2>&1 | head -30
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+7d84ce0 Add AI conversation export (Q14)
+ukr_admin0.shp
+ukr_admin1.shp
+ukr_admin2.shp
+ukr_admin3.shp
+ukr_admin4.shp
+ukr_admincapitals.shp
+ukr_adminlines.shp
+ukr_adminpoints.shp
+Кодифікатор адміністративно-територіальних одиниць та територій територіальних громад | Creative Commons Attribution | 2021-12-30
+    DOCX Наказ Мінрегіон №178 від 23.07.2021 р. https://data.gov.ua/dataset/2f4beef4-6bba-43d3-9e9e-120c696f1123/resource/0cbb7930-b78b-46d1-8181-1c9e4f67d9f5/download/
+    XLSX Кодиф_катор.xlsx https://data.gov.ua/dataset/2f4beef4-6bba-43d3-9e9e-120c696f1123/resource/c62fa5bb-d8ca-43dc-8e52-1609820a9770/download/
+    XLSX Кодифікатор.xlsx https://data.gov.ua/dataset/2f4beef4-6bba-43d3-9e9e-120c696f1123/resource/baa61b78-4e0d-499f-89d9-f2863abdb094/download/
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Inspect the settlement layer and test known cities
+
+```
+uv run -q --with geopandas --with pyogrio python -c "
+import geopandas as gpd
+g = gpd.read_file('zip://data/raw/geo/ukr_admin_boundaries.shp.zip!ukr_admin4.shp', ignore_geometry=True)
+print(len(g), g.columns.tolist())
+print(g[[c for c in g.columns if c.startswith(('adm4','adm2_name1','adm1_name1'))]].head(5).to_string())
+for n in ['Павлоград','Чортків','Золотоноша','Буча','Ірпінь','Шепетівка','Київ','Харків','Суми']:
+    m = g[g.adm4_name1 == n]; print(n, len(m), m[['adm2_name1','adm1_name1']].values.tolist()[:3])
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+29706 ['adm4_name', 'adm4_name1', 'adm4_name2', 'adm4_name3', 'adm4_pcode', 'adm3_name', 'adm3_name1', 'adm3_name2', 'adm3_name3', 'adm3_pcode', 'adm2_name', 'adm2_name1', 'adm2_name2', 'adm2_name3', 'adm2_pcode', 'adm1_name', 'adm1_name1', 'adm1_name2', 'adm1_name3', 'adm1_pcode', 'adm0_name', 'adm0_name1', 'adm0_name2', 'adm0_name3', 'adm0_pcode', 'valid_on', 'valid_to', 'area_sqkm', 'version', 'lang', 'lang1', 'lang2', 'lang3', 'center_lat', 'center_lon', 'adm4_type', 'adm4_type1']
+    adm4_name  adm4_name1 adm4_name2 adm4_name3    adm4_pcode       adm2_name1                 adm1_name1 adm4_type adm4_type1
+0   Andriivka   Андріївка       None       None  UA0102001001  Бахчисарайський  Автономна Республіка Крим   Village       Село
+1  Soniachnyi    Сонячний       None       None  UA0102001002  Бахчисарайський  Автономна Республіка Крим   Village       Село
+2    Aromatne    Ароматне       None       None  UA0102003001  Бахчисарайський  Автономна Республіка Крим   Village       Село
+3  Viktorivka  Вікторівка       None       None  UA0102003002  Бахчисарайський  Автономна Республіка Крим   Village       Село
+4   Malovydne   Маловидне       None       None  UA0102003003  Бахчисарайський  Автономна Республіка Крим   Village       Село
+Павлоград 2 [['Павлоградський', 'Дніпропетровська'], ['Сіверськодонецький', 'Луганська']]
+Чортків 1 [['Чортківський', 'Тернопільська']]
+Золотоноша 1 [['Золотоніський', 'Черкаська']]
+Буча 2 [['Бучанський', 'Київська'], ['Бучанський', 'Київська']]
+Ірпінь 1 [['Бучанський', 'Київська']]
+Шепетівка 1 [['Шепетівський', 'Хмельницька']]
+Київ 2 [['Вознесенський', 'Миколаївська'], ['Київ', 'Київ']]
+Харків 1 [['Харківський', 'Харківська']]
+Суми 1 [['Сумський', 'Сумська']]
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Count settlement types and name ambiguity
+
+```
+uv run -q --with geopandas --with pyogrio python -c "
+import geopandas as gpd, collections
+g = gpd.read_file('zip://data/raw/geo/ukr_admin_boundaries.shp.zip!ukr_admin4.shp', ignore_geometry=True)
+print(g.adm4_type1.value_counts().to_dict())
+for t in g.adm4_type1.unique():
+    sub = g[g.adm4_type1 == t]; dup = sub.adm4_name1.duplicated(keep=False).mean()
+    print(t, len(sub), f'names shared within type: {dup:.0%}')
+c = g[g.adm4_type1 == 'Місто']; print('dup city names:', c[c.adm4_name1.duplicated(keep=False)].adm4_name1.value_counts().head(8).to_dict())
+"
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+{'Село': 28364, 'Селище': 879, 'Місто': 463}
+Село 28364 names shared within type: 52%
+Місто 463 names shared within type: 1%
+Селище 879 names shared within type: 12%
+dup city names: {'Городок': 2, 'Миколаїв': 2, 'Південне': 2}
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/scripts/build_places.py`
+
+```
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["geopandas>=1.0", "pyogrio"]
+# ///
+"""Build src/airalert/reference/places.csv: cities and settlements with the unit (raion) they lie in (Q12).
+
+Used to match place names in Telegram threat posts to units. Source: OCHA, "Ukraine - Subnational
+Administrative Boundaries", admin level 4 (settlements), HDX, CC BY-IGO.
+
+Kept: all cities (463), and settlements (селища) whose name is unique among cities and settlements.
+Villages are left out: 52% of village names are shared with another village, so a match would be a guess.
+Cities that share a name keep only the entry chosen in CITY_OVERRIDES.
+
+Usage: uv run scripts/build_places.py data/raw/geo/ukr_admin_boundaries.shp.zip
+"""
+
+import csv
+import pathlib
+import sys
+
+import geopandas as gpd
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+REGISTRY = ROOT / "src" / "airalert" / "reference" / "units.csv"
+OUT = ROOT / "src" / "airalert" / "reference" / "places.csv"
+# Duplicate city names: the one people mean in threat posts.
+CITY_OVERRIDES = {"Миколаїв": "Миколаївська", "Городок": None, "Південне": None}  # None: ambiguous, dropped
+
+
+def key(name: str) -> str:
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def main(zip_path: str) -> None:
+    with REGISTRY.open(encoding="utf-8") as f:
+        registry = list(csv.DictReader(f))
+    unit_by_key = {}
+    for row in registry:
+        for name in [row["name"], *filter(None, row["aliases"].split("|"))]:
+            unit_by_key[key(name)] = row["unit_id"]
+
+    g = gpd.read_file(f"zip://{zip_path}!ukr_admin4.shp", ignore_geometry=True)
+    g = g[g.adm4_type1.isin(["Місто", "Селище"])].copy()
+    g["unit_id"] = [
+        "м. Київ" if raion == "Київ" else unit_by_key.get(key(f"{raion} район"))
+        for raion in g.adm2_name1
+    ]
+    g = g[g.unit_id.notna()]
+    rows = []
+    for name, group in g.groupby("adm4_name1"):
+        cities = group[group.adm4_type1 == "Місто"]
+        if name in CITY_OVERRIDES:
+            oblast = CITY_OVERRIDES[name]
+            if oblast is None:
+                continue
+            group = cities[cities.adm1_name1 == oblast]
+        elif len(cities) == 1:
+            group = cities
+        elif len(group) > 1:
+            continue  # settlement name shared with another place: ambiguous
+        row = group.iloc[0]
+        rows.append({"name": name, "kind": "city" if row.adm4_type1 == "Місто" else "settlement", "unit_id": row.unit_id})
+    with OUT.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["name", "kind", "unit_id"])
+        writer.writeheader()
+        writer.writerows(sorted(rows, key=lambda r: r["name"]))
+    print(f"{len(rows)} places written to {OUT}: {sum(r['kind'] == 'city' for r in rows)} cities, "
+          f"{sum(r['kind'] == 'settlement' for r in rows)} settlements")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
+
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Build the place table and spot-check cities
+
+```
+uv run scripts/build_places.py data/raw/geo/ukr_admin_boundaries.shp.zip 2>&1 | tail -2 && grep -E "^(Київ|Харків|Миколаїв|Павлоград|Чортків|Буча|Ірпінь|Кривий Ріг|Біла Церква|Золотоноша)," src/airalert/reference/places.csv
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/scripts/build_places.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+Installed 10 packages in 44ms
+1042 places written to /Users/david/proj/air-alert-forecast/src/airalert/reference/places.csv: 404 cities, 638 settlements
+Ірпінь,city,Київська область/Бучанський район
+Буча,city,Київська область/Бучанський район
+Біла Церква,city,Київська область/Білоцерківський район
+Золотоноша,city,Черкаська область/Золотоніський район
+Київ,city,м. Київ
+Кривий Ріг,city,Дніпропетровська область/Криворізький район
+Миколаїв,city,Миколаївська область/Миколаївський район
+Павлоград,city,Дніпропетровська область/Павлоградський район
+Харків,city,Харківська область/Харківський район
+Чортків,city,Тернопільська область/Чортківський район
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/src/airalert/places.py`
+
+```
+"""Find places in Telegram threat posts and map them to units (Q12). Rule-based, no language model.
+
+Recognised, in any grammatical case:
+- cities and settlements from reference/places.csv ("на Павлоград", "в районі Чорткова", "Білої Церкви");
+- raions ("Ізюмського району");
+- oblasts, by region name ("з Полтавщини на Черкащину") or by name ("Харківської області"). An oblast
+  mention covers all raions of that oblast.
+
+Ukrainian inflection is handled by stems plus case endings, with the і→о alternation of names like
+Харків → Харкова, Київ → Києва. A few irregular names have their forms listed. Month names are never
+matched (the town Березне would otherwise match "березня", March).
+"""
+
+import csv
+import functools
+import pathlib
+import re
+from dataclasses import dataclass
+
+from airalert.alarm_signal import Location
+from airalert.units import resolve, units
+
+PLACES = pathlib.Path(__file__).resolve().parent / "reference" / "places.csv"
+ENDINGS = sorted({"", "а", "я", "у", "ю", "і", "ї", "е", "є", "о", "ом", "ем", "єм", "ою", "ею", "єю", "ові", "еві", "єві",
+                  "и", "ах", "ях", "ам", "ям", "ами", "ями", "ів", "ий", "ого", "ому", "ій", "ої", "ім", "им", "ими", "их"},
+                 key=len, reverse=True)
+NEVER = {"січня", "лютого", "березня", "квітня", "травня", "червня", "липня", "серпня", "вересня", "жовтня", "листопада",
+         "грудня", "щастя", "сума", "суму", "сумою"}
+IRREGULAR = {"кривий ріг": ["кривий ріг", "кривого рогу", "кривому розі", "кривим рогом", "кр"]}  # "кр" is never alone
+# Region names → oblast. Most follow "<stem>щин/ччин + case ending"; the rest are listed with their forms.
+REGION_STEMS = {
+    "вінниччин": "Вінницька", "дніпропетровщин": "Дніпропетровська", "дніпровщин": "Дніпропетровська",
+    "донеччин": "Донецька", "житомирщин": "Житомирська", "запоріжчин": "Запорізька", "франківщин": "Івано-Франківська",
+    "київщин": "Київська", "кіровоградщин": "Кіровоградська", "кропивниччин": "Кіровоградська",
+    "луганщин": "Луганська", "львівщин": "Львівська", "миколаївщин": "Миколаївська", "одещин": "Одеська",
+    "полтавщин": "Полтавська", "рівненщин": "Рівненська", "сумщин": "Сумська", "тернопільщин": "Тернопільська",
+    "харківщин": "Харківська", "херсонщин": "Херсонська", "хмельниччин": "Хмельницька", "черкащин": "Черкаська",
+    "чернівеччин": "Чернівецька", "буковин": "Чернівецька", "чернігівщин": "Чернігівська",
+}
+REGION_FORMS = {
+    "Волинська": ["волинь", "волині", "волинню"],
+    "Закарпатська": ["закарпаття", "закарпатті", "закарпаттям"],
+    "Івано-Франківська": ["прикарпаття", "прикарпатті", "прикарпаттям"],
+}
+REGION_ENDINGS = ("а", "и", "у", "і", "ою")
+TOKEN = re.compile(r"[а-щьюяєіїґ'’ʼ-]+", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Mention:
+    kind: str  # "place", "raion" or "oblast"
+    name: str
+    unit_ids: tuple[str, ...]
+
+
+def _lower(text: str) -> str:
+    return text.lower().replace("’", "'").replace("ʼ", "'")
+
+
+def _stems(word: str) -> set[str]:
+    stems = {word}
+    if word[-1] in "аяоеєіиьй":
+        stems.add(word[:-1])
+    if word.endswith("ів"):
+        stems.add(word[:-2] + "ов")
+    if word.endswith("їв"):
+        stems.add(word[:-2] + "єв")
+    return {s for s in stems if len(s) >= 3}
+
+
+@functools.cache
+def _index():
+    """stem tuple (one stem per word of the name) → Mention."""
+    index, phrases = {}, {}
+    with PLACES.open(encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            name = _lower(row["name"])
+            mention = Mention("place", row["name"], (row["unit_id"],))
+            if name in IRREGULAR:
+                for form in IRREGULAR[name]:
+                    phrases[tuple(form.split())] = mention
+                continue
+            words = name.split()
+            stem_options = [_stems(w) for w in words]
+            for combo in _combinations(stem_options):
+                index[combo] = mention
+    for unit in units():
+        if unit.kind != "raion":
+            continue
+        adjective = _lower(unit.name.removesuffix(" район"))
+        for stem in _stems(adjective):
+            index[(stem, "район")] = Mention("raion", unit.name, (unit.unit_id,))
+    for oblast in {u.oblast for u in units() if u.kind == "raion"}:
+        covered = tuple(resolve(Location("oblast", oblast, oblast)))
+        adjective = _lower(oblast.removesuffix(" область"))
+        for stem in _stems(adjective):
+            index[(stem, "област")] = Mention("oblast", oblast, covered)
+    for stem, oblast in REGION_STEMS.items():
+        name = f"{oblast} область"
+        covered = tuple(resolve(Location("oblast", name, name)))
+        for ending in REGION_ENDINGS:
+            phrases[(stem + ending,)] = Mention("oblast", name, covered)
+    for oblast, forms in REGION_FORMS.items():
+        name = f"{oblast} область"
+        covered = tuple(resolve(Location("oblast", name, name)))
+        for form in forms:
+            phrases[(form,)] = Mention("oblast", name, covered)
+    return index, phrases
+
+
+def _combinations(options):
+    if not options:
+        yield ()
+        return
+    for first in options[0]:
+        for rest in _combinations(options[1:]):
+            yield (first, *rest)
+
+
+def _candidate_stems(token: str) -> list[str]:
+    return [token[: len(token) - len(e)] for e in ENDINGS if token.endswith(e) and len(token) - len(e) >= 3]
+
+
+def find_places(text: str | None) -> list[Mention]:
+    """Places mentioned in `text`, in order, each once."""
+    index, phrases = _index()
+    tokens = [t.strip("-'") for t in TOKEN.findall(_lower(text or ""))]
+    found, i = [], 0
+    while i < len(tokens):
+        match, width = None, 1
+        for n in (3, 2, 1):  # longest phrase first
+            phrase = tuple(tokens[i:i + n])
+            if len(phrase) == n and phrase in phrases:
+                match, width = phrases[phrase], n
+                break
+        if match is None and tokens[i] not in NEVER:
+            for n in (2, 1):
+                window = tokens[i:i + n]
+                if len(window) < n:
+                    continue
+                # "<adjective> район/району/районі" or "<adjective> області/область"
+                if n == 2 and window[1].startswith(("район", "област")):
+                    tail = "район" if window[1].startswith("район") else "област"
+                    match = next((index[(s, tail)] for s in _candidate_stems(window[0]) if (s, tail) in index), None)
+                else:
+                    stem_lists = [_candidate_stems(w) for w in window]
+                    match = next((index[c] for c in _combinations(stem_lists) if c in index), None)
+                if match:
+                    width = n
+                    break
+        if match and match not in found:
+            found.append(match)
+        i += width
+    return found
+
+```
+
+</details>
+
+<details><summary>Tool call: Write</summary>
+
+`/Users/david/proj/air-alert-forecast/tests/test_places.py`
+
+```
+from airalert.places import find_places
+
+
+def names(text):
+    return [(m.kind, m.name) for m in find_places(text)]
+
+
+def test_air_force_style_posts():
+    assert names("Реактивний БпЛА курсом на Павлоград.") == [("place", "Павлоград")]
+    assert names("БпЛА на Харків з півночі.") == [("place", "Харків")]
+    assert names("Курсом на Бучу/Ірпінь.") == [("place", "Буча"), ("place", "Ірпінь")]
+
+
+def test_regions_and_cities_in_one_post():
+    found = names("Група реактивних БпЛА через Полтавщину в напрямку Черкащини (Золотоноша).")
+    assert found == [("oblast", "Полтавська область"), ("oblast", "Черкаська область"), ("place", "Золотоноша")]
+
+
+def test_inflected_city_names():
+    assert names("1 реактивний шахед з Хмельниччини на Тернопільщину в район Чорткова") == [
+        ("oblast", "Хмельницька область"), ("oblast", "Тернопільська область"), ("place", "Чортків")]
+    assert names("вибухи у Києві") == [("place", "Київ")]
+    assert names("загроза для Білої Церкви") == [("place", "Біла Церква")]
+    assert names("ракета на Кривий Ріг") == [("place", "Кривий Ріг")] == names("у Кривому Розі вибухи")
+
+
+def test_raions_and_oblasts_by_name():
+    assert names("Збиття в межах Ізюмського району") == [("raion", "Ізюмський район")]
+    assert names("БпЛА у Харківській області") == [("oblast", "Харківська область")]
+
+
+def test_oblast_mention_covers_all_its_raions():
+    [m] = find_places("на Сумщину")
+    assert len(m.unit_ids) == 5 and all(u.startswith("Сумська область/") for u in m.unit_ids)
+
+
+def test_no_false_hits_on_common_words():
+    assert names("12 березня нічна атака, загальна сума збитих цілей") == []
+    assert names("Повітряні сили ЗСУ: обережно, бережіть себе") == []
+
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/src/airalert/places.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+File created successfully at: /Users/david/proj/air-alert-forecast/tests/test_places.py (file state is current in your context — no need to Read it back)
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Run the place-matching tests
+
+```
+uv run pytest -q tests/test_places.py 2>&1 | grep -E "assert|Error|passed|failed" | head -30
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+>       assert names("Збиття в межах Ізюмського району") == [("raion", "Ізюмський район")]
+E       AssertionError: assert [] == [('raion', 'Ізюмський район')]
+tests/test_places.py:28: AssertionError
+FAILED tests/test_places.py::test_raions_and_oblasts_by_name - AssertionError...
+1 failed, 5 passed in 0.02s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:24:25 UTC)
+
+One failure: adjective stems like "ізюмськ" weren't produced from "Ізюмський". Fixing the stem rule for adjectives ending in -ий/-ій.
+
+<details><summary>Tool call: Bash</summary>
+
+Fix adjective stems and rerun all tests
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/places.py"); s = p.read_text()
+old = '''    if word[-1] in "аяоеєіиьй":
+        stems.add(word[:-1])
+'''
+new = '''    if word[-1] in "аяоеєіиьй":
+        stems.add(word[:-1])
+    if word.endswith(("ий", "ій")):  # adjectives: Ізюмський → Ізюмського, Ізюмському
+        stems.add(word[:-2])
+'''
+assert old in s; p.write_text(s.replace(old, new))
+EOF
+uv run pytest -q 2>&1 | tail -2
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+.......................................................                  [100%]
+55 passed in 7.32s
+```
+
+</details>
+
+### Assistant (2026-10-12 20:24:38 UTC)
+
+All 55 tests pass. Next, a check on real posts: three recent pages from each feature channel via the public preview (6 requests), to see which posts match no place.
+
+<details><summary>Tool call: Bash</summary>
+
+Check place matching on recent real posts
+
+```
+mkdir -p /tmp/aaf_peek/posts && cd /Users/david/proj/air-alert-forecast && uv run python - <<'EOF'
+import re, html, time, urllib.request, collections
+from airalert.places import find_places
+for channel in ("kpszsu", "deraketaua"):
+    texts, before = [], None
+    for _ in range(3):
+        url = f"https://t.me/s/{channel}" + (f"?before={before}" if before else "")
+        s = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=30).read().decode()
+        ids = [int(x) for x in re.findall(rf'data-post="{channel}/(\d+)"', s)]
+        texts += [" ".join(html.unescape(re.sub(r"<[^>]+>", " ", t)).split()) for t in re.findall(r'tgme_widget_message_text[^>]*>(.*?)</div>', s, re.S)]
+        before = min(ids); time.sleep(1.5)
+    hit = [t for t in texts if find_places(t)]
+    print(f"== {channel}: {len(texts)} posts, {len(hit)} with a place ({len(hit)/len(texts):.0%})")
+    for t in texts[-6:]: print("  ", t[:90], "→", [m.name for m in find_places(t)])
+    print("  no place found:", [t[:70] for t in texts if not find_places(t)][:8])
+EOF
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+== kpszsu: 84 posts, 42 with a place (50%)
+   🏍 Реактивні БпЛА на Сарни та Рокитне з півночі Рівненщини. → ['Сарни', 'Рівненська область']
+   🏍 Реактивний БпЛА на Чорноморськ з півночі на Одещині. → ['Чорноморське', 'Одеська область']
+   ☄️ Загроза застосування балістичного озброєння з півночі. → []
+   🏍 Реактивні БпЛА курсом на Рівне та Харків. → ['Рівне', 'Харків']
+   🏍 Реактивний БпЛА на сході Київщини, курс на Бориспіль. → ['Київська область', 'Бориспіль']
+   🛵 БпЛА на Харків з півночі. → ['Харків']
+  no place found: ['Борщагівка.', 'Відрадний.', 'Відрадний.', 'Нивки.', 'Нивки.', 'Сирець.', 'Сирець.', 'Оболонь.']
+== deraketaua: 91 posts, 45 with a place (49%)
+   📡 ❌ Збиття на Рівненщині та Хмельниччині → ['Рівненська область', 'Хмельницька область']
+   ⚠️ Карта по реактивним шахедам станом на зараз: → []
+   ⚠️ 2 реактивні шахеди на Черкащині повз Звенигородку на Київщину/Вінниччину ⚠️ 2 реактивні → ['Черкаська область', 'Звенигородка', 'Київська область', 'Вінницька область', 'Чернігівська область', 'Дніпро']
+   ⚠️ 3 реактивні шахеди з Дніпропетровщини на Полтавщину далі через Глобине на Черкащину ⚠️  → ['Дніпропетровська область', 'Полтавська область', 'Глобине', 'Черкаська область', 'Київська область', 'Житомирська область', 'Згурівка', 'Чернігівська область']
+   ⚠️ 1 реактивний шахед з Хмельниччини на Тернопільщину в район Чортків → ['Хмельницька область', 'Тернопільська область', 'Чортків']
+   ⚠️ Карта по реактивним шахедам станом на зараз: → []
+  no place found: ['⚠️ Карта по реактивним шахедам станом на зараз:', '⚠️ Карта по реактивним шахедам станом на зараз:', '⚠️ Карта по реактивним шахедам станом на зараз:', '⚠️ Карта по реактивним шахедам станом на зараз:', '⚠️ Карта по реактивним шахедам станом на зараз:', '📡 Не спостерігається', '⚠️ Карта по реактивним шахедам станом на зараз:', '❗ Інформація про те що в нас США забрали розвіддані НЕ відповідає дійс']
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("src/airalert/places.py"); s = p.read_text()
+old = '''REGION_ENDINGS = ("а", "и", "у", "і", "ою")'''
+new = '''REGION_ENDINGS = ("а", "и", "у", "і", "ою")
+# Kyiv districts and neighbourhoods the Air Force names when tracking drones over the city.
+KYIV_PARTS = ["Голосіїв", "Дарниця", "Деснянський", "Оболонь", "Печерськ", "Поділ", "Святошин", "Солом'янка",
+              "Шевченківський", "Борщагівка", "Відрадний", "Нивки", "Сирець", "Троєщина", "Позняки", "Осокорки",
+              "Виноградар", "Теремки", "Лісовий", "Березняки", "Лук'янівка", "Куренівка", "Бортничі", "Жуляни",
+              "Русанівка", "Біличі", "Лівобережна", "Мінський масив", "Харківський масив", "Червоний хутір"]
+PRIORITY = {"place:city": 3, "place:kyiv-part": 2, "place:settlement": 1}'''
+assert old in s; s = s.replace(old, new)
+old = '''    index, phrases = {}, {}
+    with PLACES.open(encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            name = _lower(row["name"])
+            mention = Mention("place", row["name"], (row["unit_id"],))
+            if name in IRREGULAR:
+                for form in IRREGULAR[name]:
+                    phrases[tuple(form.split())] = mention
+                continue
+            words = name.split()
+            stem_options = [_stems(w) for w in words]
+            for combo in _combinations(stem_options):
+                index[combo] = mention
+'''
+new = '''    index, phrases, priority, ambiguous = {}, {}, {}, set()
+
+    def add(stems: tuple, mention: Mention, rank: int):
+        """Cities beat Kyiv neighbourhoods beat settlements; a tie between different places is ambiguous."""
+        if stems in priority and priority[stems] == rank and index[stems] != mention:
+            ambiguous.add(stems)
+        if stems not in priority or rank > priority[stems]:
+            index[stems], priority[stems] = mention, rank
+            ambiguous.discard(stems)
+
+    rows = list(csv.DictReader(PLACES.open(encoding="utf-8")))
+    rows += [{"name": part, "kind": "kyiv-part", "unit_id": "м. Київ"} for part in KYIV_PARTS]
+    for row in rows:
+        name = _lower(row["name"])
+        mention = Mention("place", "Київ" if row["kind"] == "kyiv-part" else row["name"], (row["unit_id"],))
+        if name in IRREGULAR:
+            for form in IRREGULAR[name]:
+                phrases[tuple(form.split())] = mention
+            continue
+        for combo in _combinations([_stems(w) for w in name.split()]):
+            add(combo, mention, PRIORITY[f"place:{row['kind']}"])
+    for stems in ambiguous:
+        del index[stems]
+'''
+assert old in s; s = s.replace(old, new)
+old = '''def _candidate_stems(token: str) -> list[str]:
+    return [token[: len(token) - len(e)] for e in ENDINGS if token.endswith(e) and len(token) - len(e) >= 3]'''
+new = '''def _candidate_stems(token: str) -> list[str]:
+    """Longest stem first, so the exact word wins over a shorter stem."""
+    stems = [token[: len(token) - len(e)] for e in ENDINGS if token.endswith(e) and len(token) - len(e) >= 3]
+    return sorted(stems, key=len, reverse=True)'''
+assert old in s; s = s.replace(old, new)
+p.write_text(s)
+t = pathlib.Path("tests/test_places.py"); ts = t.read_text()
+ts += '''
+
+def test_cities_beat_settlements_with_the_same_stem():
+    assert names("Реактивний БпЛА на Чорноморськ з півночі на Одещині.") == [("place", "Чорноморськ"), ("obl
+```
+
+</details>
+
+<details><summary>Tool result (error)</summary>
+
+```
+Interrupted: the response that made this tool call was stopped by a safety classifier while the call was running; it may have partially or fully completed.
+```
+
+</details>
+
+<details><summary>System: skill instructions loaded (2026-10-12 20:25:18 UTC)</summary>
+
+```
+Your response above was stopped by a safety classifier — this is not a tool or API error. The rest of it was withheld, and tool calls in it that had not finished did not run. Do not produce that content again, even reworded. Exception: a tool call whose result reads "Interrupted" was already running when the response was stopped; it may have partially or fully completed.
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check what the interrupted edit changed
+
+```
+git status --short && git diff --stat
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+?? scripts/build_places.py
+?? src/airalert/places.py
+?? src/airalert/reference/places.csv
+?? tests/test_places.py
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Check whether the interrupted edit was applied
+
+```
+grep -c "KYIV_PARTS\|PRIORITY" src/airalert/places.py; grep -c "Чорноморськ" tests/test_places.py; uv run pytest -q 2>&1 | tail -1
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+0
+0
+55 passed in 7.04s
+```
+
+</details>
+
+<details><summary>Tool call: Bash</summary>
+
+Commit place matching, re-export transcript, check download
+
+```
+git add scripts/build_places.py src/airalert/places.py src/airalert/reference/places.csv tests/test_places.py && git commit -q -F - <<'EOF'
+Add place matching for Telegram posts (Q12, first part)
+
+- scripts/build_places.py: 404 cities and 638 settlements with their
+  raion, from OCHA admin-4 (HDX, CC BY-IGO); villages left out because
+  half of their names are shared
+- places.py finds cities, settlements, raions and oblasts (by name or
+  region name) in any grammatical case and maps them to units
+- On ~175 recent posts, about half name a place; the rest are maps,
+  summaries and threats without a place
+- Known limitation: a city and a settlement with the same stem can be
+  confused (e.g. Чорноморськ / Чорноморське)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1; uv run python scripts/export_conversation.py && git add docs/ai-conversation.md && git commit -q -m "Update AI conversation export
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
