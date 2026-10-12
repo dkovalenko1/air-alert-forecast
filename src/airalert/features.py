@@ -13,6 +13,8 @@ filtered by what was known at t. Tests check that both agree and that adding or 
 changes a feature at t.
 """
 
+import pathlib
+
 import numpy as np
 import pandas as pd
 
@@ -122,7 +124,29 @@ def build_grid(merged: pd.DataFrame, start, end, data_end) -> pd.DataFrame:
     return _add_cross_unit_and_calendar(grid)
 
 
+NEIGHBOURS = pathlib.Path(__file__).resolve().parent / "reference" / "neighbours.csv"
+
+
+def _add_neighbours(grid: pd.DataFrame) -> pd.DataFrame:
+    """Share of a unit's neighbours (shared border, Q11) on alert at t, and their alert starts in the last hour."""
+    pairs = pd.read_csv(NEIGHBOURS)
+    units = pd.Index(sorted(grid["unit_id"].unique()))
+    pairs = pairs[pairs.unit_id.isin(units) & pairs.neighbour_id.isin(units)]
+    adjacency = np.zeros((len(units), len(units)))
+    adjacency[units.get_indexer(pairs.unit_id), units.get_indexer(pairs.neighbour_id)] = 1
+    degree = adjacency.sum(axis=1, keepdims=True)
+    for column, name, normalise in (("on_alert", "neighbour_on_alert_share", True), ("starts_last_1h", "neighbour_starts_last_1h", False)):
+        wide = grid.pivot(index="t", columns="unit_id", values=column).reindex(columns=units).fillna(0).to_numpy()
+        weights = np.divide(adjacency, degree, out=np.zeros_like(adjacency), where=degree > 0) if normalise else adjacency
+        values = pd.DataFrame(wide @ weights.T, index=grid["t"].drop_duplicates().sort_values().to_numpy(), columns=units)
+        long = values.stack().rename(name).reset_index().rename(columns={"level_0": "t", "level_1": "unit_id"})
+        long.columns = ["t", "unit_id", name]
+        grid = grid.merge(long, on=["t", "unit_id"], how="left")
+    return grid
+
+
 def _add_cross_unit_and_calendar(grid: pd.DataFrame) -> pd.DataFrame:
+    grid = _add_neighbours(grid)
     grid["oblast"] = grid["unit_id"].str.split("/").str[0].astype("category")
     grid["unit_id"] = grid["unit_id"].astype("category")
     by_t = grid.groupby("t")

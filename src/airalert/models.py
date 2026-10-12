@@ -12,6 +12,7 @@ from airalert.features import UNIT_FEATURES
 
 NUMERIC = UNIT_FEATURES + [
     "national_on_alert_share", "national_starts_last_1h", "oblast_on_alert_share",
+    "neighbour_on_alert_share", "neighbour_starts_last_1h",
     "target_active_day_ago", "target_active_week_ago",
 ]
 CALENDAR = ["target_hour", "target_weekday", "month"]

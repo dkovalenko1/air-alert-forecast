@@ -70,3 +70,18 @@ def test_labels_any_overlap_and_missing_after_data_end():
     assert grid.loc["2026-08-03 12:00", "label_h1"] == 0
     assert np.isnan(grid.loc["2026-08-07 12:00", "label_h1"])  # that hour is after the data ends
     assert set(f"label_h{h}" for h in HORIZONS) <= set(grid.columns)
+
+
+def test_neighbour_share_uses_shared_borders_and_known_state():
+    kyiv_neighbours = ["Київська область/Бориспільський район", "Київська область/Броварський район"]
+    merged = pd.DataFrame({
+        "unit_id": ["м. Київ", *kyiv_neighbours],
+        "started_at": pd.to_datetime(["2026-08-02 00:00", "2026-08-03 09:30", "2026-08-03 11:30"], utc=True),
+        "finished_at": pd.to_datetime(["2026-08-02 01:00", "2026-08-03 12:30", "2026-08-03 12:30"], utc=True),
+    })
+    grid = build_grid(merged, START, END, DATA_END)
+    kyiv = grid[grid.unit_id == "м. Київ"].set_index("t")
+    assert kyiv.loc["2026-08-03 10:00", "neighbour_on_alert_share"] == 0.5  # one of its two known neighbours
+    assert kyiv.loc["2026-08-03 12:00", "neighbour_on_alert_share"] == 1.0
+    assert kyiv.loc["2026-08-03 12:00", "neighbour_starts_last_1h"] == 1
+    assert kyiv.loc["2026-08-03 13:00", "neighbour_on_alert_share"] == 0.0
