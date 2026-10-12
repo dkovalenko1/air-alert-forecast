@@ -1,0 +1,18 @@
+[project]
+name = "airalert"
+version = "0.1.0"
+description = "Forecasting air raid alerts in Ukraine from information available before the forecast is made."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "telethon>=1.40",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
