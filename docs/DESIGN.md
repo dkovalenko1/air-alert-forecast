@@ -131,7 +131,25 @@ Known facts that shape the design:
      - Example: the Zaporizhzhia city alert from 21:00 to 23:48 UTC on 2026-09-06 (2 h 48 min) is recorded as 23:44:35–23:48:49 (4 min), because escalation messages kept resetting its start.
      - Only 0.12% of all rows have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.
 - **Scope of these checks:** they cover the latest ~20 messages per search on the channel's public web preview (early September 2026), plus row-level matches for Nikopol, Kharkiv and Zaporizhzhia. We know the mechanisms exist; we have not measured how many rows they affect across the full history.
-- **alerts.in.ua types its alerts:** it has an `alert_type` field with values such as `air_raid`, `artillery_shelling` and `urban_fights` (per its Python client docs).
+- **alerts.in.ua types its alerts:** its `alert_type` field takes one of five values: `air_raid`, `artillery_shelling`, `urban_fights`, `chemical`, `nuclear` (per its Python client). There is no type for in-alert escalations or kamikaze-drone attacks.
+
+### Message types in `@air_alert_ua`
+
+Sample: 2,000 messages from 100 web-preview pages spread evenly over the message IDs, 2022-03-14 → 2026-09-07. Shares are approximate. The proposed handling is part of Q15/Q17.
+
+| Type | First line looks like | Share of sample | Since | Proposed handling |
+|---|---|---|---|---|
+| Air raid alert | 🔴 "Повітряна тривога в …" / 🟢 "Відбій тривоги в …" | ~82% | 2022 | **The target.** Each alert runs from start to all-clear. |
+| Partial all-clear | 🟡 "Відбій тривоги в … область (тривога ще триває у якомусь районі)" | ~5% | 2022 | Closes the oblast-wide alert. Raion alerts that are still open stay open. |
+| In-alert escalation | 🔴🔴 "Загроза ударних БпЛА" (strike drones) / "Загроза застосування КАБ" (guided bombs) / "Ракетна загроза" (missiles), ended by "Відбій загрози …" | ~2% | Oct 2024 | Not a new alert: it never changes the alert's start or end. Stored as an event. |
+| Artillery shelling threat | 🔴 "Загроза артобстрілу" / 🟢🟡 "Відбій загрози артобстрілу" | ~7% | Oct 2022 | Not in the target. Stored. alerts.in.ua also has this type, so it could become a feature. |
+| Kamikaze-drone attack (front-line FPV, incl. "типу Молнія", "на оптоволокні") | "Атака дронів-камікадзе" / "Відбій атаки дронів-камікадзе" | ~2% | 2025 | Not in the target. Stored. |
+| Urban fighting | "… вуличних боїв …" | <0.5% (not in sample; found by search) | — | Not in the target. Stored. |
+| Radiation / chemical | "Радіаційна загроза …" | ~0.1% | 2025 | Not in the target. Stored. |
+| Service / info | "УВАГА!!!", "БЕЗКОШТОВНА ЕВАКУАЦІЯ", "Channel created" | ~2% | — | Ignored, but counted. |
+
+- **Formats change over time.** For example, 2025 escalations have no 🔴 in the first line, while 2026 ones start with 🔴🔴. Some service messages start with 🟢 or 🟡, so the old "emoji = start/end" rule mis-reads them. Our parser classifies by wording, not emoji.
+- **Unknown messages:** any message the parser can't recognise is logged and counted, and is never treated as an alert.
 - **City zone vs raion:** Kharkiv city's own alerts mostly fall inside Kharkivskyi raion alerts. The city is on alert while the raion is not in 0.5% of the time; the raion is on alert while the city is not in 11.7% (June–September 2026).
 - **Telegram volume grows:** posting on `@kpszsu` grew a lot over time, from about 2k posts by October 2022 to about 86k by October 2026, so the meaning of Telegram features changes over time.
 
@@ -183,6 +201,11 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
   - Depends on Q15, which determines which hromada zones carry real air raid alerts.
+- **Q17. Parsing rules if Q15 = (a).** (See "Message types" in section 5.)
+  - **Repeated start for a location that is already on alert:** keep the original start. Proposal: yes. This is exactly what fixes the overwrite problem.
+  - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Proposal: close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. The alternative is an invented end, like the old parser's start + 1 h.
+  - **Escalation with no open alert:** e.g. "Загроза керованих авіабомб" arrives when no "Повітряна тривога" is open for that location. Proposal: open an implied air raid alert and flag it, then count how often this happens.
+  - **Non-target types as features:** only types that also exist in the test period can be features. After 2026-09-07 the only alert source is alerts.in.ua. It has artillery shelling and urban fighting, but no escalations or kamikaze-drone attacks. So escalations can be used for exploratory analysis and the write-up, but not as model inputs. Telegram threat posts (`@kpszsu`, `@deraketaua`) cover that information in both periods.
 
 ### Evaluation
 
