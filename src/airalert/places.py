@@ -12,7 +12,10 @@ in -а (Лозова → Лозову, Лозової), a neuter adjective in -�
 So "на Лозову" can only be Лозова, and "на Покровськ" only Покровськ. If places of the same word type still
 share a stem, a city wins over a settlement; places that remain tied in different raions are not matched,
 rather than guessed. A few irregular names have their forms listed. Month names are never matched (the town
-Березне would otherwise match "березня", March). Raions are also found by their former names (registry aliases).
+Березне would otherwise match "березня", March). Stems also cover the vowel changes of masculine names
+(Бориспіль → Борисполя, Ірпінь → Ірпеня, Кам'янець → Кам'янця, Городок → Городка). Raions are also found by
+their former names (registry aliases), and so are the renamed cities those raions are named after
+(Новомосковськ → Самар). A town whose name is also a common word (Щастя, "happiness") is never matched.
 """
 
 import csv
@@ -44,6 +47,10 @@ WORD_ENDINGS = {
     "masc": {"", "а", "у", "ові", "еві", "ом", "ем", "і"},  # Покровськ, Харків
 }
 PRIORITY = {"city": 0, "settlement": 1}
+# Former names of the cities the registry's renamed raions are named after (units.csv aliases), → current name.
+FORMER_NAMES = {"Новомосковськ": "Самар", "Червоноград": "Шептицький", "Красноград": "Берестин",
+                "Новоград-Волинський": "Звягель", "Володимир-Волинський": "Володимир"}
+NEVER_PLACES = {"Щастя"}  # the town Щастя: also the word "happiness" in every case form
 ENDINGS = sorted(_ENDINGS.union(*WORD_ENDINGS.values()), key=len, reverse=True)
 # Region names → oblast. Most follow "<stem>щин/ччин + case ending"; the rest are listed with their forms.
 REGION_STEMS = {
@@ -106,8 +113,14 @@ def _word_forms(word: str) -> list[tuple[str, frozenset, str]]:
         kind, stem = "masc", word
     endings = frozenset(WORD_ENDINGS[kind] | {word[len(stem):]})
     forms = [(stem, endings, word[len(stem):])]
-    if word.endswith("ів"):  # Харків → Харкова
-        forms.append((word[:-2] + "ов", endings, None))
+    if kind in ("masc", "soft"):
+        last_vowel = max(stem.rfind(v) for v in "аеєиіїоуюя")
+        if last_vowel >= 0 and stem[last_vowel] == "і":  # Бориспіль → Борисполя, Ірпінь → Ірпеня
+            forms += [(stem[:last_vowel] + v + stem[last_vowel + 1:], endings, None) for v in "ое"]
+        if word.endswith("ець"):  # Кам'янець → Кам'янця
+            forms.append((word[:-3] + "ц", endings, None))
+        if word.endswith("ок"):  # Городок → Городка
+            forms.append((word[:-2] + "к", endings, None))
     if word.endswith("їв"):  # Київ → Києва
         forms.append((word[:-2] + "єв", endings, None))
     return [form for form in forms if len(form[0]) >= 3]
@@ -119,14 +132,18 @@ def _index():
     Raions and oblasts: (adjective stem, "район" / "област") → Mention."""
     places, index, phrases = {}, {}, {}
     with PLACES.open(encoding="utf-8") as f:
-        for row in csv.DictReader(f):
+        rows = [row for row in csv.DictReader(f) if row["name"] not in NEVER_PLACES]
+        current = {row["name"]: row for row in rows}
+        rows += [{**current[new], "name": old, "current": new} for old, new in FORMER_NAMES.items()]
+        for row in rows:
             name = _lower(row["name"])
-            mention = Mention("place", row["name"], (row["unit_id"],))
+            mention = Mention("place", row.get("current", row["name"]), (row["unit_id"],))
             if name in IRREGULAR:
                 for form in IRREGULAR[name]:
                     phrases[tuple(form.split())] = mention
                 continue
-            for combo in _combinations([_word_forms(w) for w in name.split()]):
+            # hyphenated names inflect part by part: Кам'янець-Подільський → Кам'янця-Подільського
+            for combo in _combinations([_word_forms(w) for w in name.replace("-", " ").split()]):
                 stems = tuple(form[0] for form in combo)
                 allowed, nominative = tuple(form[1] for form in combo), tuple(form[2] for form in combo)
                 places.setdefault(stems, []).append((mention, allowed, nominative, PRIORITY[row["kind"]]))
@@ -212,7 +229,7 @@ def find_places(text: str | None) -> list[Mention]:
                     tail = "район" if window[1].startswith("район") else "област"
                     match = next((index[(s, tail)] for s in _candidate_stems(window[0]) if (s, tail) in index), None)
                 else:
-                    match = _match_place(places, window)
+                    match = _match_place(places, [part for w in window for part in w.split("-") if part])
                 if match:
                     width = n
                     break

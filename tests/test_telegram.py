@@ -29,3 +29,10 @@ def test_falls_back_to_previous_month_if_newest_is_unreadable(tmp_path):
     (tmp_path / "2026-09.jsonl").write_text('{"id": 6, "te', encoding="utf-8")
     assert _last_saved_id(tmp_path) == 5
     assert not (tmp_path / "2026-09.jsonl").exists()
+
+
+def test_line_separator_inside_a_message_survives_a_resume(tmp_path):
+    text = "".join(json.dumps({"id": i, "text": f"a b {i}"}, ensure_ascii=False) + "\n" for i in (1, 2))
+    (tmp_path / "2026-10.jsonl").write_text(text, encoding="utf-8")
+    assert _last_saved_id(tmp_path) == 2
+    assert (tmp_path / "2026-10.jsonl").read_text(encoding="utf-8") == text  # untouched

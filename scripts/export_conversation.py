@@ -47,11 +47,13 @@ HANDOFF_NOTES = {  # T3 Code wraps a message in a handoff; the summary is replac
 
 def secrets(env_file: pathlib.Path = ROOT / ".env", environ=os.environ) -> list[str]:
     lines = env_file.read_text().splitlines() if env_file.exists() else []
-    pairs = [line.partition("=") for line in lines if "=" in line]
-    values = [raw.strip().strip("\"'") for _, _, raw in pairs]
-    names = set(SECRET_NAMES) | {key.strip() for key, _, _ in pairs}
-    values += [environ[name] for name in names if environ.get(name)]
-    return sorted({v for v in values if len(v) >= 6}, key=len, reverse=True)
+    pairs = [(key.strip(), raw.strip().strip("\"'")) for key, _, raw in (line.partition("=") for line in lines if "=" in line)]
+    # the project's named secrets are redacted whatever their length (an API id can be short); other .env values
+    # only from 6 characters, so that a short setting like DEBUG=1 does not blank out every "1"
+    values = [v for k, v in pairs if v and (k in SECRET_NAMES or len(v) >= 6)]
+    names = set(SECRET_NAMES) | {k for k, _ in pairs}
+    values += [environ[name] for name in names if environ.get(name) and (name in SECRET_NAMES or len(environ[name]) >= 6)]
+    return sorted(set(values), key=len, reverse=True)
 
 
 def text_of(content) -> str:

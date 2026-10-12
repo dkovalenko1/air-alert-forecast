@@ -81,8 +81,10 @@ class UnitTimeline:
         return np.searchsorted(self.s, b, side="left") - np.searchsorted(self.s, a, side="left")
 
 
-def _unit_block(timeline: UnitTimeline, t: np.ndarray, known_active: np.ndarray, label_active: np.ndarray, k0: int) -> dict:
-    """`known_active` / `label_active`: per grid hour, was the unit on alert, from feature / label periods."""
+def _unit_block(timeline: UnitTimeline, t: np.ndarray, known_active: np.ndarray, label_active: np.ndarray,
+                corrected_at: np.ndarray, k0: int) -> dict:
+    """`known_active` / `label_active`: per grid hour, was the unit on alert, from feature (published) / label
+    (corrected) periods. `corrected_at`: per grid hour, when the last correction changing it was posted (-1: none)."""
     on, start, last_end = timeline.state_at(t)
     out = {
         "on_alert": on.astype(np.int8),
@@ -97,18 +99,27 @@ def _unit_block(timeline: UnitTimeline, t: np.ndarray, known_active: np.ndarray,
     k = np.arange(len(t)) + k0  # index of the hour starting at t in the per-hour arrays
     for h in HORIZONS:
         target = k + h - 1
-        out[f"label_h{h}"] = np.where(target < len(label_active), label_active[np.minimum(target, len(label_active) - 1)], np.nan)
+        inside = target < len(label_active)
+        clipped = np.minimum(target, len(label_active) - 1)
+        out[f"label_h{h}"] = np.where(inside, label_active[clipped], np.nan)
+        out[f"published_label_h{h}"] = np.where(inside, known_active[clipped], np.nan)  # as known before any correction
+        out[f"label_corrected_at_h{h}"] = pd.to_datetime(np.where(inside & (corrected_at[clipped] >= 0), corrected_at[clipped], np.nan),
+                                                          unit="s", utc=True)
         for lag, name in ((24, "day"), (168, "week")):  # was the target hour on alert a day / a week earlier?
             out[f"target_active_{name}_ago_h{h}"] = known_active[target - lag]  # an hour that ended by t
     return out
 
 
-def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods: pd.DataFrame | None = None) -> pd.DataFrame:
+def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods: pd.DataFrame | None = None,
+               corrections: pd.DataFrame | None = None) -> pd.DataFrame:
     """Hourly rows for t in [start, end) for every unit in `units` (calm ones included), whether or not it has periods.
 
     `periods` (columns unit_id, started_at, finished_at) are the alert periods as published, which features use;
-    `label_periods` the corrected truth, which labels use (default: the same). The unit list is fixed in advance
-    (units.forecast_unit_ids()), so a unit's first alert never changes country, oblast or neighbour features before it.
+    `label_periods` the corrected truth, which labels use (default: the same). `corrections` are the retracted alerts
+    (finished_at = when the retraction was posted). For each horizon the grid also holds the label as published and
+    when a correction changed it (`published_label_h*`, `label_corrected_at_h*`), so that training at a cutoff can
+    use the label as it was known then (ADR-0007). The unit list is fixed in advance (units.forecast_unit_ids()),
+    so a unit's first alert never changes country, oblast or neighbour features before it.
     """
     start, end, data_end = (pd.Timestamp(x).tz_convert("UTC") for x in (start, end, data_end))
     label_periods = periods if label_periods is None else label_periods
@@ -125,8 +136,18 @@ def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods
     def hourly(timeline):
         return np.where(complete, (np.diff(timeline.alert_seconds_before(edges)) > 0).astype(float), np.nan)
 
+    def correction_times(group):
+        """Per grid hour: the latest posting time of a retraction whose alert overlapped that hour (-1: none)."""
+        out = np.full(len(edges) - 1, -1, dtype=np.int64)
+        for s_, e_ in zip(_seconds(group.started_at), _seconds(group.finished_at)):
+            hit = (edges[:-1] < e_) & (edges[1:] > s_)
+            out[hit] = np.maximum(out[hit], e_)
+        return out
+
+    corrections = periods.iloc[:0] if corrections is None else corrections
     by_unit = dict(tuple(periods.groupby("unit_id")))
     labels_by_unit = dict(tuple(label_periods.groupby("unit_id")))
+    corrections_by_unit = dict(tuple(corrections.groupby("unit_id")))
     empty = periods.iloc[:0]
     blocks = []
     for unit_id in units:
@@ -134,7 +155,8 @@ def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods
         label_group = labels_by_unit.get(unit_id, empty)
         timeline = UnitTimeline(group.started_at, group.finished_at)
         label_timeline = timeline if label_periods is periods else UnitTimeline(label_group.started_at, label_group.finished_at)
-        block = _unit_block(timeline, t, hourly(timeline), hourly(label_timeline), k0)
+        block = _unit_block(timeline, t, hourly(timeline), hourly(label_timeline),
+                            correction_times(corrections_by_unit.get(unit_id, empty)), k0)
         block["unit_id"] = unit_id
         block["t"] = pd.to_datetime(t, unit="s", utc=True)
         blocks.append(pd.DataFrame(block))

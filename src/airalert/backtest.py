@@ -2,7 +2,10 @@
 
 For every week of the evaluation period, each model is trained on rows known before the week starts and then
 forecasts every hour of that week. A training row for time t and horizon h is only used if its label hour
-ended by the cutoff (t + h hours <= cutoff), so no outcome after the cutoff reaches training.
+ended by the cutoff (t + h hours <= cutoff), so no outcome after the cutoff reaches training. Its label is the one
+known at the cutoff: if a retraction posted after the cutoff later corrected it, the published label is used
+(ADR-0007). A forecast is scored only if its target hour lies inside the period, so validation scores never
+depend on outcomes in the test period.
 """
 
 import time
@@ -27,9 +30,15 @@ def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
     renamed = grid.rename(columns={
         f"target_hour_h{h}": "target_hour", f"target_weekday_h{h}": "target_weekday",
         f"target_active_day_ago_h{h}": "target_active_day_ago", f"target_active_week_ago_h{h}": "target_active_week_ago",
-        f"label_h{h}": "label",
+        f"label_h{h}": "label", f"published_label_h{h}": "published_label", f"label_corrected_at_h{h}": "label_corrected_at",
     })
-    return renamed[["t", "label", *feature_columns()]]
+    return renamed[["t", "label", "published_label", "label_corrected_at", *feature_columns()]]
+
+
+def label_known_at(frame: pd.DataFrame, cutoff: pd.Timestamp) -> np.ndarray:
+    """Labels as known at `cutoff`: corrections posted after it are not applied yet."""
+    later = frame.label_corrected_at.notna() & (frame.label_corrected_at > cutoff)
+    return np.where(later, frame.published_label, frame.label).astype(int)
 
 
 def weeks(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -50,10 +59,11 @@ def run(grid: pd.DataFrame, period: str, model_names, horizons=HORIZONS, train_s
         for h in horizons:
             frame = horizon_frame(grid, h)
             train = frame[(frame.t >= train_start) & (frame.t + h * HOUR <= week_start) & frame.label.notna()]
-            test = frame[(frame.t >= week_start) & (frame.t < week_end) & frame.label.notna()]
+            test = frame[(frame.t >= week_start) & (frame.t < week_end) & (frame.t + h * HOUR <= end) & frame.label.notna()]
             assert (train.t + h * HOUR <= week_start).all()  # the label cutoff
+            y_train = label_known_at(train, week_start)
             for name in model_names:
-                model = MODELS[name]().fit(train, train.label.to_numpy(dtype=int))
+                model = MODELS[name]().fit(train, y_train)
                 results.append(pd.DataFrame({
                     "model": name, "horizon": h, "week": week_start, "unit_id": test.unit_id.astype(str).to_numpy(),
                     "t": test.t.to_numpy(), "on_alert": test.on_alert.to_numpy(), "y": test.label.to_numpy(dtype=int),
@@ -67,9 +77,10 @@ def run(grid: pd.DataFrame, period: str, model_names, horizons=HORIZONS, train_s
 
 
 def near_permanent_units(grid: pd.DataFrame, start, end, threshold=0.9) -> set[str]:
-    """Units on alert in at least 90% of the period's hours (Q8). Decided on the validation period only."""
-    period = grid[(grid.t >= start) & (grid.t < end)]
-    share = period.groupby("unit_id", observed=True)["on_alert"].mean()
+    """Units on alert in at least 90% of the period's hours (Q8): hours with any alert, as the Active label counts
+    them. Decided on the validation period only."""
+    period = grid[(grid.t >= start) & (grid.t < end) & grid.label_h1.notna()]
+    share = period.groupby("unit_id", observed=True)["label_h1"].mean()
     return set(share[share >= threshold].index.astype(str))
 
 
@@ -103,11 +114,12 @@ def main(period: str, model_names, channel: str = "UkraineAlarmSignal", horizons
 
     merged = pd.read_parquet(INTERIM_DIR / f"{channel}_merged.parquet")
     label_periods = pd.read_parquet(INTERIM_DIR / f"{channel}_label_periods.parquet")
+    corrections = pd.read_parquet(INTERIM_DIR / f"{channel}_corrections.parquet")
     data_end = merged.data_end.iloc[0]
     start, end = PERIODS[period]
     if data_end < end + 24 * HOUR:
         print(f"Warning: data ends {data_end:%Y-%m-%d %H:%M} UTC, before the {period} period's last labels.")
-    grid = build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods)
+    grid = build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods, corrections)
     print(f"{period}: {start:%Y-%m-%d} → {end:%Y-%m-%d}, {len(grid):,} grid rows, models: {', '.join(model_names)}", flush=True)
     predictions = run(grid, period, model_names, horizons, train_start)
 

@@ -65,3 +65,10 @@ def test_retracted_alert_is_kept_flagged_and_left_out_of_label_periods():
     alerts, _, _ = unit_alerts_from_messages(msgs, classify)
     assert alerts.retracted.tolist() == [True] and alerts.finished_at.iloc[0] == pd.Timestamp(T("10:20"))
     assert merge_per_unit(alerts[~alerts.retracted], pd.Timestamp(T("12:00"))).empty
+
+
+def test_messages_without_text_are_counted():
+    msgs = [{"id": 1, "date": T("10:00"), "text": None, "service": "MessageActionChannelCreate"},
+            {"id": 2, "date": T("10:01"), "text": "", "service": None, "media": "MessageMediaPhoto"}]
+    _, stats, _ = unit_alerts_from_messages(msgs, classify)
+    assert stats["message: service"] == 1 and stats["message: no text"] == 1

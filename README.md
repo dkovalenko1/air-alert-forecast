@@ -35,16 +35,18 @@ Nothing a forecast for time t uses, and nothing its model is trained on, comes f
 - **Features use only what was known before t.** An alert still on at t counts as ongoing, however long it later
   lasted. Tests compare the fast feature code with a naive "what was known at t" computation, and check that
   rewriting everything after t changes no feature at t.
-- **Training labels must be known by the cutoff:** a model retrained at cutoff C only uses rows with t + h ≤ C.
+- **Training labels must be known by the cutoff:** a model retrained at cutoff C only uses rows with t + h ≤ C,
+  each with its label as known at C (a correction posted later is not applied yet).
+- **Validation never sees the test period:** a forecast is scored only if its target hour lies inside its own period.
 - **Corrections are not known early.** An alert later retracted as a mistake counts as on alert until the
   retraction was posted; only the labels drop it ([ADR-0007](docs/adr/0007-published-vs-corrected-history.md)).
 - **The unit list is fixed in advance,** so a raion's first alert never changes country or neighbour features before it.
 - **Edited messages.** Telegram returns only a message's latest text, dated at its original posting time. In the
   label channel every message has been edited, mostly in two channel-wide re-edits (2024-01-30 and 2025-06-27)
   and, since July 2025, automatically about 20 seconds after posting. Sampled late edits keep the channel's fixed
-  wording, so edits are treated as not changing an alert's kind or place. The month-by-month comparison with the
-  independent official channel would catch it if they did. Telegram feature posts edited at or after t are not
-  used at t (ADR-0007).
+  wording, so edits are treated as not changing an alert's kind or place. This is an evidence-backed assumption;
+  the month-by-month comparison with the independent official channel is an approximate cross-check, still to run.
+  For Telegram feature posts, the planned rule is stricter: a post edited at or after t is not used at t (ADR-0007).
 
 ## Sources and attribution
 

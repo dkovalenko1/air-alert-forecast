@@ -16,8 +16,8 @@ Every message is counted by kind, and unrecognised messages are written out for 
 Edited messages: Telegram returns only a message's latest text, dated at its original posting time. In the
 label channel every message has been edited at least once, mostly in two channel-wide re-edits (2024-01-30 and
 2025-06-27) and, since July 2025, automatically about 20 seconds after posting; sampled late edits still carry the
-channel's fixed wording. Edits are therefore treated as not changing an alert's kind or place, which the
-month-by-month comparison with the independent official channel (Q20) checks.
+channel's fixed wording. Edits are therefore treated as not changing an alert's kind or place: an evidence-backed
+assumption (ADR-0007), cross-checked approximately by the month-by-month comparison with the official channel (Q20).
 """
 
 import dataclasses
@@ -49,7 +49,8 @@ def classify_messages(messages: list[dict], classify) -> tuple[list, Counter, li
     A place not in the registry is counted and dropped from its message."""
     parsed, stats, unknown = [], Counter(), []
     for m in messages:
-        if not m.get("text"):
+        if not m.get("text"):  # service messages (channel created, pinned…) and media without a caption
+            stats["message: service" if m.get("service") else "message: no text"] += 1
             continue
         message = classify(m["text"])
         stats[f"message: {message.kind}"] += 1
@@ -123,7 +124,8 @@ def merge_per_unit(alerts: pd.DataFrame, data_end: pd.Timestamp) -> pd.DataFrame
 
 def build(channel: str) -> None:
     """Write data/interim/<channel>_alerts.parquet (per alert and unit), <channel>_merged.parquet (feature periods),
-    <channel>_label_periods.parquet (label periods) and <channel>_unknown.csv (unrecognised messages)."""
+    <channel>_label_periods.parquet (label periods), <channel>_corrections.parquet (retracted alerts, for labels as
+    known at a training cutoff) and <channel>_unknown.csv (unrecognised messages)."""
     messages = read_channel(channel)
     if not messages:
         raise SystemExit(f"No downloaded messages for {channel}: run `download-telegram {channel}` first.")
@@ -135,6 +137,8 @@ def build(channel: str) -> None:
     alerts.to_parquet(INTERIM_DIR / f"{channel}_alerts.parquet", index=False)
     merged.assign(data_end=data_end).to_parquet(INTERIM_DIR / f"{channel}_merged.parquet", index=False)
     label_periods.assign(data_end=data_end).to_parquet(INTERIM_DIR / f"{channel}_label_periods.parquet", index=False)
+    alerts.loc[alerts.retracted, ["unit_id", "started_at", "finished_at"]].to_parquet(
+        INTERIM_DIR / f"{channel}_corrections.parquet", index=False)  # finished_at: when the retraction was posted
     pd.DataFrame(unknown, columns=["id", "date", "text"]).to_csv(INTERIM_DIR / f"{channel}_unknown.csv", index=False)
     print(f"{channel}: {len(messages):,} messages up to {data_end:%Y-%m-%d %H:%M} UTC → "
           f"{len(alerts):,} unit alerts, {len(merged):,} merged periods for {merged.unit_id.nunique()} units; "

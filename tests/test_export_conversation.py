@@ -52,3 +52,11 @@ def test_message_delivered_inside_a_handoff_is_kept():
     document, counts = export.render(rows)
     assert "## User" in document and "When will we pull the data?\nQ6: confirm" in document and counts["user"] == 1
     assert "Provider context handoff" not in document and "re-delivered" in document
+
+
+def test_short_named_secret_is_redacted_but_short_other_settings_are_not(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("DEBUG=1\nTELEGRAM_API_HASH=abc\n")
+    values = export.secrets(env, {"TELEGRAM_API_ID": "12345"})  # one short secret in .env, one only in the environment
+    assert values == ["12345", "abc"]
+    assert export.redact("TELEGRAM_API_ID=12345, hash abc, DEBUG=1", values) == "TELEGRAM_API_ID=<redacted>, hash <redacted>, DEBUG=1"

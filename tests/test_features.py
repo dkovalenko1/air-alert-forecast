@@ -58,7 +58,7 @@ def test_data_after_t_never_changes_features_at_t(seed):
     cutoff = pd.Timestamp("2026-08-05 13:00", tz="UTC")
     original = build_grid(merged, START, END, DATA_END, UNITS)
     rewritten = build_grid(change_everything_after(merged, cutoff, seed), START, END, DATA_END, UNITS)
-    feature_columns = [c for c in original.columns if not c.startswith("label_")]
+    feature_columns = [c for c in original.columns if not c.startswith(("label_", "published_label_"))]
     assert rewritten.loc[rewritten.t > cutoff + pd.Timedelta(hours=24)].query("unit_id == 'B/d'").on_alert.any()
     known = original.t <= cutoff
     pd.testing.assert_frame_equal(original.loc[known, feature_columns].reset_index(drop=True),
@@ -119,7 +119,7 @@ def test_a_later_retraction_changes_labels_but_no_feature_before_it():
                   "Просимо вибачення, сталась технічна помилка. Тривога в області відсутня.")
     all_clear = ("2026-08-03T17:40:00+00:00", "🟢 Кропивницький район (Кіровоградська обл.)\nВідбій тривоги. Будьте обережні!")
     retracted, cleared = grid_from_messages(start, retraction), grid_from_messages(start, all_clear)
-    features = [c for c in retracted.columns if not c.startswith("label_")]
+    features = [c for c in retracted.columns if not c.startswith(("label_", "published_label_"))]
     known = retracted.t <= pd.Timestamp("2026-08-03 17:00", tz="UTC")  # the retraction came at 17:40
     pd.testing.assert_frame_equal(retracted.loc[known, features].reset_index(drop=True),
                                   cleared.loc[known, features].reset_index(drop=True))

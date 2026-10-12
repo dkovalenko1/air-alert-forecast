@@ -52,9 +52,9 @@ def found_share(source: pd.DataFrame, other: pd.DataFrame, tolerance=TOLERANCE) 
 
 
 def _kyiv(x) -> pd.Timestamp:
-    """A window bound: dates without a time zone are Kyiv calendar dates."""
+    """A window bound in Kyiv time: dates without a time zone are Kyiv calendar dates, others are converted."""
     x = pd.Timestamp(x)
-    return x.tz_localize("Europe/Kyiv") if x.tzinfo is None else x
+    return x.tz_localize("Europe/Kyiv") if x.tzinfo is None else x.tz_convert("Europe/Kyiv")
 
 
 def monthly_report(labels: pd.DataFrame, reference: pd.DataFrame, start, end) -> pd.DataFrame:

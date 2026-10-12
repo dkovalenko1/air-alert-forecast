@@ -61,3 +61,15 @@ def test_every_listed_place_finds_itself():
     rows = list(csv.DictReader(PLACES.open(encoding="utf-8")))
     missing = [r["name"] for r in rows if not any(r["unit_id"] in m.unit_ids for m in find_places(r["name"]))]
     assert missing == ["Щастя"]  # also the word "happiness", so never matched (see NEVER)
+
+
+def test_vowel_changes_hyphenated_names_and_renamed_cities():
+    assert names("до Борисполя") == [("place", "Бориспіль")]
+    assert names("до Ірпеня") == [("place", "Ірпінь")]
+    assert names("біля Кам'янця-Подільського") == [("place", "Кам'янець-Подільський")]
+    assert names("БпЛА на Новомосковськ") == [("place", "Самар")] == names("на Самар")  # renamed in 2024
+    assert names("у Червонограді") == [("place", "Шептицький")]
+
+
+def test_common_word_town_is_never_matched_in_any_form():
+    assert names("Зі щастям у душі, на щастя") == []

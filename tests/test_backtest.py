@@ -85,3 +85,52 @@ def test_outcomes_after_the_cutoff_cannot_change_that_weeks_forecasts():
 def test_weeks_keep_a_final_partial_week():
     start, end = pd.Timestamp("2026-08-03", tz="UTC"), pd.Timestamp("2026-08-13", tz="UTC")
     assert weeks(start, end) == [(start, start + pd.Timedelta(days=7)), (start + pd.Timedelta(days=7), end)]
+
+
+def test_training_labels_are_as_known_at_the_cutoff(monkeypatch):
+    """An alert starts at 22:10 before the cutoff and is retracted at 00:30, after it. At the cutoff it was still
+    believed: the model trained then must see exactly what it would have seen with data up to the cutoff."""
+    fits = []
+
+    class Spy(MODELS["historical_rate"]):
+        def fit(self, frame, y):
+            fits.append((frame.drop(columns=["label", "published_label", "label_corrected_at"]), np.asarray(y)))
+            return super().fit(frame, y)
+
+    monkeypatch.setitem(MODELS, "spy", Spy)
+    cutoff, data_end = PERIOD[0], pd.Timestamp("2026-08-26", tz="UTC")
+    mistaken = pd.DataFrame({"unit_id": ["A/a"], "started_at": [cutoff - pd.Timedelta(minutes=110)],
+                             "finished_at": [cutoff + pd.Timedelta(minutes=30)]})
+    periods = pd.concat([synthetic_periods(), mistaken], ignore_index=True)
+    retracted_later = build_grid(periods, START, PERIOD[1], data_end, UNITS, label_periods=synthetic_periods(), corrections=mistaken)
+    known_at_cutoff = build_grid(periods, START, PERIOD[1], data_end, UNITS)  # not retracted yet
+    for grid in (retracted_later, known_at_cutoff):
+        run(grid, (cutoff, cutoff + pd.Timedelta(days=7)), ["spy"], horizons=(1,), train_start=START)
+    (frame_a, y_a), (frame_b, y_b) = fits
+    pd.testing.assert_frame_equal(frame_a, frame_b)
+    np.testing.assert_array_equal(y_a, y_b)
+    late_evening = (frame_a.unit_id == "A/a").to_numpy() & frame_a.t.isin([cutoff - 2 * HOUR, cutoff - HOUR]).to_numpy()
+    assert (y_a[late_evening] == 1).all()  # believed on alert at the cutoff
+    # the scored truth is corrected: that alert never happened
+    assert retracted_later.set_index(["unit_id", "t"]).loc[("A/a", cutoff - HOUR), "label_h1"] == 0
+
+
+def test_validation_scores_never_depend_on_the_test_period():
+    data_end = pd.Timestamp("2026-08-26", tz="UTC")
+    later = pd.DataFrame({"unit_id": ["A/a"], "started_at": [PERIOD[1] + pd.Timedelta(minutes=65)],
+                          "finished_at": [PERIOD[1] + pd.Timedelta(minutes=95)]})
+    original = build_grid(synthetic_periods(), START, PERIOD[1], data_end, UNITS)
+    changed = build_grid(pd.concat([synthetic_periods(), later]), START, PERIOD[1], data_end, UNITS)
+    a = run(original, PERIOD, ["persistence", "historical_rate"], horizons=(1, 24), train_start=START)
+    b = run(changed, PERIOD, ["persistence", "historical_rate"], horizons=(1, 24), train_start=START)
+    pd.testing.assert_frame_equal(a, b)
+    assert (pd.to_datetime(a.t, utc=True) + a.horizon * HOUR <= PERIOD[1]).all()
+
+
+def test_near_permanent_counts_hours_with_any_alert():
+    """On alert from minute 1 to 59 of every hour: calm at every whole hour t, yet every hour has an alert."""
+    hours = pd.date_range(START - pd.Timedelta(days=8), PERIOD[1] + pd.Timedelta(days=2), freq="h")
+    flicker = pd.DataFrame({"unit_id": "B/c", "started_at": hours + pd.Timedelta(minutes=1), "finished_at": hours + pd.Timedelta(minutes=59)})
+    grid = build_grid(flicker, START, PERIOD[1], pd.Timestamp("2026-08-26", tz="UTC"), UNITS)
+    assert grid[grid.unit_id == "B/c"].on_alert.max() == 0
+    assert near_permanent_units(grid, *PERIOD) == {"B/c"}

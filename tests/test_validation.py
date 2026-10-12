@@ -71,3 +71,9 @@ def test_alerts_in_ua_kyiv_and_latest_snapshot(tmp_path, monkeypatch):
     frame = validation.alerts_in_ua_alerts()
     assert frame.unit_id.tolist() == ["м. Київ"]
     assert frame.finished_at.iloc[0] == pd.Timestamp("2026-10-12T19:16:03Z")
+
+
+def test_utc_bounds_are_read_as_kyiv_months():
+    late_evening = alerts([("A/a", "2026-08-31 22:10:00", "2026-08-31 22:50:00")])  # September 1 in Kyiv
+    report = monthly_report(late_evening, late_evening, pd.Timestamp("2026-08-31 22:00", tz="UTC"), pd.Timestamp("2026-08-31 23:00", tz="UTC"))
+    assert report.month.unique().tolist() == ["2026-09"] and report.passes.all()

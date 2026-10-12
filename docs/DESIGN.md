@@ -63,7 +63,8 @@ sources ─► raw layer ─► canonical tables ─► spec builder ─► mode
 ## 3. Evaluation protocol
 
 - **Walk-forward backtest:** train on everything before a cutoff, forecast the next period, move the cutoff forward, repeat.
-- **Labels must also be known by the cutoff.** A training row for forecast time t and horizon h has its label at t + h. So a model trained at cutoff C may only use rows with t + h ≤ C. Otherwise the last training rows carry outcomes from after the cutoff.
+- **Labels must also be known by the cutoff.** A training row for forecast time t and horizon h has its label at t + h. So a model trained at cutoff C may only use rows with t + h ≤ C. Otherwise the last training rows carry outcomes from after the cutoff. Each label is also taken as known at C: a retraction posted after C does not correct it yet (ADR-0007).
+- **Each period is scored on its own outcomes.** A forecast is scored only if its target hour lies inside its period, so validation scores never depend on outcomes in the test period.
 - **Periods:** training | validation | test.
   - Model and setting choices are made on validation.
   - The test period is the latest period, and it is used once, for the final report.
@@ -324,7 +325,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 - **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
   - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
   - *Decided 2026-10-12:* keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
-  - Which raions count as near-permanent is decided on the validation period, not the test period.
+  - Which raions count as near-permanent is decided on the validation period, not the test period. "On alert in an hour" means any alert during that hour, as the Active label counts it.
 - **Q16. Should city zones with their own air raid alerts be units?** *Decided 2026-10-12: by the measured rule below.*
   - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
@@ -420,7 +421,7 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | blocked |
 | 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | done (`reference/neighbours.csv`, 612 pairs) |
 | 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | done (`features.py`, leakage tests) |
-| 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | code done (`features.py`); real run after the download |
+| 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | main spec done (`features.py`: raion × 1 h × Active, h = 1–24); other specs (e.g. the daily Minutes spec) planned; real run after the download |
 | 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | code done (`backtest.py`, `models.py`); results blocked |
 | 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | model code done (`models.py`); experiments blocked |
 | 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | place matching done (`places.py`); rules blocked |

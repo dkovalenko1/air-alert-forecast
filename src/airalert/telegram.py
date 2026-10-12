@@ -49,17 +49,23 @@ def _last_saved_id(channel_dir: pathlib.Path) -> int:
     files = sorted(channel_dir.glob("*.jsonl"))
     if not files:
         return 0
-    lines = files[-1].read_text(encoding="utf-8").splitlines()
+    # Split on "\n" only: str.splitlines() would also split at characters such as U+2028 inside a message's text.
+    lines = files[-1].read_text(encoding="utf-8").split("\n")
+    if lines[-1] == "":
+        lines.pop()  # the file ends with a newline
+    dropped = False
     while lines:
         try:
             last_id = json.loads(lines[-1])["id"]
             break
         except (json.JSONDecodeError, KeyError):
             lines.pop()
+            dropped = True
     else:
         files[-1].unlink()
         return _last_saved_id(channel_dir)
-    files[-1].write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    if dropped:  # rewrite only to remove a half-written last line; otherwise leave the raw file untouched
+        files[-1].write_text("".join(line + "\n" for line in lines), encoding="utf-8")
     return last_id
 
 
