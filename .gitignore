@@ -11,3 +11,6 @@ models/
 __pycache__/
 .venv/
 .ipynb_checkpoints/
+
+# macOS
+.DS_Store

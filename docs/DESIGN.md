@@ -220,7 +220,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Caveats: alerts from August are also `red`, so `red` may simply be the default. City and hromada alerts duplicate each other (e.g. "м. Кривий Ріг" and "Криворізька територіальна громада", 204 each).
   - Why it matters: if it doesn't, we need about 125 raion requests (about 1 h) instead of 27 (about 14 min).
   - How we'll decide: inspect the first snapshot.
-- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006).
+- **Q2. Is alerts.in.ua consistent with the label source?** *Decided 2026-10-12: used as the cross-check for the test period.* (ADR-0006)
   - **Why it is still needed:** the official channel is silent after 2026-09-07. For the whole test period, alerts.in.ua is the only independent check of our labels. It is also the fallback if the channel stops before submission.
   - **First check:** on 2026-10-10, 12:00–18:00 UTC, for Dnipropetrovsk raions:
     - 23/23 alerts.in.ua starts and 25/26 ends were found in the channel, median delay 16–18 s;
@@ -270,8 +270,10 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
     - Telethon waits about 1 s per 100 messages by default, so roughly 1 h and 2 h of unattended download.
     - The check itself reuses the label parsers; the comparison script and the run take about an hour.
     - Investigating failed months can't be estimated in advance.
-- **Q4. Keeping the latest period current.**
-  - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
+- **Q4. Keeping the latest period current.** *Decided 2026-10-12: pinned dates.*
+  - `update-data` downloads only messages newer than the last one we have. It runs once, shortly before the final evaluation.
+  - The test period ends on the last full Sunday before that run.
+  - The period dates are pinned in the configuration and recorded in the README, so a rerun reproduces the report. Graders can move the dates forward.
 - **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
   - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download).
     - Keep each message's type.
@@ -292,15 +294,19 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Secondary: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).
 - **Q6. Definition of "oblast on alert" since alerts became raion-level.**
   - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
-- **Q7. Label rules.** *No merging decided 2026-10-12: alerts are kept exactly as published.*
-  - **Active:** a slot is Active if any alert overlaps it. Proposal. Requiring at least 1 minute would barely matter: only 0.2% of raion alerts since 2025-08 lasted under 1 minute (median 53 min).
+  - **Only needed for the secondary oblast spec.** Proposal (2026-10-12): drop that spec and forecast raions only, which makes this question moot.
+    - The question the oblast spec answered ("does a longer history help?") is already answered by the Q9 training-start experiment on the raion spec.
+    - An oblast view, if wanted for display, is an aggregate of the raion forecasts, not a separate model.
+- **Q7. Label rules.** *Decided 2026-10-12: any overlap makes a slot Active, and alerts are kept exactly as published.*
+  - **Active:** a slot is Active if any alert overlaps it (decided 2026-10-12). Requiring at least 1 minute would barely matter: only 0.2% of raion alerts since 2025-08 lasted under 1 minute (median 53 min).
   - **No merging:** alerts are kept exactly as published (decided 2026-10-12). Merging changes nothing for Active or Minutes; it would only affect Onset and Time to alert.
     - Example: Synelnykivskyi raion had an all-clear at 13:18:10 and a new red alert at 13:19:40 on 2026-09-06.
     - If an Onset spec is run, we report how many alerts restart within 1/2/5/10 min of an all-clear, then decide.
   - **Naive volunteer alerts:** no longer relevant, because the volunteer CSV is not used (ADR-0006).
 - **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
   - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
-  - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
+  - *Decided 2026-10-12:* keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
+  - Which raions count as near-permanent is decided on the validation period, not the test period.
 - **Q16. Should city zones with their own air raid alerts be units?** *Decided 2026-10-12: by the measured rule below.*
   - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
@@ -336,14 +342,22 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Validation period?
   - Test period: proposed as the last 4 weeks, about 2026-09-14 → 2026-10-11.
   - How often to retrain inside the backtest: weekly?
-- **Q10. Which horizons to train:** all of 1–24, or a subset (1, 2, 3, 6, 12, 24) to cut compute?
+- **Q10. Which horizons to train.** *Decided 2026-10-12: six horizons, 1, 2, 3, 6, 12 and 24 h.* All 24 would take about 1.5–5 h per backtest for the raion spec; six take about 25–75 min.
 
 ### Features
 
 - **Q11. Neighbour map.**
   - Source of raion boundaries, e.g. the admin-2 geojson.
   - Definition of a neighbour: units that share a border.
-- **Q12. Telegram features.**
+- **Q12. Telegram features.** *Decided 2026-10-12, as proposed:*
+  - Channels: `@kpszsu` and `@deraketaua`.
+  - Text is matched to places with a list of names in every grammatical case. Cities are mapped to raions through the official КАТОТТГ register.
+  - No LLM extraction.
+  - Features: threat posts for each unit and its neighbours over the last 15/60/180 min, split by type; time since the last mention; country-wide signals.
+  - A post edited after t is not used for forecasts made before the edit.
+  - The start date comes from a chart of posts per month.
+
+  The original sub-questions:
   - Final channel list.
   - Matching text to units: a list of oblast, raion and city names in all grammatical cases, mapped to raions.
   - Feature types: threat posts per unit in the last 1/3/6 h, threat type (Shahed, jet drone, ballistic, cruise missile, MiG-31K, bombers).
@@ -354,6 +368,11 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 
 ### Product
 
-- **Q14. Deliverable form.**
-  - CLI + README + a results notebook?
-  - Plots as PNG or as an HTML report?
+- **Q14. Deliverable form.** *Decided 2026-10-12:*
+  - CLI (`python -m airalert update-data | build | train | backtest | predict --spec …`).
+  - Code in `src/airalert/`; `tests/` includes the leakage test from ADR-0001.
+  - README with results per horizon against the baselines, the Q20 label-quality table, and limitations.
+  - Charts generated by a script into `docs/figures/` as PNG, plus one narrative notebook.
+  - Small derived tables (unit registry, neighbours) are committed; raw data and models are not.
+  - `uv` + `pyproject.toml`, Python 3.12.
+  - The AI conversation export is added to the repo as well (`docs/ai-conversation.md`). Before it is committed, it is checked for tokens and credentials.
