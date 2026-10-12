@@ -1,6 +1,11 @@
 # AI conversation
 
-Full record of the conversation with Claude (Claude Code) while building this project, exported from the session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool result is included in order. Not included: the model's internal reasoning and hidden harness context. API tokens are redacted, and very long tool outputs are shortened (marked where it happens).
+Full record of the conversation with the AI assistant while building this project.
+
+- **App:** T3 Code (desktop), which runs Claude through the Claude Code agent harness
+- **Model:** Claude Opus 5.5 (`claude-opus-5-5`), reasoning effort: xhigh
+
+Exported from the session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool result is included in order. Not included: the model's internal reasoning and hidden harness context. API tokens are redacted, and very long tool outputs are shortened (marked where it happens).
 
 ---
 
@@ -15787,6 +15792,96 @@ EOF
 git log --oneline | head -1; uv run python scripts/export_conversation.py && git add docs/ai-conversation.md && git commit -q -m "Update AI conversation export
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" && git log --oneline | head -1; tail -1 /private/tmp/claude-501/-Users-david-proj-air-alert-forecast/c791d226-99bf-4d5c-b170-7216b394d86f/tasks/bi3rpos55.output
+```
+
+</details>
+
+<details><summary>Tool result</summary>
+
+```
+a69c11c Add place matching for Telegram posts (Q12, first part)
+Wrote docs/ai-conversation.md: 24 users, 78 assistants, 312 tool calls, 311 tool results
+44f28e6 Update AI conversation export
+  190,000 saved (up to 2024-11-05), 93 msg/s, about 83 min left
+```
+
+</details>
+
+### Assistant (2026-10-12 20:25:57 UTC)
+
+## The AI conversation transcript
+
+It's at `docs/ai-conversation.md` (commit `44f28e6`), produced by `scripts/export_conversation.py` from this session's log.
+
+**What's in it:** every one of your messages, every reply of mine, and every tool call with its result, in order.
+
+**What's left out:**
+- my internal reasoning;
+- the hidden context the tool injects into each turn, such as reminders and your account email.
+
+**Two adjustments:**
+- **Secrets:** the script replaces anything from `.env` with `<redacted>`. I checked, and none of your tokens ever appeared in the session.
+- **Long tool outputs** (e.g. large file listings) are cut to their beginning and end, with a marker saying so. `--full-tool-output` keeps them whole.
+
+It covers the conversation up to just before this reply. I'll re-run it before submission so it covers everything.
+
+## Telegram place matching (the unblocked part of step 14)
+
+Commit `a69c11c`:
+- **Place table:** 404 cities and 638 settlements, each with its raion, from the same OCHA source as the neighbour map. **Villages are left out**, because half of them share a name with another village.
+- **The matcher** finds cities, settlements, raions and oblasts (including region names like "Полтавщина") in any grammatical case and maps them to raions. It avoids false hits such as the town Березне matching "березня" (March).
+- **On about 175 recent real posts,** about half name a place. The rest are maps, shoot-down summaries and threats with no place, such as "балістика з півночі" (ballistic missiles from the north).
+
+**One thing you should know:** a safety filter stopped part of my previous reply partway through a change to this matcher. I checked, and that change never reached the files: everything is as committed, with 55 tests passing. I haven't redone it. Matching stays at city, settlement, raion and oblast level, which is all the design needs. One limitation is recorded in the commit: a city and a settlement with the same stem, like Чорноморськ / Чорноморське, can be confused.
+
+## Download
+
+`@UkraineAlarmSignal` is at **190,000 of 654,325** messages (up to November 2024), about 80 minutes left for this channel. The background-task limit will stop it at about 2 hours, partway through. I'll restart it then, and it continues from where it stopped.
+
+## Still blocked
+
+These wait for the downloads:
+- the full label build;
+- the alerts.in.ua cross-check and the month-by-month label check;
+- the city-zone decision;
+- the first validation backtest;
+- the threat-type rules and features from the two Air Force / monitoring channels.
+
+---
+
+## User (2026-10-12 20:31:33 UTC)
+
+I'm not in Claude Code; I'm using the T3 Code desktop app. Also state the model that is being used (Opus 5.5, xhigh).
+
+<details><summary>Tool call: Bash</summary>
+
+Add app and model to the export header, re-export, commit
+
+```
+python3 - <<'EOF'
+import pathlib
+p = pathlib.Path("scripts/export_conversation.py"); s = p.read_text()
+s = s.replace('"""Export the AI conversation (Claude Code session logs) to docs/ai-conversation.md (Q14).',
+              '"""Export the AI conversation to docs/ai-conversation.md (Q14).\n\nThe conversation ran in the T3 Code desktop app with Claude Opus 5.5 (model id claude-opus-5-5) at\nxhigh reasoning effort. T3 Code runs Claude through the Claude Code agent harness, which writes the\nsession logs read here (~/.claude/projects/<project>/*.jsonl).')
+old = '''        "Full record of the conversation with Claude (Claude Code) while building this project, exported from the "
+        "session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool "'''
+new = '''        "Full record of the conversation with the AI assistant while building this project.\\n\\n"
+        "- **App:** T3 Code (desktop), which runs Claude through the Claude Code agent harness\\n"
+        "- **Model:** Claude Opus 5.5 (`claude-opus-5-5`), reasoning effort: xhigh\\n\\n"
+        "Exported from the session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool "'''
+assert old in s; s = s.replace(old, new)
+p.write_text(s)
+EOF
+uv run python scripts/export_conversation.py && sed -n 1,10p docs/ai-conversation.md && git add scripts/export_conversation.py docs/ai-conversation.md && git commit -q -F - <<'EOF'
+State app and model in the conversation export
+
+The conversation runs in the T3 Code desktop app with Claude Opus 5.5
+(claude-opus-5-5) at xhigh reasoning effort; T3 Code uses the Claude Code
+harness, whose session logs the export reads.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+git log --oneline | head -1
 ```
 
 </details>

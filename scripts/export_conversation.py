@@ -1,4 +1,8 @@
-"""Export the AI conversation (Claude Code session logs) to docs/ai-conversation.md (Q14).
+"""Export the AI conversation to docs/ai-conversation.md (Q14).
+
+The conversation ran in the T3 Code desktop app with Claude Opus 5.5 (model id claude-opus-5-5) at
+xhigh reasoning effort. T3 Code runs Claude through the Claude Code agent harness, which writes the
+session logs read here (~/.claude/projects/<project>/*.jsonl).
 
 Every user message, assistant reply, tool call and tool result is kept, in order. Left out: the model's
 internal reasoning ("thinking") and the hidden harness context (<system-reminder> blocks), which are not
@@ -81,8 +85,10 @@ def records():
 def main(full_tool_output: bool) -> None:
     blocks = [
         "# AI conversation\n",
-        "Full record of the conversation with Claude (Claude Code) while building this project, exported from the "
-        "session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool "
+        "Full record of the conversation with the AI assistant while building this project.\n\n"
+        "- **App:** T3 Code (desktop), which runs Claude through the Claude Code agent harness\n"
+        "- **Model:** Claude Opus 5.5 (`claude-opus-5-5`), reasoning effort: xhigh\n\n"
+        "Exported from the session logs by `scripts/export_conversation.py`. Every user message, assistant reply, tool call and tool "
         "result is included in order. Not included: the model's internal reasoning and hidden harness context. "
         "API tokens are redacted, and very long tool outputs are shortened (marked where it happens).\n",
     ]
