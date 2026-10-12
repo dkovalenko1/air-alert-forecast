@@ -410,17 +410,17 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 |---|---|---|---|
 | 1 | Download alerts.in.ua history | — | done (27 locations, 16,812 alerts) |
 | 2 | Download Telegram channels (`@UkraineAlarmSignal`, `@air_alert_ua`, `@kpszsu`, `@deraketaua`) | login | running, about 4 h |
-| 3 | **Unit registry:** every raion with its oblast and name variants (renames, apostrophes, Ukrainian and English) | official CSV, alerts.in.ua | open |
-| 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | open; real run blocked on its download |
-| 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | open; real run blocked on its download |
-| 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | blocked |
-| 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | blocked |
+| 3 | **Unit registry:** every raion with its oblast and name variants (renames, apostrophes, Ukrainian and English) | official CSV, alerts.in.ua | done (`units.py`, 122 raions + Kyiv, renamed aliases) |
+| 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | code done (`alarm_signal.py`, `alerts.py`, `labels.py`); full run after the download |
+| 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | code done (`official_channel.py`); full run after the download |
+| 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | code done (`validation.py`, `check-labels`); blocked on downloads |
+| 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | code done (`validation.py`); blocked on the label channel's download |
 | 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | blocked |
-| 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | open |
-| 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | open |
-| 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | develop now; real run blocked |
-| 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | develop now; results blocked |
-| 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | blocked |
+| 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | done (`reference/neighbours.csv`, 612 pairs) |
+| 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | done (`features.py`, leakage tests) |
+| 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | code done (`features.py`); real run after the download |
+| 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | code done (`backtest.py`, `models.py`); results blocked |
+| 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | model code done (`models.py`); experiments blocked |
 | 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | partly open |
 | 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | blocked |
 | 16 | **Final run:** `update-data`, pinned test period, figures, README, notebook, AI conversation export | everything | blocked |
