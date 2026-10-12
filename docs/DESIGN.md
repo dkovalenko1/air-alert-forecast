@@ -291,10 +291,10 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 
 - **Q5. Main spec.** *Decided 2026-10-12* ([ADR-0002](adr/0002-one-main-spec.md)):
   - Main: raion × 1 h × Active, horizons 1–24, provided Q2 passes.
-  - Secondary: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).
-- **Q6. Definition of "oblast on alert" since alerts became raion-level.**
+  - Secondary: raion × 1 day × Minutes (day-ahead planning). The oblast × 1 h × Active spec was dropped on 2026-10-12 (Q6).
+- **Q6. Definition of "oblast on alert" since alerts became raion-level.** *Decided 2026-10-12: not needed. The oblast spec is dropped and we forecast raions only (plus Kyiv and any city units from Q16).*
   - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
-  - **Only needed for the secondary oblast spec.** Proposal (2026-10-12): drop that spec and forecast raions only, which makes this question moot.
+  - **Only needed for the secondary oblast spec,** which is now dropped.
     - The question the oblast spec answered ("does a longer history help?") is already answered by the Q9 training-start experiment on the raion spec.
     - An oblast view, if wanted for display, is an aggregate of the raion forecasts, not a separate model.
 - **Q7. Label rules.** *Decided 2026-10-12: any overlap makes a slot Active, and alerts are kept exactly as published.*
@@ -337,18 +337,26 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 
 ### Evaluation
 
-- **Q9. Periods.**
-  - Training start for the raion spec: from November 2025 only, or include earlier years with oblast-wide alerts spread to all raions plus a regime flag?
-  - Validation period?
-  - Test period: proposed as the last 4 weeks, about 2026-09-14 → 2026-10-11.
-  - How often to retrain inside the backtest: weekly?
+- **Q9. Periods.** *Decided 2026-10-12:*
+
+  | Period | Dates (Kyiv time) | Role |
+  |---|---|---|
+  | Training | from 2025-08-01 | The model learns from inputs and outcomes. 2025-08 is when raion alerts became the majority (69%, then 83% from September). |
+  | Validation | Mon 2026-08-17 → Sun 2026-09-13 | All model and setting choices are made here. It includes the switch to yellow/red levels (2026-09-04 to 09-06). |
+  | Test | Mon 2026-09-14 → Sun 2026-10-11 | Four full weeks, used once for the reported score. Entirely under the yellow/red system. |
+
+  - **Weekly retraining inside validation and test:** each week is forecast by a model trained on everything before that week starts. Forecasts are made every hour, for every horizon.
+  - **Training-start experiment on validation:** 2025-08-01 vs 2025-11-01 (fully raion-level) vs 2023-01-01 (oblast-wide alerts spread to all raions). The winner is used for the test period.
+  - **Label cutoff:** a training row is only used if t + h ≤ the training cutoff (section 3).
 - **Q10. Which horizons to train.** *Decided 2026-10-12: six horizons, 1, 2, 3, 6, 12 and 24 h.* All 24 would take about 1.5–5 h per backtest for the raion spec; six take about 25–75 min.
 
 ### Features
 
-- **Q11. Neighbour map.**
-  - Source of raion boundaries, e.g. the admin-2 geojson.
-  - Definition of a neighbour: units that share a border.
+- **Q11. Neighbour map.** *Decided 2026-10-12: shared border plus same oblast.*
+  - Raion boundaries come from OCHA's admin-2 maps on HDX; licence still to be checked. Neighbours are computed once and only the resulting table is committed.
+  - Features use the share of neighbours on alert, not the count, because raions have different numbers of neighbours.
+  - City units inherit their raion's neighbours.
+  - Learned neighbours (raions whose alerts tend to come first, computed from training data only) are a later experiment, if there's time.
 - **Q12. Telegram features.** *Decided 2026-10-12, as proposed:*
   - Channels: `@kpszsu` and `@deraketaua`.
   - Text is matched to places with a list of names in every grammatical case. Cities are mapped to raions through the official КАТОТТГ register.

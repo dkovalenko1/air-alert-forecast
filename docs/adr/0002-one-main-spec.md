@@ -4,7 +4,7 @@ status: accepted
 
 # Code accepts any forecast spec; only one main spec is analysed in depth
 
-The code accepts any forecast spec: target × unit level × step × horizons. Only the **main spec** gets the full analysis: baselines, ablations, calibration, error analysis and write-up. A few secondary specs answer one question each. Any other spec appears only in an automatically generated summary table.
+The code accepts any forecast spec: target × unit level × step × horizons. Only the **main spec** gets the full analysis: baselines, ablations, calibration, error analysis and write-up. A secondary spec answers one specific question: raion × 1 day × Minutes, for day-ahead planning. The oblast spec was dropped on 2026-10-12. Any other spec appears only in an automatically generated summary table.
 
 Analysing every combination in depth is not worth it, for three reasons:
 - Checking and explaining results is the real cost: thousands of numbers across 24 specs × 24 horizons × several metrics.
