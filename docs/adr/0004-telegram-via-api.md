@@ -15,3 +15,5 @@ Posts are downloaded with Telethon, using the user's own Telegram API credential
 
 - The user needs a Telegram account and `api_id`/`api_hash` credentials, kept in `.env`.
 - The first login happens in the user's terminal. The session file is git-ignored.
+- **Applies to every channel** (confirmed 2026-10-12): `@UkraineAlarmSignal`, `@air_alert_ua`, `@kpszsu`, `@deraketaua`.
+- **Desktop exports:** a manual Desktop export may be used to explore data, but the pipeline never reads one.

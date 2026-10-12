@@ -219,10 +219,12 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Caveats: alerts from August are also `red`, so `red` may simply be the default. City and hromada alerts duplicate each other (e.g. "м. Кривий Ріг" and "Криворізька територіальна громада", 204 each).
   - Why it matters: if it doesn't, we need about 125 raion requests (about 1 h) instead of 27 (about 14 min).
   - How we'll decide: inspect the first snapshot.
-- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006). No overlap period exists, so we check indirectly:
-  - **(a)** compare agreement(alerts.in.ua, volunteer) after 2026-09-12 with agreement(official, volunteer) before 2026-09-07, per oblast;
-  - **(b)** compare distributions across the boundary: alerts per raion per day, durations, and the mix of location levels.
-  - If they match, the raion main spec goes ahead. If not, see Q3.
+- **Q2. Is alerts.in.ua consistent with the label source?** Now a cross-check only (ADR-0006).
+  - **Why it is still needed:** the official channel is silent after 2026-09-07. For the whole test period, alerts.in.ua is the only independent check of our labels. It is also the fallback if the channel stops before submission.
+  - **First check:** on 2026-10-10, 12:00–18:00 UTC, for Dnipropetrovsk raions:
+    - 23/23 alerts.in.ua starts and 25/26 ends were found in the channel, median delay 16–18 s;
+    - 24/25 channel starts were found in alerts.in.ua.
+  - **Full check:** repeat over the whole test period with the 27-request snapshot.
 - **Q3. Fallback if Q2 fails.** *No longer needed: the label source is `@UkraineAlarmSignal` (ADR-0006).*
   - Options: an oblast-level main spec built from one consistent source, or a shorter, alerts.in.ua-only raion period.
 - **Q19. Which source do the labels come from?** *Decided 2026-10-12: `@UkraineAlarmSignal` from 2023-01-01* ([ADR-0006](adr/0006-labels-from-volunteer-channel.md)). (See "The volunteer CSV and its source channel" in section 5.)
@@ -256,6 +258,12 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
     - It gives the overlap with the official record that alerts.in.ua cannot (ADR-0003).
   - **Before accepting it:** repeat the spot checks over whole months, e.g. one month per year plus August 2026 → 2026-09-07, using a Telethon download of both channels.
   - **alerts.in.ua:** becomes an independent cross-check for the latest period, which turns Q2 into a three-way check.
+- **Q20. Pass mark for the label check, set before looking at the results.**
+  - **What it's for:** ADR-0006 rests on 54 hours of spot checks. Before building on the channel, we compare it with the official channel month by month, from 2023-01 to 2026-08.
+  - **Why it's fixed in advance:** with a pass mark chosen after seeing the results, any number can be explained away ("97% is fine").
+  - **If a month fails:** we look for the cause (parser bug, channel outage, renamed places) and fix the parser, mark the period missing, or start training later.
+  - **Output:** the per-month table goes into the README as evidence of label quality.
+  - **Proposal:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.
 - **Q4. Keeping the latest period current.**
   - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
 - **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
@@ -279,16 +287,24 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 - **Q6. Definition of "oblast on alert" since alerts became raion-level.**
   - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
 - **Q7. Label rules.**
-  - How much overlap makes a slot Active: any overlap, or at least 1 minute?
-  - Are alerts separated by a short gap merged when counting onsets? If so, how short is "short"?
-  - What to do with volunteer "naive" alerts, whose end time is imputed as start + 30 min?
+  - **Active:** a slot is Active if any alert overlaps it. Proposal.
+  - **No merging:** alerts are kept exactly as published (proposal, revised 2026-10-12). Merging changes nothing for Active or Minutes; it would only affect Onset and Time to alert.
+    - Example: Synelnykivskyi raion had an all-clear at 13:18:10 and a new red alert at 13:19:40 on 2026-09-06.
+    - If an Onset spec is run, we report how many alerts restart within 1/2/5/10 min of an all-clear, then decide.
+  - **Naive volunteer alerts:** no longer relevant, because the volunteer CSV is not used (ADR-0006).
 - **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
   - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
   - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
 - **Q16. Should city zones with their own air raid alerts be units?**
   - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
-  - Depends on Q15, which determines which hromada zones carry real air raid alerts.
+  - **Candidates seen in the channel's city-level air raid messages:** Kharkiv, Zaporizhzhia, Nikopol, Marhanets, Kramatorsk. alerts.in.ua also lists Kryvyi Rih.
+  - **Measured per candidate city:**
+    1. **Label accuracy:** its alerts in the channel, compared with the official channel's records for that city up to 2026-09-07 and with alerts.in.ua `city` records after that. Same method as the Q20 check.
+    2. **Added value:** the share of hours in which the city's state differs from its raion's. Kharkiv: about 12%. Zaporizhzhia: the raion is on alert while the city is not in 51% of hours (June–September 2026).
+    3. **Enough data:** the number of city alerts per month in training.
+  - **Proposed rule, set before measuring:** a city becomes a unit if it passes Q20's pass mark, differs from its raion in at least 5% of hours, and has at least 20 alerts per month. Otherwise it is folded into its raion.
+  - Forecast quality for city units is then reported separately in the backtest.
 - **Q18. What counts as an air raid alert under the yellow/red system?** *Decided 2026-10-12: an alert of either level.* (See "Yellow and red alert levels" in section 5.)
   - **The problem:** every training alert comes from the old single-level system. The whole test period, about 2026-09-14 → 2026-10-11, falls under the new one. The definition changes exactly at the train/test boundary.
   - **Target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. There are only about 5 weeks of level data, and nearly all of it falls in the test period.
