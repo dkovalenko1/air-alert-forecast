@@ -10,7 +10,8 @@ before t.
 
 Two merged tables come out (ADR-0001): feature periods, as published (a retracted alert lasts until its
 retraction, since until then it was believed), and label periods, the corrected truth (retracted alerts dropped,
-stretches after a missing all-clear cut out). A corrections table records, for every retracted alert and every
+stretches after a missing all-clear cut out, and the hours before an all-clear for a never-announced alert
+unknown). A corrections table records, for every retracted alert and every
 unknown stretch, when the correction became known, so training at a cutoff can use labels as known then.
 
 Every message is counted by kind, and unrecognised messages are written out for review (ADR-0005).
@@ -30,7 +31,7 @@ from collections import Counter
 import pandas as pd
 
 from airalert import alarm_signal, official_channel
-from airalert.alerts import build_alerts
+from airalert.alerts import MISSED_START_WINDOW, build_alerts
 from airalert.alarm_signal import UNKNOWN
 from airalert.settings import RAW_DIR, ROOT
 from airalert.units import REGISTRY, UnknownPlace, _oblast_name, canonical, resolve, units
@@ -95,7 +96,8 @@ def unit_alerts_from_messages(messages: list[dict], classify, max_silence=None) 
     all-clear (only with `max_silence`, see alerts.py). Also returns counts and the unrecognised messages."""
     parsed, stats, unknown = classify_messages(messages, classify)
     data_end = pd.Timestamp(messages[-1]["date"]) if messages else None
-    history = build_alerts(parsed, max_silence=max_silence, data_end=data_end) if max_silence else build_alerts(parsed)
+    history = (build_alerts(parsed, max_silence=max_silence, data_end=data_end, missed_start_window=MISSED_START_WINDOW)
+               if max_silence else build_alerts(parsed))
     stats.update(history.stats)
     excluded = {u.unit_id for u in units() if u.excluded}
     rows = []
@@ -118,13 +120,15 @@ def unit_alerts_from_messages(messages: list[dict], classify, max_silence=None) 
                 "implied": alert.implied,
                 "restarts": alert.restarts,
                 "retracted": alert.retracted,
+                "missed_start": alert.missed_start,
                 "unknown": list(alert.unknown),
             })
-    columns = ["unit_id", "started_at", "finished_at", "place_level", "place", "max_color", "implied", "restarts", "retracted", "unknown"]
+    columns = ["unit_id", "started_at", "finished_at", "place_level", "place", "max_color", "implied", "restarts", "retracted", "missed_start", "unknown"]
     frame = pd.DataFrame(rows, columns=columns)
     for column in ("started_at", "finished_at"):
         frame[column] = pd.to_datetime(frame[column], utc=True)
     frame["retracted"] = frame["retracted"].astype(bool)
+    frame["missed_start"] = frame["missed_start"].astype(bool)
     return frame, stats, unknown
 
 
@@ -194,7 +198,7 @@ def build(channel: str) -> None:
     rule = max_silence if channel in MISSING_ALL_CLEAR_RULE else None
     alerts, stats, unknown = unit_alerts_from_messages(messages, CLASSIFIERS[channel], max_silence=rule)
     data_end = pd.Timestamp(messages[-1]["date"])
-    merged = merge_per_unit(alerts, data_end)
+    merged = merge_per_unit(alerts[~alerts.missed_start], data_end)  # as published: a never-announced alert is not in it
     label_periods = merge_per_unit(known_pieces(alerts), data_end)
     INTERIM_DIR.mkdir(parents=True, exist_ok=True)
     alerts.drop(columns="unknown").to_parquet(INTERIM_DIR / f"{channel}_alerts.parquet", index=False)

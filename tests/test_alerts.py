@@ -83,3 +83,22 @@ def test_silence_longer_than_the_limit_is_unknown():
     [still_open] = run_with_rule((START, 0), data_end_minutes=13 * 60).alerts
     assert still_open.finished_at is None and still_open.unknown == [(T0, T0 + timedelta(hours=13), T0 + timedelta(hours=12))]
     assert run_with_rule((START, 0), (END, 11 * 60)).alerts[0].unknown == []
+
+
+def run_missed_start(*texts_and_minutes):
+    return build_alerts([(i, T0 + timedelta(minutes=m), classify(t)) for i, (t, m) in enumerate(texts_and_minutes)],
+                        missed_start_window=timedelta(hours=5))
+
+
+def test_all_clear_for_a_never_announced_alert_makes_the_hours_before_it_unknown():
+    [a] = run_missed_start((END, 600)).alerts
+    start = T0 + timedelta(hours=5)  # 10 h after T0, minus the 5 h window
+    assert a.missed_start and (a.started_at, a.finished_at) == (start, T0 + timedelta(hours=10))
+    assert a.unknown == [(start, T0 + timedelta(hours=10), T0 + timedelta(hours=10))]  # known only at the all-clear
+
+
+def test_missed_start_window_stops_at_the_previous_message_and_repeats_are_ignored():
+    first, missed = run_missed_start((START, 0), (END, 30), (END, 150)).alerts
+    assert not first.missed_start and missed.started_at == T0 + timedelta(minutes=30)  # calm was known until 00:30
+    h = run_missed_start((START, 0), (END, 30), (END, 35))  # the same all-clear posted twice
+    assert len(h.alerts) == 1 and h.stats["all-clear with no open alert"] == 1

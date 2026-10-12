@@ -20,6 +20,12 @@ Training labels follow the same rule. A model retrained at cutoff C sees each la
 retraction posted after C corrected a training hour, that hour keeps its published label. For this the grid also
 holds, per horizon, the published label and when a correction changed it. Scoring uses the corrected labels.
 
+The same split handles lost messages (Q17, Q20). After a missing all-clear, the alert stays in the feature periods
+as published (nobody knew the all-clear was missing), while the stretch with no news becomes unknown in the labels.
+An all-clear for an alert that was never announced adds nothing to the feature periods (it was never published),
+while the hours before it become unknown in the labels. Unknown hours are neither trained on nor scored, and each
+becomes unknown only from the moment it could have been detected.
+
 An apology that gives a late all-clear ("…відбій повітряної тривоги був о 22:29") ends the alert when the apology is
 posted, not at the earlier time it names, which was not known before the message.
 

@@ -142,7 +142,7 @@ def neighbours_and_onset(periods: pd.DataFrame, data_end) -> None:
 
 def levels_by_day(alerts: pd.DataFrame) -> None:
     start = PERIODS["validation"][0]
-    window = alerts[(alerts.started_at >= start) & (alerts.started_at < END) & ~alerts.retracted]
+    window = alerts[(alerts.started_at >= start) & (alerts.started_at < END) & ~alerts.retracted & ~alerts.missed_start]
     day = window.started_at.dt.tz_convert(KYIV).dt.strftime("%m-%d")
     level = window.max_color.fillna("none")
     table = pd.crosstab(day, level).reindex(columns=["none", "yellow", "red"], fill_value=0)

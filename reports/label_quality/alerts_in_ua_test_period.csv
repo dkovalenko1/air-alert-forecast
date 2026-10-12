@@ -1,0 +1,9 @@
+month,kind,direction,events,found,passes
+2026-09,start,reference found in labels,8208,0.9870857699805068,True
+2026-09,end,reference found in labels,8212,0.984169508037019,True
+2026-10,start,reference found in labels,5428,0.9953942520265291,True
+2026-10,end,reference found in labels,5417,0.9988923758537936,True
+2026-09,start,labels found in reference,8125,0.9970461538461538,True
+2026-09,end,labels found in reference,8133,0.9933603836222796,True
+2026-10,start,labels found in reference,5418,0.9961240310077519,True
+2026-10,end,labels found in reference,5413,0.9996305191206355,True

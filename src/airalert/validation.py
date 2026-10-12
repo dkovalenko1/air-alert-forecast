@@ -38,7 +38,9 @@ def events(alerts: pd.DataFrame) -> pd.DataFrame:
     """Start and all-clear events per unit, one row per distinct (unit, kind, time). Retracted alerts are left out."""
     if "retracted" in alerts:
         alerts = alerts[~alerts.retracted.astype(bool)]
-    starts = alerts[["unit_id", "started_at"]].rename(columns={"started_at": "time"}).assign(kind="start")
+    announced = alerts[~alerts.missed_start.astype(bool)] if "missed_start" in alerts else alerts
+    # a never-announced alert (missed start) has an all-clear event but no start event
+    starts = announced[["unit_id", "started_at"]].rename(columns={"started_at": "time"}).assign(kind="start")
     ends = alerts.dropna(subset=["finished_at"])[["unit_id", "finished_at"]].rename(columns={"finished_at": "time"}).assign(kind="end")
     both = pd.concat([starts, ends]).drop_duplicates()
     both["time"] = pd.to_datetime(both["time"], utc=True)  # also when there are no events at all
@@ -95,6 +97,31 @@ def monthly_report(labels: pd.DataFrame, reference: pd.DataFrame, start, end, ex
     report = pd.DataFrame(rows, columns=["month", "kind", "direction", "events", "found"])
     report["passes"] = (report.events > 0) & (report.found >= PASS_MARK)
     return report
+
+
+def hourly_agreement(periods, label_periods, corrections, reference_periods, start, end, data_end, exclude=()) -> pd.DataFrame:
+    """Per Kyiv month: does the Active label (any alert in the hour) agree with the reference's, raion-hour by
+    raion-hour? This is what the model uses. Unknown label hours are counted separately and left out of the
+    agreement; hours in `exclude` windows (reference outages) are left out entirely."""
+    from airalert.features import build_grid
+    from airalert.units import forecast_unit_ids
+
+    units = forecast_unit_ids()
+    ours = build_grid(periods, _kyiv(start), _kyiv(end), data_end, units, label_periods, corrections)
+    theirs = build_grid(reference_periods[["unit_id", "started_at", "finished_at"]], _kyiv(start), _kyiv(end), data_end, units)
+    y, ref = ours.label_h1.to_numpy(), theirs.label_h1.to_numpy()
+    valid = ~np.isnan(ref)
+    for a, b in exclude:
+        valid &= ~((ours.t > a - pd.Timedelta(hours=1)) & (ours.t < b)).to_numpy()
+    month = ours.t.dt.tz_convert("Europe/Kyiv").dt.strftime("%Y-%m").to_numpy()
+    rows = []
+    for m in sorted(set(month[valid])):
+        sel = valid & (month == m)
+        known = sel & ~np.isnan(y)
+        rows.append({"month": m, "raion_hours": int(sel.sum()), "unknown_share": np.isnan(y[sel]).mean(),
+                     "agree": np.mean(y[known] == ref[known]), "ours_alert_reference_calm": np.mean((y[known] == 1) & (ref[known] == 0)),
+                     "ours_calm_reference_alert": np.mean((y[known] == 0) & (ref[known] == 1))})
+    return pd.DataFrame(rows)
 
 
 def alerts_in_ua_alerts() -> pd.DataFrame:
@@ -155,6 +182,13 @@ def main() -> None:
             print(f"Official channel outage left out: {a.tz_convert('Europe/Kyiv'):%Y-%m-%d %H:%M} → {b.tz_convert('Europe/Kyiv'):%Y-%m-%d %H:%M} Kyiv time")
         report = monthly_report(labels, pd.read_parquet(official_path), "2023-01-01", "2026-09-01", exclude=gaps)
         report.to_csv(out / "official_by_month.csv", index=False)
+        read = lambda name: pd.read_parquet(INTERIM_DIR / name)  # noqa: E731
+        hourly = hourly_agreement(read("UkraineAlarmSignal_merged.parquet"), read("UkraineAlarmSignal_label_periods.parquet"),
+                                  read("UkraineAlarmSignal_corrections.parquet"), read("air_alert_ua_label_periods.parquet"),
+                                  "2023-01-01", "2026-09-08", read("air_alert_ua_label_periods.parquet").data_end.iloc[0], exclude=gaps)
+        hourly.to_csv(out / "official_hourly_by_month.csv", index=False)
+        print(f"Hour level (what the model uses): agreement on known raion-hours {hourly.agree.min():.2%} to {hourly.agree.max():.2%} "
+              f"per month; unknown {hourly.unknown_share.min():.1%} to {hourly.unknown_share.max():.1%}")
         failing = report[~report.passes]
         print(f"Q20: {len(report)} month × kind × direction rows, {len(failing)} below the {PASS_MARK:.0%} pass mark")
         if len(failing):

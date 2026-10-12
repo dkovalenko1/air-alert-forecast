@@ -102,3 +102,13 @@ def test_silence_limits_come_from_the_calibration_table():
     from airalert.labels import max_silence
     assert max_silence(Location("raion", "Сумський район", "Сумська область")) > max_silence(Location("raion", "Львівський район", "Львівська область"))
     assert max_silence(Location("city", "Київ", None)) is not None
+
+
+def test_never_announced_alert_is_unknown_in_labels_and_absent_from_features():
+    from airalert.labels import corrections, known_pieces, max_silence
+    alerts, stats, _ = unit_alerts_from_messages(messages((T("10:00"), RAION_END)), classify, max_silence=max_silence)
+    assert alerts.missed_start.tolist() == [True] and stats["missing start: unknown stretch before an all-clear"] == 1
+    assert known_pieces(alerts).empty  # nothing known: the whole span is unknown
+    [c] = corrections(alerts).itertuples()
+    assert (c.started_at, c.finished_at, c.corrected_at, c.unknown) == (
+        pd.Timestamp(T("05:00")), pd.Timestamp(T("10:00")), pd.Timestamp(T("10:00")), True)

@@ -48,6 +48,36 @@ Nothing a forecast for time t uses, and nothing its model is trained on, comes f
   the month-by-month comparison with the independent official channel is an approximate cross-check, still to run.
   For Telegram feature posts, the planned rule is stricter: a post edited at or after t is not used at t (ADR-0007).
 
+## Label quality
+
+Labels come from the volunteer channel `@UkraineAlarmSignal` (єТривога), the only source that covers both
+training and the latest weeks ([ADR-0006](docs/adr/0006-labels-from-volunteer-channel.md)). Before building on
+it, we compared it with the official channel `@air_alert_ua` month by month, against a pass mark fixed in
+advance: in every month, at least 98% of official alert starts and all-clears appear in our labels within 5
+minutes, and vice versa. `uv run python -m airalert check-labels` writes the tables to
+[`reports/label_quality/`](reports/label_quality/).
+
+**Result: the pass mark is not met.** 33 of 176 month × kind × direction rows are below 98% (lowest 96.2%; 18
+months, mostly 2023). The causes we found:
+
+- **The channel misses some all-clears.** The alert then seems to go on for hours or days (all of Lviv oblast
+  "on alert" from 3 to 15 April 2026). A stretch with no news for longer than the oblast's limit, or ended by a new
+  start more than 20 minutes later, is marked **unknown**: it is neither trained on nor scored. The limits were
+  calibrated on the official channel before the validation period (`scripts/calibrate_missing_all_clear.py`).
+- **The channel misses some starts:** it posts an all-clear for an alert it never announced. The 5 hours before
+  such an all-clear (or since the place's previous message) are marked unknown; 95% of those official alerts
+  started within that window.
+- **The official record has faults too:** a 4-day outage (2026-08-29 to 09-02, left out of the comparison) and
+  some broken alerts of its own (e.g. 135 hours across Lviv and Chernivtsi raions in November 2025).
+- A parser bug (messages with several sections, since July 2026) was found this way and fixed.
+
+Missing messages cannot be recovered, so the message-level check still fails. **At the level the model uses,
+"was this raion on alert in this hour", the labels agree with the official record on 99.5–99.7% of known
+raion-hours per year (2023–2026), and on at least 97.3% in every month** (the lowest is November 2025, the month
+of the official channel's own broken alert). Unknown hours: 0.3% of raion-hours in 2023, 3.6% in 2026; 1.2% of the
+validation period and 0.4% of the test period. After the official channel stopped (2026-09-07), the test period
+is checked against alerts.in.ua instead: every month passes (98.4–99.96%), with 99.8% hour-level agreement.
+
 ## Sources and attribution
 
 - Alert labels: Telegram channel [`@UkraineAlarmSignal`](https://t.me/UkraineAlarmSignal) (єТривога), checked against the official channel [`@air_alert_ua`](https://t.me/air_alert_ua) and [alerts.in.ua](https://alerts.in.ua).

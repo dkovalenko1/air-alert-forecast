@@ -283,13 +283,13 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - **Why it's fixed in advance:** with a pass mark chosen after seeing the results, any number can be explained away ("97% is fine").
   - **If a month fails:** we look for the cause (parser bug, channel outage, renamed places) and fix the parser, mark the period missing, or start training later.
   - **Output:** the per-month table goes into the README as evidence of label quality.
-  - **Result (2026-10-13): fails.** 35 of 176 month × kind × direction rows are below 98% (lowest 96.2%), mostly "official events found in the channel" in 2023, 2024-06 and 2025-10 to 2026-06. Causes found:
+  - **Result (2026-10-13): fails.** After the fixes below, 33 of 176 month × kind × direction rows are below 98% (lowest 96.2%; 18 months, 15 rows in 2023). *Decided 2026-10-13: accept the labels, report the failure and its causes in the README (option 1), and also handle the channel's missed starts (option 2).* Causes found:
     - the official channel's outage, 2026-08-29 07:55 to 2026-09-02 16:48 Kyiv time: now left out of the comparison (any silence over 24 h; normal quiet spells last at most about 12 h);
     - a parser bug: messages with several sections (since 2026-07) lost all-clears; fixed;
     - the channel misses some all-clears: handled by the missing-all-clear rule (Q17), which makes those stretches unknown;
-    - the channel misses some starts (it posts an all-clear for an alert it never announced): 0.1–0.4% of raion-hours per month are calm in our labels but on alert officially; not handled;
+    - the channel misses some starts (it posts an all-clear for an alert it never announced): handled since 2026-10-13. An all-clear with no open alert, more than 20 min after the place's previous all-clear (closer ones are repeated posts), makes the 5 h before it (or since the place's previous message) unknown; in the official channel such all-clears followed a real alert in 90–98% of cases, and 95% of those alerts had started within 5 h. "Calm in our labels, on alert officially" fell to 0.04–0.29% of known raion-hours per month from 2025-08 (2.3% in 2025-11);
     - the official record has broken alerts of its own (e.g. 135 h in Lviv and Chernivtsi raions, 2025-11-19 to 11-24).
-    - At the hour level, which is what the model uses, labels and the official record agree on 99.5–99.9% of known raion-hours per month from 2025-08 (97.2% in 2025-11).
+    - At the hour level, which is what the model uses, labels and the official record agree on 99.5–99.7% of known raion-hours per year (2023–2026) and at least 97.3% in every month (2025-11). `check-labels` writes this as `official_hourly_by_month.csv`.
   - **Pass mark:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.
   - **Cost:**
     - Messages to download since 2023: about 303k for `@air_alert_ua` (to 2026-09-07) and about 607k for `@UkraineAlarmSignal`, which is needed for labels anyway.
@@ -425,7 +425,7 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 3 | **Unit registry:** every raion with its oblast and name variants (renames, apostrophes, Ukrainian and English) | official CSV, alerts.in.ua | done (`units.py`, 122 raions + Kyiv, renamed aliases) |
 | 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | done (`alarm_signal.py`, `alerts.py`, `labels.py`), incl. multi-section messages and the calibrated missing-all-clear rule |
 | 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | code done (`official_channel.py`); full run after the download |
-| 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | run 2026-10-13: **35 of 176 rows below the 98% mark** (event level); causes in the Q20 entry; decision pending |
+| 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | done: **fails** (33 of 176 rows below 98%); causes handled and reported in the README (decided 2026-10-13) |
 | 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | done: all rows pass (98.4–99.96%); 99.8% hour-level agreement |
 | 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | blocked |
 | 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | done (`reference/neighbours.csv`, 612 pairs) |

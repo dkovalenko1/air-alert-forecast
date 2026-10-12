@@ -21,6 +21,12 @@ Each location is tracked on its own; mapping oblast-wide alerts onto raions happ
   - or it is longer than the place's `max_silence` (per oblast, calibrated on the official channel by
     scripts/calibrate_missing_all_clear.py); detected once the silence passes that limit.
   Level starts (yellow ↔ red) are level changes, not lost all-clears, so only the silence rule applies to them.
+- A missing start: an all-clear for a place with no open alert, more than `restart_gap` after the previous
+  all-clear there (closer ones are repeated posts). An alert was on but never announced (the official channel was
+  on alert just before such all-clears in 90-98% of cases). With `missed_start_window`, it becomes an alert flagged
+  `missed_start` whose whole span is unknown: from the window (5 h: 95% of those official alerts started within it)
+  or the place's previous message, whichever is later, to the all-clear; detected at the all-clear. It was never
+  published, so features ignore it.
 """
 
 from collections import Counter
@@ -41,6 +47,7 @@ class Alert:
     restarts: int = 0
     implied: bool = False  # opened by an escalation with no air raid alert open
     retracted: bool = False  # posted by mistake: ended by a retraction, not an all-clear
+    missed_start: bool = False  # never announced: known only from an all-clear with no open alert
     last_message_at: datetime | None = None  # the latest message about the place while the alert was open
     unknown: list = field(default_factory=list)  # (from, to, detected_at): stretches whose state is unknown
 
@@ -56,6 +63,7 @@ def _raise_color(current: str | None, new: str | None) -> str | None:
 
 
 RESTART_GAP = timedelta(minutes=20)
+MISSED_START_WINDOW = timedelta(hours=5)
 
 
 def _check_silence(alert: Alert, until: datetime, max_silence, stats: Counter) -> None:
@@ -67,13 +75,16 @@ def _check_silence(alert: Alert, until: datetime, max_silence, stats: Counter) -
 
 
 def build_alerts(messages: list[tuple[int, datetime, Message]], max_silence=None, restart_gap=RESTART_GAP,
-                 data_end: datetime | None = None) -> AlertHistory:
+                 data_end: datetime | None = None, missed_start_window: timedelta | None = None) -> AlertHistory:
     """`messages` are (message_id, time, classified message) in channel order. `max_silence(location)` gives the
-    longest plausible stretch without news about an open alert (None: no limit); `data_end` is when the data ends."""
-    history, open_alerts = AlertHistory(), {}
+    longest plausible stretch without news about an open alert (None: no limit); `data_end` is when the data ends;
+    `missed_start_window` turns all-clears with no open alert into unknown stretches (None: only counted)."""
+    history, open_alerts, last_seen = AlertHistory(), {}, {}
     for message_id, time, message in messages:
         for location in message.locations:
             current = open_alerts.get(location)
+            previous = last_seen.get(location)  # (time, kind) of the previous message about the place
+            last_seen[location] = (time, message.kind)
             if current and message.kind != RETRACT:
                 silence_before = len(current.unknown)
                 _check_silence(current, time, max_silence, history.stats)
@@ -96,6 +107,12 @@ def build_alerts(messages: list[tuple[int, datetime, Message]], max_silence=None
                     history.alerts.append(open_alerts.pop(location))
                 else:
                     history.stats["all-clear with no open alert"] += 1
+                    repeated = previous is not None and previous[1] == END and time - previous[0] <= restart_gap
+                    if missed_start_window is not None and not repeated:
+                        start = max(time - missed_start_window, previous[0]) if previous else time - missed_start_window
+                        history.alerts.append(Alert(location, start, message_id, finished_at=time, end_message_id=message_id,
+                                                    missed_start=True, unknown=[(start, time, time)]))
+                        history.stats["missing start: unknown stretch before an all-clear"] += 1
             elif message.kind == RETRACT:
                 if current:
                     current.finished_at, current.end_message_id, current.retracted = time, message_id, True

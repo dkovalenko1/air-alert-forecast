@@ -1,6 +1,7 @@
 import json
 
 import pandas as pd
+import pytest
 
 from airalert.validation import monthly_report
 
@@ -89,3 +90,22 @@ def test_reference_outages_are_found_and_left_out():
     reference = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:40:00")])  # silent on 08-31
     assert not monthly_report(labels, reference, "2026-08-01", "2026-09-01").passes.all()
     assert monthly_report(labels, reference, "2026-08-01", "2026-09-01", exclude=gaps).passes.all()
+
+
+def test_never_announced_alert_counts_its_all_clear_but_no_start():
+    from airalert.validation import events
+    labels = alerts([("A/a", "2026-08-01 05:00:00", "2026-08-01 10:00:00")]).assign(missed_start=[True])
+    assert events(labels).kind.tolist() == ["end"]
+
+
+def test_hourly_agreement_counts_unknown_hours_separately():
+    from airalert.validation import hourly_agreement
+    kyiv = "м. Київ"
+    ours = alerts([(kyiv, "2026-08-01 10:00:00", "2026-08-01 10:30:00"), (kyiv, "2026-08-02 10:00:00", "2026-08-02 10:30:00")])
+    reference = alerts([(kyiv, "2026-08-01 10:00:00", "2026-08-01 10:30:00"), (kyiv, "2026-08-03 10:00:00", "2026-08-03 10:30:00")])
+    unknown = pd.DataFrame({"unit_id": [kyiv], "started_at": [pd.Timestamp("2026-08-03 09:00Z")], "finished_at": [pd.Timestamp("2026-08-03 12:00Z")],
+                            "corrected_at": [pd.Timestamp("2026-08-03 12:00Z")], "unknown": [True]})
+    [row] = hourly_agreement(ours, ours, unknown, reference, "2026-08-01", "2026-08-05", pd.Timestamp("2026-08-10", tz="UTC")).itertuples()
+    kyiv_hours = 4 * 24
+    assert row.unknown_share == pytest.approx(3 / (kyiv_hours * 119))  # three unknown hours, of all raion-hours
+    assert row.ours_alert_reference_calm == pytest.approx(1 / (kyiv_hours * 119 - 3))  # 08-02 10:00
