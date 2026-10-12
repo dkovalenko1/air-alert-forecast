@@ -9,6 +9,16 @@ Messages are classified by their wording, not their emoji (ADR-0005 rules). Two 
     • Вараський район (Рівненська обл.)               then one location per line
     • Сарненський район (Рівненська обл.)
 
+Since July 2026 one message may hold several sections, separated by a blank line, each with its own heading:
+
+    🟡 Відбій червоної тривоги                        red is over, yellow continues
+    • Чугуївський район (Харківська обл.)
+
+    🟢 Відбій тривоги                                 all-clear
+    • Ізюмський район (Харківська обл.)
+
+`classify_all` reads each section separately; `classify` reads a single section.
+
 Only air raid alert starts, all-clears and their continuations/retractions become alert events.
 The channel's own city warnings (🛸 drones, 💣 guided bombs, 💥 shelling, ⚠️ media reports…) are
 typed as other threats and never open an alert.
@@ -51,6 +61,7 @@ _APOLOGY_KINDS = [
 _PHRASES = [
     (r"^(повітряна )?тривога\b.*\bпомилков", RETRACT, None),  # "Тривога в області була помилковою…"
     (r"^відбій тривоги", END, None),
+    (r"^відбій червоної тривоги", CONTINUE, None),  # red → yellow: the alert goes on
     (r"тривог\w* (в місті |в області )?триває", CONTINUE, None),
     (r"^жовтий рівень тривоги", START, "yellow"),
     (r"^червоний рівень тривоги", START, "red"),
@@ -128,3 +139,13 @@ def classify(text: str | None) -> Message:
     if kind in (START, END, CONTINUE, RETRACT) and not locations:
         return Message(UNKNOWN, color, None, ())  # an alert phrase with no recognisable place
     return Message(kind, color, None, locations)
+
+
+def classify_all(text: str | None) -> list[Message]:
+    """Every section of a message, in order. A message is split at blank lines only if at least two of its parts
+    start with an alert heading; otherwise it is one section (blank lines also occur inside ordinary posts)."""
+    blocks = [b for b in re.split(r"\n\s*\n", (text or "").strip()) if b.strip()]
+    headed = [b for b in blocks if _phrase_kind(b.strip().splitlines()[0])[0] != UNKNOWN]
+    if len(headed) < 2:
+        return [classify(text)]
+    return [classify(b) for b in blocks]

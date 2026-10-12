@@ -72,3 +72,13 @@ def test_messages_without_text_are_counted():
             {"id": 2, "date": T("10:01"), "text": "", "service": None, "media": "MessageMediaPhoto"}]
     _, stats, _ = unit_alerts_from_messages(msgs, classify)
     assert stats["message: service"] == 1 and stats["message: no text"] == 1
+
+
+def test_all_clear_in_a_later_section_closes_the_alert():
+    from airalert.alarm_signal import classify_all
+    msgs = messages((T("10:00"), "🔴 Сумський район (Сумська обл.)\nЧервоний рівень тривоги. Прямуйте в укриття!"),
+                    (T("10:40"), "🔴 Червоний рівень тривоги\n• Шосткинський район (Сумська обл.)\n\n🟢 Відбій тривоги\n• Сумський район (Сумська обл.)"))
+    alerts, stats, _ = unit_alerts_from_messages(msgs, classify_all)
+    sumy = alerts[alerts.unit_id == "Сумська область/Сумський район"]
+    assert sumy.finished_at.tolist() == [pd.Timestamp(T("10:40"))] and stats["message with several sections"] == 1
+    assert alerts[alerts.unit_id == "Сумська область/Шосткинський район"].started_at.tolist() == [pd.Timestamp(T("10:40"))]

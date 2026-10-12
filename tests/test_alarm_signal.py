@@ -1,4 +1,4 @@
-from airalert.alarm_signal import (CONTINUE, END, OTHER, RETRACT, START, UNKNOWN, Location, classify,
+from airalert.alarm_signal import (CONTINUE, END, OTHER, RETRACT, START, UNKNOWN, Location, classify, classify_all,
                                    parse_location)
 
 RAION = Location("raion", "Шепетівський район", "Хмельницька обл.")
@@ -100,3 +100,20 @@ def test_apology_with_a_late_all_clear_ends_the_alert():
         "🟢 Харківська обл.\nПросимо вибачення, сталась технічна помилка. Станом на зараз відбій тривоги, з 02:26.",
     ]:
         assert classify(text).kind == END, text
+
+
+def test_message_with_several_sections():
+    text = ("🔴 Червоний рівень тривоги\n• Харків (Харківська обл.)\n\n"
+            "🟢 Відбій тривоги\n• Звенигородський район (Черкаська обл.)\n• Уманський район (Черкаська обл.)")
+    red, clear = classify_all(text)
+    assert (red.kind, red.color, [l.name for l in red.locations]) == (START, "red", ["Харків"])
+    assert (clear.kind, [l.name for l in clear.locations]) == (END, ["Звенигородський район", "Уманський район"])
+    downgrade, clear = classify_all("🟡 Відбій червоної тривоги\n• Чугуївський район (Харківська обл.)\n\n"
+                                    "🟢 Відбій тривоги\n• Ізюмський район (Харківська обл.)")
+    assert downgrade.kind == CONTINUE and clear.kind == END and clear.locations[0].name == "Ізюмський район"
+
+
+def test_blank_lines_in_ordinary_posts_do_not_split_them():
+    text = "🟢 Київ\nПросимо вибачення, сталась технічна помилка. Тривога в місті відсутня.\n\nПовітряна тривога в Київській області триває!"
+    assert [m.kind for m in classify_all(text)] == [RETRACT]
+    assert classify("🟡 Харківський район (Харківська обл.)\nВідбій червоної тривоги, жовта тривога ще триває. Будьте обережні!").kind == CONTINUE

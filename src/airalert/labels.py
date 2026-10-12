@@ -32,7 +32,7 @@ from airalert.alarm_signal import UNKNOWN
 from airalert.settings import RAW_DIR, ROOT
 from airalert.units import UnknownPlace, canonical, resolve, units
 
-CLASSIFIERS = {"UkraineAlarmSignal": alarm_signal.classify, "air_alert_ua": official_channel.classify}
+CLASSIFIERS = {"UkraineAlarmSignal": alarm_signal.classify_all, "air_alert_ua": official_channel.classify}
 INTERIM_DIR = ROOT / "data" / "interim"
 
 
@@ -46,23 +46,28 @@ def read_channel(channel: str) -> list[dict]:
 
 def classify_messages(messages: list[dict], classify) -> tuple[list, Counter, list[dict]]:
     """(id, time, message) with places renamed to their canonical names; counts per kind; unrecognised messages.
-    A place not in the registry is counted and dropped from its message."""
+    `classify` returns one Message or a list (one per section; see alarm_signal.classify_all). A place not in the
+    registry is counted and dropped from its message."""
     parsed, stats, unknown = [], Counter(), []
     for m in messages:
         if not m.get("text"):  # service messages (channel created, pinned…) and media without a caption
             stats["message: service" if m.get("service") else "message: no text"] += 1
             continue
-        message = classify(m["text"])
-        stats[f"message: {message.kind}"] += 1
-        if message.kind == UNKNOWN:
+        sections = classify(m["text"])
+        sections = sections if isinstance(sections, list) else [sections]
+        if len(sections) > 1:
+            stats["message with several sections"] += 1
+        if all(section.kind == UNKNOWN for section in sections):
             unknown.append({"id": m["id"], "date": m["date"], "text": m["text"]})
-        locations = []
-        for location in message.locations:
-            try:
-                locations.append(canonical(location))
-            except UnknownPlace as error:
-                stats[f"unknown place: {error}"] += 1
-        parsed.append((m["id"], pd.Timestamp(m["date"]), dataclasses.replace(message, locations=tuple(locations))))
+        for message in sections:
+            stats[f"message: {message.kind}"] += 1
+            locations = []
+            for location in message.locations:
+                try:
+                    locations.append(canonical(location))
+                except UnknownPlace as error:
+                    stats[f"unknown place: {error}"] += 1
+            parsed.append((m["id"], pd.Timestamp(m["date"]), dataclasses.replace(message, locations=tuple(locations))))
     return parsed, stats, unknown
 
 
