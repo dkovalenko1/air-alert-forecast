@@ -1,4 +1,6 @@
-from airalert.places import find_places
+import csv
+
+from airalert.places import PLACES, find_places
 
 
 def names(text):
@@ -37,3 +39,25 @@ def test_oblast_mention_covers_all_its_raions():
 def test_no_false_hits_on_common_words():
     assert names("12 березня нічна атака, загальна сума збитих цілей") == []
     assert names("Повітряні сили ЗСУ: обережно, бережіть себе") == []
+
+
+def test_similar_names_resolve_by_word_type():
+    assert names("БпЛА на Покровськ") == [("place", "Покровськ")]
+    assert names("у Покровському вибухи") == [("place", "Покровське")]
+    assert names("на Лозову") == [("place", "Лозова")] == names("в районі Лозової")
+    assert names("в районі Часового Яру") == [("place", "Часів Яр")]
+
+
+def test_former_raion_names():
+    [m] = find_places("у Новомосковському районі")
+    assert m.name == "Самарівський район" and m.unit_ids == ("Дніпропетровська область/Самарівський район",)
+
+
+def test_military_abbreviations_are_not_places():
+    assert names("КР (крилаті ракети) запущені з літаків Ту-95МС") == []
+
+
+def test_every_listed_place_finds_itself():
+    rows = list(csv.DictReader(PLACES.open(encoding="utf-8")))
+    missing = [r["name"] for r in rows if not any(r["unit_id"] in m.unit_ids for m in find_places(r["name"]))]
+    assert missing == ["Щастя"]  # also the word "happiness", so never matched (see NEVER)

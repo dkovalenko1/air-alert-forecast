@@ -36,12 +36,20 @@ class Message:
     locations: tuple[Location, ...]
 
 
+# Apologies are read as a whole message body (the key sentence may be on a later line). They retract either an
+# air raid alert or one of the channel's own warnings ("Загроза БПЛА … відсутня"); only the first is a retraction.
+# An apology giving a late all-clear ("…відбій повітряної тривоги був о 22:29") ends the alert when it is posted:
+# the earlier time it names was not known before the message. Other apologies change no alert.
+_APOLOGY = re.compile(r"^(просимо|приносимо|перепрошуємо|вибач)|^\w+ за помилков")
+_APOLOGY_KINDS = [
+    (r"тривог\w*( у| в| по)?[\w' ]*? (області|місті|районі|громаді) (відсутня|не було|немає)"
+     r"|тривог\w*( в області| у місті| в місті)? (не було|немає)|не було (повітряної )?тривоги"
+     r"|тривог\w* (була |було )?помилков|за помилкову тривогу", RETRACT),
+    (r"відбій (повітряної )?тривоги\W*(був|оголошен|в |у |о |з )|відбій (у|в) [\w' ]+ районі був", END),
+]
 # (pattern on the phrase, kind, colour). The first match wins, so more specific phrases come first.
 _PHRASES = [
-    # Apologies retract either an air raid alert or one of the channel's own warnings ("Загроза БПЛА … відсутня");
-    # only the first is a retraction. Other apologies (repeated sirens, corrected times) change no alert.
-    (r"^просимо вибачення.*(повітряна )?тривога в (області|місті|районі) відсутня", RETRACT, None),
-    (r"^просимо вибачення", UNKNOWN, None),
+    (r"^(повітряна )?тривога\b.*\bпомилков", RETRACT, None),  # "Тривога в області була помилковою…"
     (r"^відбій тривоги", END, None),
     (r"тривог\w* (в місті |в області )?триває", CONTINUE, None),
     (r"^жовтий рівень тривоги", START, "yellow"),
@@ -82,6 +90,10 @@ def parse_location(line: str) -> Location | None:
     return None
 
 
+def _apology_kind(body: str) -> str:
+    return next((kind for pattern, kind in _APOLOGY_KINDS if re.search(pattern, body)), UNKNOWN)
+
+
 def _phrase_kind(phrase: str) -> tuple[str, str | None]:
     lowered = _clean(phrase).lower()
     for pattern, kind, color in _PHRASES:
@@ -102,8 +114,13 @@ def classify(text: str | None) -> Message:
         locations = tuple(loc for loc in map(parse_location, lines[1:]) if loc)
         phrase = lines[0]
 
-    kind, color = _phrase_kind(phrase)
-    if kind == UNKNOWN and locations and not _clean(phrase).lower().startswith("просимо вибачення"):
+    apology = bool(_APOLOGY.search(_clean(phrase).lower()))
+    if apology:  # the whole body after the place line(s)
+        body = " ".join(_clean(line) for line in (lines[1:] if first and len(lines) >= 2 else lines)).lower()
+        kind, color = _apology_kind(body), None
+    else:
+        kind, color = _phrase_kind(phrase)
+    if kind == UNKNOWN and locations and not apology:
         lowered = phrase.lower()
         threat = next((name for pattern, name in _THREATS if re.search(pattern, lowered)), None)
         if threat:

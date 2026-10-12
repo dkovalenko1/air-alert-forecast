@@ -7,6 +7,7 @@ strictly before t:
 - per-hour aggregates are taken only over hours that ended by t.
 Labels look forward: `label_h{h}` is 1 if the unit is on alert at any moment of the hour starting at
 t + (h - 1) hours (Q7: any overlap counts). Labels whose hour ends after the data ends are missing.
+Features read the alert periods as published; labels read the corrected ones (retracted alerts dropped).
 
 `reference_features` computes the same alert-history features naively, straight from the alert periods
 filtered by what was known at t. Tests check that both agree and that adding or changing data after t never
@@ -80,7 +81,8 @@ class UnitTimeline:
         return np.searchsorted(self.s, b, side="left") - np.searchsorted(self.s, a, side="left")
 
 
-def _unit_block(timeline: UnitTimeline, t: np.ndarray, slot_active: np.ndarray, k0: int) -> dict:
+def _unit_block(timeline: UnitTimeline, t: np.ndarray, known_active: np.ndarray, label_active: np.ndarray, k0: int) -> dict:
+    """`known_active` / `label_active`: per grid hour, was the unit on alert, from feature / label periods."""
     on, start, last_end = timeline.state_at(t)
     out = {
         "on_alert": on.astype(np.int8),
@@ -92,31 +94,47 @@ def _unit_block(timeline: UnitTimeline, t: np.ndarray, slot_active: np.ndarray, 
     before_t = timeline.alert_seconds_before(t)
     for h in SHARE_WINDOWS_H:
         out[f"alert_share_last_{h}h"] = (before_t - timeline.alert_seconds_before(t - h * 3600)) / (h * 3600)
-    k = np.arange(len(t)) + k0  # index of the hour starting at t in `slot_active`
+    k = np.arange(len(t)) + k0  # index of the hour starting at t in the per-hour arrays
     for h in HORIZONS:
         target = k + h - 1
-        out[f"label_h{h}"] = slot_active[target] if target.max() < len(slot_active) else np.where(
-            target < len(slot_active), slot_active[np.minimum(target, len(slot_active) - 1)], np.nan)
+        out[f"label_h{h}"] = np.where(target < len(label_active), label_active[np.minimum(target, len(label_active) - 1)], np.nan)
         for lag, name in ((24, "day"), (168, "week")):  # was the target hour on alert a day / a week earlier?
-            out[f"target_active_{name}_ago_h{h}"] = slot_active[target - lag]
+            out[f"target_active_{name}_ago_h{h}"] = known_active[target - lag]  # an hour that ended by t
     return out
 
 
-def build_grid(merged: pd.DataFrame, start, end, data_end) -> pd.DataFrame:
-    """Hourly rows for t in [start, end) for every unit in `merged` (columns unit_id, started_at, finished_at)."""
+def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Hourly rows for t in [start, end) for every unit in `units` (calm ones included), whether or not it has periods.
+
+    `periods` (columns unit_id, started_at, finished_at) are the alert periods as published, which features use;
+    `label_periods` the corrected truth, which labels use (default: the same). The unit list is fixed in advance
+    (units.forecast_unit_ids()), so a unit's first alert never changes country, oblast or neighbour features before it.
+    """
     start, end, data_end = (pd.Timestamp(x).tz_convert("UTC") for x in (start, end, data_end))
+    label_periods = periods if label_periods is None else label_periods
+    units = sorted(units)
+    unknown = (set(periods.unit_id) | set(label_periods.unit_id)) - set(units)
+    if unknown:
+        raise ValueError(f"periods for units outside the unit list: {sorted(unknown)[:5]}")
     hours = pd.date_range(start - 168 * HOUR, end + 24 * HOUR, freq="h", inclusive="left")  # with lookback and lookahead
     k0 = 168
     edges = _seconds(hours.append(pd.DatetimeIndex([hours[-1] + HOUR])))
     t = edges[k0:k0 + int((end - start) / HOUR)]
     complete = edges[1:] <= _seconds([data_end])[0]  # hours that ended before the data did
 
+    def hourly(timeline):
+        return np.where(complete, (np.diff(timeline.alert_seconds_before(edges)) > 0).astype(float), np.nan)
+
+    by_unit = dict(tuple(periods.groupby("unit_id")))
+    labels_by_unit = dict(tuple(label_periods.groupby("unit_id")))
+    empty = periods.iloc[:0]
     blocks = []
-    for unit_id, group in merged.sort_values("started_at").groupby("unit_id", sort=True):
+    for unit_id in units:
+        group = by_unit.get(unit_id, empty)
+        label_group = labels_by_unit.get(unit_id, empty)
         timeline = UnitTimeline(group.started_at, group.finished_at)
-        seconds = timeline.alert_seconds_before(edges)
-        slot_active = np.where(complete, (np.diff(seconds) > 0).astype(float), np.nan)
-        block = _unit_block(timeline, t, slot_active, k0)
+        label_timeline = timeline if label_periods is periods else UnitTimeline(label_group.started_at, label_group.finished_at)
+        block = _unit_block(timeline, t, hourly(timeline), hourly(label_timeline), k0)
         block["unit_id"] = unit_id
         block["t"] = pd.to_datetime(t, unit="s", utc=True)
         blocks.append(pd.DataFrame(block))

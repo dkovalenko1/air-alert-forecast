@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 
 from airalert.validation import monthly_report
@@ -25,3 +27,47 @@ def test_events_match_within_five_minutes_in_both_directions():
 def test_identical_sources_pass():
     same = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:40:00"), ("A/b", "2026-08-05 01:00:00", None)])
     assert monthly_report(same, same, "2026-08-01", "2026-09-01").passes.all()
+
+
+def test_months_without_coverage_are_reported_and_fail():
+    august = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:40:00")])
+    report = monthly_report(august, august, "2026-07-01", "2026-10-01")
+    assert sorted(report.month.unique()) == ["2026-07", "2026-08", "2026-09"] and len(report) == 12
+    assert report[report.month == "2026-08"].passes.all()
+    assert not report[report.month != "2026-08"].passes.any() and (report[report.month != "2026-08"].events == 0).all()
+    empty = alerts([])
+    assert not monthly_report(empty, empty, "2026-08-01", "2026-09-01").passes.any()  # no crash, no pass
+
+
+def test_months_follow_kyiv_time_and_matches_cross_the_window_edge():
+    late_evening = alerts([("A/a", "2026-08-31 22:10:00", "2026-08-31 22:50:00")])  # already September 1 in Kyiv
+    assert monthly_report(late_evening, late_evening, "2026-08-01", "2026-09-01").events.sum() == 0
+    reference = alerts([("A/a", "2026-08-31 20:59:00", "2026-08-31 21:30:00")])  # 23:59 Kyiv, inside August
+    labels = alerts([("A/a", "2026-08-31 21:00:30", "2026-08-31 21:30:00")])  # 00:00:30 Kyiv, just outside
+    report = monthly_report(labels, reference, "2026-08-01", "2026-09-01").set_index(["direction", "kind"])
+    assert report.loc[("reference found in labels", "start"), "found"] == 1
+
+
+def test_retracted_alerts_are_not_compared():
+    labels = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:05:00"), ("A/a", "2026-08-02 10:00:00", "2026-08-02 11:00:00")])
+    labels["retracted"] = [True, False]
+    reference = alerts([("A/a", "2026-08-02 10:00:00", "2026-08-02 11:00:00")])
+    assert monthly_report(labels, reference, "2026-08-01", "2026-09-01").passes.all()
+
+
+def test_alerts_in_ua_kyiv_and_latest_snapshot(tmp_path, monkeypatch):
+    from airalert import validation
+
+    def snapshot(folder, finished_at):
+        kyiv = {"id": 1, "alert_type": "air_raid", "location_type": "oblast", "location_title": "м. Київ",
+                "location_oblast": "м. Київ", "started_at": "2026-10-12T18:25:14.086Z", "finished_at": finished_at}
+        path = tmp_path / "alerts_in_ua" / folder / "31.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"alerts": [kyiv]}), encoding="utf-8")
+
+    snapshot("2026-10-12T184322Z", None)
+    snapshot("2026-10-12T193122Z", "2026-10-12T19:16:03.000Z")
+    monkeypatch.setattr(validation, "RAW_DIR", tmp_path)
+    frame = validation.alerts_in_ua_alerts()
+    assert frame.unit_id.tolist() == ["м. Київ"]
+    assert frame.finished_at.iloc[0] == pd.Timestamp("2026-10-12T19:16:03Z")

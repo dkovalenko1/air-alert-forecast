@@ -5,7 +5,9 @@ Each location is tracked on its own; mapping oblast-wide alerts onto raions happ
 - A start opens an alert. A repeated start for a location already on alert keeps the original start
   time (a yellow↔red change continues the same alert, Q18) and is counted as a restart.
 - An all-clear closes the open alert. An all-clear with nothing open is counted and ignored.
-- A retraction ("Просимо вибачення, сталась технічна помилка…") removes the open alert: it was posted by mistake.
+- A retraction ("Просимо вибачення, сталась технічна помилка…") closes the open alert at the retraction and flags it
+  `retracted`. Until the retraction was posted, everyone believed the alert was on, so features (what was known at
+  t) keep it up to that moment; labels (what really happened) drop it.
 - A continuation ("тривога триває") changes nothing.
 - An escalation ("Загроза ударних БпЛА…", official channel) never changes an open alert; with nothing open
   it opens an alert flagged as implied.
@@ -29,6 +31,7 @@ class Alert:
     max_color: str | None = None  # "red" if the alert was ever red, else "yellow" if ever yellow
     restarts: int = 0
     implied: bool = False  # opened by an escalation with no air raid alert open
+    retracted: bool = False  # posted by mistake: ended by a retraction, not an all-clear
 
 
 @dataclass
@@ -61,7 +64,12 @@ def build_alerts(messages: list[tuple[int, datetime, Message]]) -> AlertHistory:
                 else:
                     history.stats["all-clear with no open alert"] += 1
             elif message.kind == RETRACT:
-                history.stats["retracted" if open_alerts.pop(location, None) else "retraction with no open alert"] += 1
+                if current:
+                    current.finished_at, current.end_message_id, current.retracted = time, message_id, True
+                    history.alerts.append(open_alerts.pop(location))
+                    history.stats["retracted"] += 1
+                else:
+                    history.stats["retraction with no open alert"] += 1
             elif message.kind == ESCALATION:
                 if current:
                     history.stats["escalation during alert"] += 1

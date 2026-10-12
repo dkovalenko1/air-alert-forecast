@@ -38,10 +38,11 @@ def test_alert_restarting_after_all_clear_is_a_new_alert():
     assert len(h.alerts) == 2  # alerts are kept exactly as published (Q7)
 
 
-def test_retraction_removes_the_mistaken_alert():
+def test_retraction_ends_the_mistaken_alert_and_flags_it():
     retract = "🟢 Синельниківський район (Дніпропетровська обл.)\nПросимо вибачення, сталась технічна помилка. Тривога в області відсутня."
     h = run((START, 0), (retract, 2))
-    assert h.alerts == [] and h.stats["retracted"] == 1
+    [a] = h.alerts  # kept until the retraction (it was believed until then), flagged so labels can drop it
+    assert a.retracted and a.finished_at == T0 + timedelta(minutes=2) and h.stats["retracted"] == 1
 
 
 def test_all_clear_without_alert_is_counted_not_invented():

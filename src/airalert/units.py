@@ -27,6 +27,7 @@ class Unit:
     name: str
     kind: str
     excluded: str  # reason, or "" if the unit is forecast
+    aliases: tuple[str, ...] = ()  # former names, e.g. Новомосковський район for Самарівський район
 
 
 def _normalise(name: str) -> str:
@@ -47,7 +48,13 @@ def _oblast_name(name: str) -> str:
 @functools.cache
 def units() -> tuple[Unit, ...]:
     with REGISTRY.open(encoding="utf-8") as f:
-        return tuple(Unit(r["unit_id"], r["oblast"], r["name"], r["kind"], r["excluded"]) for r in csv.DictReader(f))
+        return tuple(Unit(r["unit_id"], r["oblast"], r["name"], r["kind"], r["excluded"], tuple(filter(None, r["aliases"].split("|"))))
+                     for r in csv.DictReader(f))
+
+
+def forecast_unit_ids() -> list[str]:
+    """The fixed set of units every grid covers, whether or not they ever had an alert (excluded ones left out)."""
+    return [u.unit_id for u in units() if not u.excluded]
 
 
 @functools.cache
@@ -65,6 +72,20 @@ def _index() -> tuple[dict, dict]:
 
 class UnknownPlace(ValueError):
     pass
+
+
+def canonical(location: Location) -> Location:
+    """The same place under one fixed name, so that alerts and all-clears pair up even when the channel switches
+    between a raion's old and new name or spells it differently. Levels are kept: an oblast-wide alert stays
+    oblast-wide. City zones other than Kyiv are returned unchanged (they map to no unit). Raises UnknownPlace."""
+    if location.level == "city":
+        return Location("city", "Київ", None) if resolve(location) else location
+    unit_ids = resolve(location)
+    if location.level == "oblast":
+        oblast = next(u.oblast for u in units() if u.unit_id == unit_ids[0])
+        return Location("oblast", oblast, oblast)
+    unit = next(u for u in units() if u.unit_id == unit_ids[0])
+    return Location("raion", unit.name, unit.oblast)
 
 
 def resolve(location: Location) -> list[str]:

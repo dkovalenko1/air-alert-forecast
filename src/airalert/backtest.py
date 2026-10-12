@@ -33,7 +33,10 @@ def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
 
 
 def weeks(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
-    edges = pd.date_range(start, end, freq="7D")
+    """Weekly retraining windows covering [start, end); the last one is shorter if the period is not whole weeks."""
+    edges = list(pd.date_range(start, end, freq="7D"))
+    if edges[-1] < end:
+        edges.append(end)
     return list(zip(edges[:-1], edges[1:]))
 
 
@@ -96,12 +99,15 @@ def main(period: str, model_names, channel: str = "UkraineAlarmSignal", horizons
     from airalert.labels import INTERIM_DIR
     from airalert.settings import ROOT
 
+    from airalert.units import forecast_unit_ids
+
     merged = pd.read_parquet(INTERIM_DIR / f"{channel}_merged.parquet")
+    label_periods = pd.read_parquet(INTERIM_DIR / f"{channel}_label_periods.parquet")
     data_end = merged.data_end.iloc[0]
     start, end = PERIODS[period]
     if data_end < end + 24 * HOUR:
         print(f"Warning: data ends {data_end:%Y-%m-%d %H:%M} UTC, before the {period} period's last labels.")
-    grid = build_grid(merged, train_start - 168 * HOUR, end, data_end)
+    grid = build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods)
     print(f"{period}: {start:%Y-%m-%d} → {end:%Y-%m-%d}, {len(grid):,} grid rows, models: {', '.join(model_names)}", flush=True)
     predictions = run(grid, period, model_names, horizons, train_start)
 

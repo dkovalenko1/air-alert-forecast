@@ -88,6 +88,7 @@ Hard-to-reverse decisions (ADRs):
 | [0004](adr/0004-telegram-via-api.md) | Telegram posts are downloaded through the official API (Telethon) | accepted |
 | [0005](adr/0005-rebuild-alert-history-from-channel.md) | The alert history is rebuilt from the `@air_alert_ua` messages, not taken from the published CSV | superseded by 0006 (parsing rules still apply) |
 | [0006](adr/0006-labels-from-volunteer-channel.md) | Alert labels come from `@UkraineAlarmSignal` from 2023; the official channel is the validation reference | accepted |
+| [0007](adr/0007-published-vs-corrected-history.md) | Features see the alert history as published; labels see it as corrected. Edited messages keep their posting time | accepted |
 
 Decision log (smaller choices that are easy to reverse):
 
@@ -196,6 +197,7 @@ Known facts that shape the design:
   - 1,888 repeated starts while already on alert (1.9% of alerts);
   - 401 all-clears with no open alert;
   - 22 retracted alerts. Only apologies saying the air raid alert is absent count as retractions; most apologies retract the channel's own warnings ("Загроза БПЛА в місті відсутня") and change no alert. Another 6 air raid apologies arrive after an all-clear; those alerts are kept.
+  - *Update 2026-10-13 (code review):* the full download has more wordings ("Приносимо вибачення…", the sentence on a third line, "тривоги в області не було"). Apologies are now read as a whole: 47 retractions so far, plus 31 apologies giving a late all-clear, which now end the alert when posted. A retracted alert counts as on alert until the retraction for features, and is dropped from labels ([ADR-0007](adr/0007-published-vs-corrected-history.md)).
   - 99 "тривога триває" messages with no open alert.
 - **Long alerts.**
   - Oblast-level alerts over 12 h match the official record closely: Sumy 45 vs 45, Kharkiv 39 vs 36, Poltava 25 vs 21, Chernihiv 13 vs 12.
@@ -411,7 +413,7 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 1 | Download alerts.in.ua history | — | done (27 locations, 16,812 alerts) |
 | 2 | Download Telegram channels (`@UkraineAlarmSignal`, `@air_alert_ua`, `@kpszsu`, `@deraketaua`) | login | running, about 4 h |
 | 3 | **Unit registry:** every raion with its oblast and name variants (renames, apostrophes, Ukrainian and English) | official CSV, alerts.in.ua | done (`units.py`, 122 raions + Kyiv, renamed aliases) |
-| 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | code done (`alarm_signal.py`, `alerts.py`, `labels.py`); full run after the download |
+| 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | code done (`alarm_signal.py`, `alerts.py`, `labels.py`), except the missing-all-clear rule (needs the Q20 calibration); full run after the download |
 | 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | code done (`official_channel.py`); full run after the download |
 | 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | code done (`validation.py`, `check-labels`); blocked on downloads |
 | 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | code done (`validation.py`); blocked on the label channel's download |
@@ -421,6 +423,6 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | code done (`features.py`); real run after the download |
 | 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | code done (`backtest.py`, `models.py`); results blocked |
 | 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | model code done (`models.py`); experiments blocked |
-| 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | partly open |
+| 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | place matching done (`places.py`); rules blocked |
 | 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | blocked |
 | 16 | **Final run:** `update-data`, pinned test period, figures, README, notebook, AI conversation export | everything | blocked |
