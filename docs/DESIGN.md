@@ -63,6 +63,7 @@ sources ─► raw layer ─► canonical tables ─► spec builder ─► mode
 ## 3. Evaluation protocol
 
 - **Walk-forward backtest:** train on everything before a cutoff, forecast the next period, move the cutoff forward, repeat.
+- **Labels must also be known by the cutoff.** A training row for forecast time t and horizon h has its label at t + h. So a model trained at cutoff C may only use rows with t + h ≤ C. Otherwise the last training rows carry outcomes from after the cutoff.
 - **Periods:** training | validation | test.
   - Model and setting choices are made on validation.
   - The test period is the latest period, and it is used once, for the final report.
@@ -292,7 +293,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 - **Q6. Definition of "oblast on alert" since alerts became raion-level.**
   - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
 - **Q7. Label rules.** *No merging decided 2026-10-12: alerts are kept exactly as published.*
-  - **Active:** a slot is Active if any alert overlaps it. Proposal.
+  - **Active:** a slot is Active if any alert overlaps it. Proposal. Requiring at least 1 minute would barely matter: only 0.2% of raion alerts since 2025-08 lasted under 1 minute (median 53 min).
   - **No merging:** alerts are kept exactly as published (decided 2026-10-12). Merging changes nothing for Active or Minutes; it would only affect Onset and Time to alert.
     - Example: Synelnykivskyi raion had an all-clear at 13:18:10 and a new red alert at 13:19:40 on 2026-09-06.
     - If an Onset spec is run, we report how many alerts restart within 1/2/5/10 min of an all-clear, then decide.
