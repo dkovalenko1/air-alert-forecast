@@ -5,6 +5,11 @@ description = "Forecasting air raid alerts in Ukraine from information available
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "lightgbm>=4.7.0",
+    "numpy>=2.5.4",
+    "pandas>=3.0.6",
+    "pyarrow>=26.0.0",
+    "scikit-learn>=1.9.1",
     "telethon>=1.40",
 ]
 

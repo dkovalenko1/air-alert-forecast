@@ -1,0 +1,98 @@
+"""From raw channel messages to alert periods per unit: the source of labels and alert-history features.
+
+Pipeline: messages → classified (alarm_signal / official_channel) → alert periods per place (alerts.py)
+→ units (units.py: oblast-wide alerts cover all raions of the oblast, city zones other than Kyiv are dropped)
+→ periods merged per unit. A unit is on alert whenever any alert covering it is on, so overlapping periods
+(an oblast-wide alert plus the raion's own) are merged. Merging never moves a start later or an end
+earlier, so asking "was the unit on alert at t, and since when?" stays answerable from data before t.
+"""
+
+import json
+from collections import Counter
+
+import pandas as pd
+
+from airalert import alarm_signal, official_channel
+from airalert.alerts import build_alerts
+from airalert.settings import RAW_DIR, ROOT
+from airalert.units import UnknownPlace, resolve, units
+
+CLASSIFIERS = {"UkraineAlarmSignal": alarm_signal.classify, "air_alert_ua": official_channel.classify}
+INTERIM_DIR = ROOT / "data" / "interim"
+
+
+def read_channel(channel: str) -> list[dict]:
+    messages = []
+    for path in sorted((RAW_DIR / "telegram" / channel).glob("*.jsonl")):
+        with path.open(encoding="utf-8") as f:
+            messages.extend(json.loads(line) for line in f)
+    return sorted(messages, key=lambda m: m["id"])
+
+
+def unit_alerts_from_messages(messages: list[dict], classify) -> tuple[pd.DataFrame, Counter]:
+    """One row per (alert, unit it covers). `finished_at` is NaT for alerts still open when the data ends."""
+    parsed = [(m["id"], pd.Timestamp(m["date"]), classify(m["text"])) for m in messages if m.get("text")]
+    history = build_alerts(parsed)
+    excluded = {u.unit_id for u in units() if u.excluded}
+    rows, stats = [], history.stats
+    for alert in history.alerts:
+        try:
+            unit_ids = resolve(alert.location)
+        except UnknownPlace as error:
+            stats[f"unknown place: {error}"] += 1
+            continue
+        for unit_id in unit_ids:
+            if unit_id in excluded:
+                continue
+            rows.append({
+                "unit_id": unit_id,
+                "started_at": alert.started_at,
+                "finished_at": alert.finished_at,
+                "place_level": alert.location.level,
+                "place": alert.location.name,
+                "max_color": alert.max_color,
+                "implied": alert.implied,
+                "restarts": alert.restarts,
+            })
+    columns = ["unit_id", "started_at", "finished_at", "place_level", "place", "max_color", "implied", "restarts"]
+    frame = pd.DataFrame(rows, columns=columns)
+    for column in ("started_at", "finished_at"):
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    return frame, stats
+
+
+def merge_per_unit(alerts: pd.DataFrame, data_end: pd.Timestamp) -> pd.DataFrame:
+    """Union of alert periods per unit. Still-open alerts run to `data_end` and are flagged."""
+    open_end = alerts["finished_at"].isna()
+    alerts = alerts.assign(finished_at=alerts["finished_at"].fillna(data_end), open_at_end=open_end)
+    merged = []
+    for unit_id, group in alerts.sort_values("started_at").groupby("unit_id", sort=True):
+        start = end = None
+        is_open = False
+        for row in group.itertuples(index=False):
+            if start is not None and row.started_at <= end:
+                end, is_open = max(end, row.finished_at), is_open or row.open_at_end
+                continue
+            if start is not None:
+                merged.append((unit_id, start, end, is_open))
+            start, end, is_open = row.started_at, row.finished_at, row.open_at_end
+        if start is not None:
+            merged.append((unit_id, start, end, is_open))
+    return pd.DataFrame(merged, columns=["unit_id", "started_at", "finished_at", "open_at_end"])
+
+
+def build(channel: str) -> None:
+    """Write data/interim/<channel>_alerts.parquet (per alert and unit) and <channel>_merged.parquet."""
+    messages = read_channel(channel)
+    if not messages:
+        raise SystemExit(f"No downloaded messages for {channel}: run `download-telegram {channel}` first.")
+    alerts, stats = unit_alerts_from_messages(messages, CLASSIFIERS[channel])
+    data_end = pd.Timestamp(messages[-1]["date"])
+    merged = merge_per_unit(alerts, data_end)
+    INTERIM_DIR.mkdir(parents=True, exist_ok=True)
+    alerts.to_parquet(INTERIM_DIR / f"{channel}_alerts.parquet", index=False)
+    merged.assign(data_end=data_end).to_parquet(INTERIM_DIR / f"{channel}_merged.parquet", index=False)
+    print(f"{channel}: {len(messages):,} messages up to {data_end:%Y-%m-%d %H:%M} UTC → "
+          f"{len(alerts):,} unit alerts, {len(merged):,} merged periods for {merged.unit_id.nunique()} units")
+    for name, count in stats.most_common():
+        print(f"  {count:6,}  {name}")
