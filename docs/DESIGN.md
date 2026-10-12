@@ -258,12 +258,17 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
     - It gives the overlap with the official record that alerts.in.ua cannot (ADR-0003).
   - **Before accepting it:** repeat the spot checks over whole months, e.g. one month per year plus August 2026 → 2026-09-07, using a Telethon download of both channels.
   - **alerts.in.ua:** becomes an independent cross-check for the latest period, which turns Q2 into a three-way check.
-- **Q20. Pass mark for the label check, set before looking at the results.**
+- **Q20. Pass mark for the label check, set before looking at the results.** *Decided 2026-10-12.*
   - **What it's for:** ADR-0006 rests on 54 hours of spot checks. Before building on the channel, we compare it with the official channel month by month, from 2023-01 to 2026-08.
   - **Why it's fixed in advance:** with a pass mark chosen after seeing the results, any number can be explained away ("97% is fine").
   - **If a month fails:** we look for the cause (parser bug, channel outage, renamed places) and fix the parser, mark the period missing, or start training later.
   - **Output:** the per-month table goes into the README as evidence of label quality.
-  - **Proposal:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.
+  - **Pass mark:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.
+  - **Cost:**
+    - Messages to download since 2023: about 303k for `@air_alert_ua` (to 2026-09-07) and about 607k for `@UkraineAlarmSignal`, which is needed for labels anyway.
+    - Telethon waits about 1 s per 100 messages by default, so roughly 1 h and 2 h of unattended download.
+    - The check itself reuses the label parsers; the comparison script and the run take about an hour.
+    - Investigating failed months can't be estimated in advance.
 - **Q4. Keeping the latest period current.**
   - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
 - **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
@@ -286,16 +291,16 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Secondary: oblast × 1 h × Active (how much does the raion level gain over a longer history?) and raion × 1 day × Minutes (day-ahead planning).
 - **Q6. Definition of "oblast on alert" since alerts became raion-level.**
   - Options: any raion; at least half of the raions; the raion containing the oblast centre; only alerts declared for the whole oblast.
-- **Q7. Label rules.**
+- **Q7. Label rules.** *No merging decided 2026-10-12: alerts are kept exactly as published.*
   - **Active:** a slot is Active if any alert overlaps it. Proposal.
-  - **No merging:** alerts are kept exactly as published (proposal, revised 2026-10-12). Merging changes nothing for Active or Minutes; it would only affect Onset and Time to alert.
+  - **No merging:** alerts are kept exactly as published (decided 2026-10-12). Merging changes nothing for Active or Minutes; it would only affect Onset and Time to alert.
     - Example: Synelnykivskyi raion had an all-clear at 13:18:10 and a new red alert at 13:19:40 on 2026-09-06.
     - If an Onset spec is run, we report how many alerts restart within 1/2/5/10 min of an all-clear, then decide.
   - **Naive volunteer alerts:** no longer relevant, because the volunteer CSV is not used (ADR-0006).
 - **Q8. Units to report separately.** Permanent alerts are already excluded (see the decision log).
   - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
   - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
-- **Q16. Should city zones with their own air raid alerts be units?**
+- **Q16. Should city zones with their own air raid alerts be units?** *Decided 2026-10-12: by the measured rule below.*
   - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
   - **Candidates seen in the channel's city-level air raid messages:** Kharkiv, Zaporizhzhia, Nikopol, Marhanets, Kramatorsk. alerts.in.ua also lists Kryvyi Rih.
@@ -303,7 +308,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
     1. **Label accuracy:** its alerts in the channel, compared with the official channel's records for that city up to 2026-09-07 and with alerts.in.ua `city` records after that. Same method as the Q20 check.
     2. **Added value:** the share of hours in which the city's state differs from its raion's. Kharkiv: about 12%. Zaporizhzhia: the raion is on alert while the city is not in 51% of hours (June–September 2026).
     3. **Enough data:** the number of city alerts per month in training.
-  - **Proposed rule, set before measuring:** a city becomes a unit if it passes Q20's pass mark, differs from its raion in at least 5% of hours, and has at least 20 alerts per month. Otherwise it is folded into its raion.
+  - **Rule, set before measuring:** a city becomes a unit if it passes Q20's pass mark, differs from its raion in at least 5% of hours, and has at least 20 alerts per month. Otherwise it is folded into its raion.
   - Forecast quality for city units is then reported separately in the backtest.
 - **Q18. What counts as an air raid alert under the yellow/red system?** *Decided 2026-10-12: an alert of either level.* (See "Yellow and red alert levels" in section 5.)
   - **The problem:** every training alert comes from the old single-level system. The whole test period, about 2026-09-14 → 2026-10-11, falls under the new one. The definition changes exactly at the train/test boundary.
