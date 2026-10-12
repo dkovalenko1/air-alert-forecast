@@ -120,12 +120,18 @@ Known facts that shape the design:
 - **Permanent alerts:** Luhansk (since 2022-04-04) and Crimea (since 2022-12-10) are not in the datasets. The official data has only 2 Luhansk records, both from 2022.
 - **Near-permanent raions:** in June–September 2026, 16 of 118 raions were under a whole-raion alert in at least 90% of hours: all 8 Donetsk raions (99.2%), 5 Zaporizhzhia raions (98.3%) and others. Several of them are occupied.
 - **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:
-  - Kharkiv city: real air raid alerts (its own alert zone).
-  - Zaporizhzhia city: "Загроза ударних БпЛА" (heightened strike-drone threat), issued only during a raion alert.
-  - Nikopol, Marhanets: "Загроза артобстрілу" (artillery shelling threat).
-  - Pokrovsk, Vovchansk, Lypetska: urban-fighting warnings.
-
-  The official dataset's parser counts every message starting with 🔴 as an alert start, and the CSV has no column for the message type. So these warnings appear as air raid alerts. This is why Nikopol raion looked like it was on alert in 99.9% of hours. alerts.in.ua does provide an `alert_type` field.
+  - **Kharkiv and Zaporizhzhia cities:** their own air raid alert zones ("Повітряна тривога в м. …"). During an alert, extra 🔴🔴 escalation messages follow: "Загроза ударних БпЛА" (strike drones), "Загроза керованих авіабомб" (guided bombs), "Ракетна загроза" (missiles).
+  - **Nikopol, Marhanets:** "Загроза артобстрілу" (artillery shelling threat), ended by "Відбій загрози артобстрілу". These are not air raid alerts.
+  - **Pokrovsk, Vovchansk, Lypetska:** urban-fighting warnings. These are not air raid alerts.
+- **The official dataset's parser** ([source](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset/blob/main/processors/official_channel_processor.py)) has two problems. The CSV keeps no message type, so neither can be undone from the CSV alone.
+  1. **Every 🔴 message counts as an alert start**, and every 🟢 message as an end. The only message it ignores is "Тестовий Регіон". So artillery and urban-fighting warnings are recorded as air raid alerts.
+     - Row-level check: the CSV rows for Nikopol on 2026-09-06, 16:12:07–16:44:22 and 18:57:14–03:59:44 UTC, match the "Загроза артобстрілу" → "Відбій загрози артобстрілу" messages to the second.
+     - This is why Nikopol raion looked like it was on alert in 99.9% of hours.
+  2. **A repeated 🔴 message for a location that is already on alert overwrites the alert's start time.** If the previous start was more than 3 h earlier, the parser instead closes the earlier alert with an imputed end at start + 1 h.
+     - Example: the Zaporizhzhia city alert from 21:00 to 23:48 UTC on 2026-09-06 (2 h 48 min) is recorded as 23:44:35–23:48:49 (4 min), because escalation messages kept resetting its start.
+     - Only 0.12% of all rows have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.
+- **Scope of these checks:** they cover the latest ~20 messages per search on the channel's public web preview (early September 2026), plus row-level matches for Nikopol, Kharkiv and Zaporizhzhia. We know the mechanisms exist; we have not measured how many rows they affect across the full history.
+- **alerts.in.ua types its alerts:** it has an `alert_type` field with values such as `air_raid`, `artillery_shelling` and `urban_fights` (per its Python client docs).
 - **City zone vs raion:** Kharkiv city's own alerts mostly fall inside Kharkivskyi raion alerts. The city is on alert while the raion is not in 0.5% of the time; the raion is on alert while the city is not in 11.7% (June–September 2026).
 - **Telegram volume grows:** posting on `@kpszsu` grew a lot over time, from about 2k posts by October 2022 to about 86k by October 2026, so the meaning of Telegram features changes over time.
 
@@ -146,9 +152,16 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Options: an oblast-level main spec built from one consistent source, or a shorter, alerts.in.ua-only raion period.
 - **Q4. Keeping the latest period current.**
   - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
-- **Q15. How do we keep only real air raid alerts in the labels?** (See "Hromada-level records" in section 5.)
-  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download) and keep each message's type. Vadimkin's MIT-licensed parser is the starting point. This also lets us check his parsing elsewhere.
-  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus hromada zones checked by hand to be real air raid alerts (Kharkiv city). It is cheaper, but it relies on a sample showing that raion-level messages are air raid alerts only.
+- **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
+  - **(a) Re-parse `@air_alert_ua` ourselves** through Telethon (about 338k messages, roughly 1 h to download).
+    - Keep each message's type.
+    - Treat 🔴🔴 escalation messages as escalations, not as new starts.
+    - Vadimkin's MIT-licensed parser is the starting point.
+    - This also measures how many CSV rows the two parser problems affected.
+  - **(b) Keep the official CSV, using raion- and oblast-level records only**, plus the hromada zones checked by hand to be air raid zones (Kharkiv and Zaporizhzhia cities).
+    - Cheaper.
+    - It relies on a sample showing that raion-level messages are air raid alerts only.
+    - It keeps the overwritten start times wherever escalation messages occurred.
   - Either way, alerts.in.ua is filtered to `alert_type = air_raid`, so training and test share one definition (ADR-0003).
   - Proposal: (a).
 
@@ -167,7 +180,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Near-permanent and occupied raions: 16 of 118 raions were under alert in at least 90% of hours in June–September 2026.
   - Proposal: keep them in training, because their state is useful neighbour information. Report metrics both with and without them, because they make every model look good.
 - **Q16. Should city zones with their own air raid alerts be units?**
-  - Kharkiv city, for example, has its own alerts. They mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
+  - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
   - Depends on Q15, which determines which hromada zones carry real air raid alerts.
 
