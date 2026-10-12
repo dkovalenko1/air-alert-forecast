@@ -2,7 +2,8 @@
 
 import argparse
 
-from airalert import labels, telegram
+from airalert import backtest, labels, telegram
+from airalert.models import MODELS
 
 
 def main() -> None:
@@ -15,6 +16,9 @@ def main() -> None:
     build = commands.add_parser("build-labels", help="turn downloaded channel messages into alert periods per unit")
     build.add_argument("channels", nargs="*", default=list(labels.CLASSIFIERS),
                        help=f"channels to parse (default: {' '.join(labels.CLASSIFIERS)})")
+    bt = commands.add_parser("backtest", help="walk-forward backtest on the validation or test period")
+    bt.add_argument("period", choices=list(backtest.PERIODS))
+    bt.add_argument("--models", nargs="+", default=list(MODELS), choices=list(MODELS))
     args = parser.parse_args()
 
     if args.command == "telegram-login":
@@ -22,6 +26,8 @@ def main() -> None:
     elif args.command == "download-telegram":
         for channel in args.channels:
             telegram.download(channel)
+    elif args.command == "backtest":
+        backtest.main(args.period, args.models)
     elif args.command == "build-labels":
         for channel in args.channels:
             labels.build(channel)

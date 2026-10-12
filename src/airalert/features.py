@@ -34,12 +34,24 @@ def _seconds(times) -> np.ndarray:
     return pd.DatetimeIndex(times).as_unit("s").asi8.astype(np.int64)
 
 
+def _merge(s: np.ndarray, e: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Union of periods sorted by start. Merging never moves a start later, so it is safe for as-of queries."""
+    merged_s, merged_e = [], []
+    for start, end in zip(s, e):
+        if merged_e and start <= merged_e[-1]:
+            merged_e[-1] = max(merged_e[-1], end)
+        else:
+            merged_s.append(start)
+            merged_e.append(end)
+    return np.array(merged_s, dtype=np.int64), np.array(merged_e, dtype=np.int64)
+
+
 class UnitTimeline:
-    """One unit's merged alert periods, answering questions about any set of times."""
+    """One unit's alert periods (overlaps merged), answering questions about any set of times."""
 
     def __init__(self, starts, ends):
-        self.s = _seconds(starts)
-        self.e = _seconds(ends)
+        order = np.argsort(_seconds(starts), kind="stable")
+        self.s, self.e = _merge(_seconds(starts)[order], _seconds(ends)[order])
         self.done = np.concatenate([[0], np.cumsum(self.e - self.s)])  # total alert seconds of periods before i
 
     def alert_seconds_before(self, x: np.ndarray) -> np.ndarray:
