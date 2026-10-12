@@ -187,6 +187,21 @@ Known facts that shape the design:
   - The channel also carries its own city-level warnings (🛸 drones, 💣 guided bombs, 💥 shelling, ⚠️ "ЗМІ повідомляють про вибухи"). These are not air raid alerts.
   - It already posted "Червоний рівень тривоги" for Dnipropetrovsk raions on 2026-09-06. At the same time, `@air_alert_ua` still posted plain "Повітряна тривога".
 
+### First parse of `@UkraineAlarmSignal` (Desktop export, 2023-01 → 2025-07-04)
+
+- **The channel is run by hand.** Volunteers post every alert manually ("вручну відправляючи кожне сповіщення"). The channel also posts apologies for mistakes ("Просимо вибачення, сталась технічна помилка… Тривога в області відсутня").
+- **Every alert message has a readable place.** 103,759 alert start/all-clear messages; for all of them the place could be read.
+- **What else gets classified as unknown:** 1–1.8% of messages per year, mostly volunteer recruitment, fundraising and evacuation calls.
+- **Edge cases, out of 50,727 alerts (median 43 min):**
+  - 1,888 repeated starts while already on alert (1.9% of alerts);
+  - 401 all-clears with no open alert;
+  - 54 retracted alerts;
+  - 99 "тривога триває" messages with no open alert.
+- **Long alerts.**
+  - Oblast-level alerts over 12 h match the official record closely: Sumy 45 vs 45, Kharkiv 39 vs 36, Poltava 25 vs 21, Chernihiv 13 vs 12.
+  - City zones are different: 529 city alerts last over 12 h, some for months (Zaporizhzhia from 2023-03 to 2025-04). These are missing all-clears, not real alerts.
+- **City alert zones in the channel, 2023 → 2025-07:** Svitlovodsk 2,110 starts, Kyiv 1,073, Slavutych 869, Ochakiv 622, Kharkiv 393, Dobropillia 226, Zaporizhzhia 181, Kryvyi Rih 67, then a few more.
+
 ### Message types in `@air_alert_ua`
 
 Sample: 2,000 messages from 100 web-preview pages spread evenly over the message IDs, 2022-03-14 → 2026-09-07. Shares are approximate. The proposed handling is part of Q15/Q17.
@@ -260,6 +275,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - **Before accepting it:** repeat the spot checks over whole months, e.g. one month per year plus August 2026 → 2026-09-07, using a Telethon download of both channels.
   - **alerts.in.ua:** becomes an independent cross-check for the latest period, which turns Q2 into a three-way check.
 - **Q20. Pass mark for the label check, set before looking at the results.** *Decided 2026-10-12.*
+  - **Also calibrated here: detecting a missing all-clear** (Q17). For each level, compare long channel alerts with the official alert for the same place, then choose the rule. City zones are the main case.
   - **What it's for:** ADR-0006 rests on 54 hours of spot checks. Before building on the channel, we compare it with the official channel month by month, from 2023-01 to 2026-08.
   - **Why it's fixed in advance:** with a pass mark chosen after seeing the results, any number can be explained away ("97% is fine").
   - **If a month fails:** we look for the cause (parser bug, channel outage, renamed places) and fix the parser, mark the period missing, or start training later.
@@ -315,6 +331,7 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
     1. **Label accuracy:** its alerts in the channel, compared with the official channel's records for that city up to 2026-09-07 and with alerts.in.ua `city` records after that. Same method as the Q20 check.
     2. **Added value:** the share of hours in which the city's state differs from its raion's. Kharkiv: about 12%. Zaporizhzhia: the raion is on alert while the city is not in 51% of hours (June–September 2026).
     3. **Enough data:** the number of city alerts per month in training.
+  - **"Folded into its raion" means** the city's own alerts are ignored, and the raion's alerts stand for it. That way broken city records (missing all-clears) can't leak into raion labels.
   - **Rule, set before measuring:** a city becomes a unit if it passes Q20's pass mark, differs from its raion in at least 5% of hours, and has at least 20 alerts per month. Otherwise it is folded into its raion.
   - Forecast quality for city units is then reported separately in the backtest.
 - **Q18. What counts as an air raid alert under the yellow/red system?** *Decided 2026-10-12: an alert of either level.* (See "Yellow and red alert levels" in section 5.)
