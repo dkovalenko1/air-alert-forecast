@@ -80,21 +80,70 @@ class Logistic:
 
 
 class LightGBM:
+    """Gradient-boosted trees.
+
+    `early_stopping_days`: choose the number of trees on the last N days of the *training* rows (trees are added
+    until the log loss there stops improving for 100 rounds), then refit on all training rows with that number.
+    Validation data never sets it. `use_unit=False` leaves out the raion and oblast identity, so the model can
+    only use what is happening around the unit.
+    """
+
     name = "lightgbm"
 
-    def __init__(self, **params):
+    def __init__(self, early_stopping_days: int | None = None, use_unit: bool = True, **params):
+        self.early_stopping_days, self.use_unit = early_stopping_days, use_unit
         self.params = {"n_estimators": 300, "learning_rate": 0.05, "num_leaves": 63, "min_child_samples": 100,
                        "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8, "verbose": -1, **params}
+        self.columns = feature_columns() if use_unit else [c for c in feature_columns() if c not in CATEGORICAL]
+        self.categorical = [c for c in CATEGORICAL if c in self.columns]
 
     def fit(self, frame, y):
         import lightgbm as lgb
 
-        self.model = lgb.LGBMClassifier(**self.params)
-        self.model.fit(frame[feature_columns()], y, categorical_feature=CATEGORICAL)
+        y = np.asarray(y)
+        params = dict(self.params)
+        if self.early_stopping_days:
+            inner = (frame["t"] > frame["t"].max() - pd.Timedelta(days=self.early_stopping_days)).to_numpy()
+            probe = lgb.LGBMClassifier(**params)
+            probe.fit(frame.loc[~inner, self.columns], y[~inner], categorical_feature=self.categorical,
+                      eval_X=frame.loc[inner, self.columns], eval_y=y[inner], eval_metric="binary_logloss",
+                      callbacks=[lgb.early_stopping(100, verbose=False)])
+            params["n_estimators"] = max(int(probe.best_iteration_ or params["n_estimators"]), 1)
+        self.n_estimators = params["n_estimators"]
+        self.model = lgb.LGBMClassifier(**params)
+        self.model.fit(frame[self.columns], y, categorical_feature=self.categorical)
         return self
 
     def predict(self, frame):
-        return self.model.predict_proba(frame[feature_columns()])[:, 1]
+        return self.model.predict_proba(frame[self.columns])[:, 1]
+
+
+class PerUnit:
+    """One model per unit, each trained only on that unit's rows (Q13). A unit whose training rows are all one
+    class gets that constant; a unit never seen in training gets the overall rate."""
+
+    def __init__(self, base_factory):
+        self.base_factory = base_factory
+        self.name = f"{getattr(base_factory, 'name', 'model')}_per_unit"
+
+    def fit(self, frame, y):
+        y = np.asarray(y)
+        self.overall = float(y.mean())
+        self.models = {}
+        for unit, idx in frame.groupby("unit_id", observed=True).indices.items():
+            y_unit = y[idx]
+            self.models[str(unit)] = float(y_unit[0]) if np.all(y_unit == y_unit[0]) else self.base_factory().fit(frame.iloc[idx], y_unit)
+        return self
+
+    def predict(self, frame):
+        p = np.full(len(frame), self.overall)
+        for unit, idx in frame.groupby("unit_id", observed=True).indices.items():
+            model = self.models.get(str(unit))
+            if isinstance(model, float):
+                p[idx] = model
+            elif model is not None:
+                p[idx] = model.predict(frame.iloc[idx])
+        return p
 
 
 MODELS = {m.name: m for m in (Persistence, HistoricalRate, Logistic, LightGBM)}

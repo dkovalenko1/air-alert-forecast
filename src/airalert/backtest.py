@@ -49,11 +49,16 @@ def weeks(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd
     return list(zip(edges[:-1], edges[1:]))
 
 
-def run(grid: pd.DataFrame, period: str, model_names, horizons=HORIZONS, train_start=TRAIN_START) -> pd.DataFrame:
-    """Predictions for every (model, horizon, unit, hour) of the period."""
+def run(grid: pd.DataFrame, period: str, models, horizons=HORIZONS, train_start=TRAIN_START) -> pd.DataFrame:
+    """Predictions for every (model, horizon, unit, hour) of the period.
+
+    `models` is a list of names from models.MODELS, or a dict {label: factory} for configured variants
+    (experiments): each factory returns a fresh, unfitted model.
+    """
+    factories = models if isinstance(models, dict) else {name: MODELS[name] for name in models}
     start, end = PERIODS[period] if isinstance(period, str) else period
     week_list = weeks(start, end)
-    total_fits = len(week_list) * len(horizons) * len(model_names)
+    total_fits = len(week_list) * len(horizons) * len(factories)
     results, done, started = [], 0, time.monotonic()
     for week_start, week_end in week_list:
         for h in horizons:
@@ -63,8 +68,8 @@ def run(grid: pd.DataFrame, period: str, model_names, horizons=HORIZONS, train_s
             train, y_train = candidates[~np.isnan(known)], known[~np.isnan(known)].astype(int)
             test = frame[(frame.t >= week_start) & (frame.t < week_end) & (frame.t + h * HOUR <= end) & frame.label.notna()]
             assert (train.t + h * HOUR <= week_start).all()  # the label cutoff
-            for name in model_names:
-                model = MODELS[name]().fit(train, y_train)
+            for name, factory in factories.items():
+                model = factory().fit(train, y_train)
                 results.append(pd.DataFrame({
                     "model": name, "horizon": h, "week": week_start, "unit_id": test.unit_id.astype(str).to_numpy(),
                     "t": test.t.to_numpy(), "on_alert": test.on_alert.to_numpy(), "y": test.label.to_numpy(dtype=int),
@@ -105,22 +110,28 @@ def score(predictions: pd.DataFrame, exclude_units=frozenset()) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def main(period: str, model_names, channel: str = "UkraineAlarmSignal", horizons=HORIZONS, train_start=TRAIN_START) -> None:
-    """Build the grid from the label periods, run the walk-forward backtest and write predictions and metrics."""
+def load_grid(period: str, train_start=TRAIN_START, channel: str = "UkraineAlarmSignal") -> pd.DataFrame:
+    """The hourly grid from the training start up to the end of `period`, built from the label tables."""
     from airalert.features import build_grid
     from airalert.labels import INTERIM_DIR
-    from airalert.settings import ROOT
-
     from airalert.units import forecast_unit_ids
 
     merged = pd.read_parquet(INTERIM_DIR / f"{channel}_merged.parquet")
     label_periods = pd.read_parquet(INTERIM_DIR / f"{channel}_label_periods.parquet")
     corrections = pd.read_parquet(INTERIM_DIR / f"{channel}_corrections.parquet")
     data_end = merged.data_end.iloc[0]
-    start, end = PERIODS[period]
+    end = PERIODS[period][1]
     if data_end < end + 24 * HOUR:
         print(f"Warning: data ends {data_end:%Y-%m-%d %H:%M} UTC, before the {period} period's last labels.")
-    grid = build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods, corrections)
+    return build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods, corrections)
+
+
+def main(period: str, model_names, horizons=HORIZONS, train_start=TRAIN_START) -> None:
+    """Build the grid from the label periods, run the walk-forward backtest and write predictions and metrics."""
+    from airalert.settings import ROOT
+
+    start, end = PERIODS[period]
+    grid = load_grid(period, train_start)
     print(f"{period}: {start:%Y-%m-%d} → {end:%Y-%m-%d}, {len(grid):,} grid rows, models: {', '.join(model_names)}", flush=True)
     predictions = run(grid, period, model_names, horizons, train_start)
 
