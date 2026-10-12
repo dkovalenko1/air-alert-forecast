@@ -37,7 +37,10 @@ class Message:
 
 # (pattern on the phrase, kind, colour). The first match wins, so more specific phrases come first.
 _PHRASES = [
-    (r"^просимо вибачення.*(відсутн|помилк)", RETRACT, None),
+    # Apologies retract either an air raid alert or one of the channel's own warnings ("Загроза БПЛА … відсутня");
+    # only the first is a retraction. Other apologies (repeated sirens, corrected times) change no alert.
+    (r"^просимо вибачення.*(повітряна )?тривога в (області|місті|районі) відсутня", RETRACT, None),
+    (r"^просимо вибачення", UNKNOWN, None),
     (r"^відбій тривоги", END, None),
     (r"тривог\w* (в місті |в області )?триває", CONTINUE, None),
     (r"^жовтий рівень тривоги", START, "yellow"),
@@ -99,7 +102,7 @@ def classify(text: str | None) -> Message:
         phrase = lines[0]
 
     kind, color = _phrase_kind(phrase)
-    if kind == UNKNOWN and locations:
+    if kind == UNKNOWN and locations and not _clean(phrase).lower().startswith("просимо вибачення"):
         lowered = phrase.lower()
         threat = next((name for pattern, name in _THREATS if re.search(pattern, lowered)), None)
         if threat:

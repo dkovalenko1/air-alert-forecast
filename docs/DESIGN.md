@@ -195,7 +195,7 @@ Known facts that shape the design:
 - **Edge cases, out of 50,727 alerts (median 43 min):**
   - 1,888 repeated starts while already on alert (1.9% of alerts);
   - 401 all-clears with no open alert;
-  - 54 retracted alerts;
+  - 22 retracted alerts. Only apologies saying the air raid alert is absent count as retractions; most apologies retract the channel's own warnings ("Загроза БПЛА в місті відсутня") and change no alert. Another 6 air raid apologies arrive after an all-clear; those alerts are kept.
   - 99 "тривога триває" messages with no open alert.
 - **Long alerts.**
   - Oblast-level alerts over 12 h match the official record closely: Sumy 45 vs 45, Kharkiv 39 vs 36, Poltava 25 vs 21, Chernihiv 13 vs 12.
