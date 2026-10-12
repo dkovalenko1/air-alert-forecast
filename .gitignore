@@ -1,0 +1,13 @@
+# Secrets: never commit, never paste into chat
+.env
+*.session
+*.session-journal
+
+# Downloaded and generated data, trained models
+data/
+models/
+
+# Python
+__pycache__/
+.venv/
+.ipynb_checkpoints/
