@@ -108,7 +108,7 @@ Decision log (smaller choices that are easy to reverse):
 
 | Source | Coverage | Location level | Use |
 |---|---|---|---|
-| Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; about 90% raion since Nov 2025 | Main alert history |
+| Official ([Vadimkin dataset](https://github.com/Vadimkin/ukrainian-air-raid-sirens-dataset), parsed from Telegram `@air_alert_ua`) | 2022-03-15 → 2026-09-07 | oblast / raion / hromada; 92% raion since Nov 2025 | Main alert history |
 | [alerts.in.ua API](https://devs.alerts.in.ua/) history | Rolling one month, about 2026-09-12 → now | oblast / raion / hromada | Fill the gap and cover the latest period. Snapshot it before the window moves on. |
 | Volunteer (eTryvoga, same repo) | 2022-02-25 → now | oblast only | Not used for labels: its meaning drifted (see below) |
 | Telegram `@UkraineAlarmSignal` (eTryvoga, 84k subscribers; the source behind the volunteer CSV) | 2022-02-25 → now, live | City/oblast until 2024; raion-level alerts from 2025; yellow/red levels from Sept 2026 | Candidate label source after 2026-09-07 (Q19) |
@@ -121,6 +121,7 @@ Known facts that shape the design:
 - **Frontline oblasts:** if "oblast on alert" means "any raion on alert", frontline oblasts are on alert in about 100% of hours (Dnipropetrovsk 100%, Donetsk 99.8%, Kharkiv 99.4%; June–September 2026). These figures still include the non-air-raid hromada records described below.
 - **Permanent alerts:** Luhansk (since 2022-04-04) and Crimea (since 2022-12-10) are not in the datasets. The official data has only 2 Luhansk records, both from 2022.
 - **Near-permanent raions:** in June–September 2026, 16 of 118 raions were under a whole-raion alert in at least 90% of hours: all 8 Donetsk raions (99.2%), 5 Zaporizhzhia raions (98.3%) and others. Several of them are occupied.
+- **The official CSV has exact duplicate rows:** 113,845 of 299,275 rows (38%), spread over every year (2026: 6,954). Shares of time under alert are not affected, because overlapping intervals merge. Earlier counts of rows were checked again without the duplicates: level mix since November 2025 is 92% raion / 7% hromada / 1% oblast, and the Volyn counts are unchanged.
 - **Hromada-level records are not all air raid alerts** (about 7% of records since November 2025). The original channel messages show:
   - **Kharkiv and Zaporizhzhia cities:** their own air raid alert zones ("Повітряна тривога в м. …"). During an alert, extra 🔴🔴 escalation messages follow: "Загроза ударних БпЛА" (strike drones), "Загроза керованих авіабомб" (guided bombs), "Ракетна загроза" (missiles).
   - **Nikopol, Marhanets:** "Загроза артобстрілу" (artillery shelling threat), ended by "Відбій загрози артобстрілу". These are not air raid alerts.
@@ -131,7 +132,7 @@ Known facts that shape the design:
      - This is why Nikopol raion looked like it was on alert in 99.9% of hours.
   2. **A repeated 🔴 message for a location that is already on alert overwrites the alert's start time.** If the previous start was more than 3 h earlier, the parser instead closes the earlier alert with an imputed end at start + 1 h.
      - Example: the Zaporizhzhia city alert from 21:00 to 23:48 UTC on 2026-09-06 (2 h 48 min) is recorded as 23:44:35–23:48:49 (4 min), because escalation messages kept resetting its start.
-     - Only 0.12% of all rows have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.
+     - Only 255 unique rows (0.14%) have the imputed 1 h duration. The amount of truncation can't be measured without the raw messages.
 - **Scope of these checks:** they cover the latest ~20 messages per search on the channel's public web preview (early September 2026), plus row-level matches for Nikopol, Kharkiv and Zaporizhzhia. We know the mechanisms exist; we have not measured how many rows they affect across the full history.
 - **alerts.in.ua types its alerts:** its `alert_type` field takes one of five values: `air_raid`, `artillery_shelling`, `urban_fights`, `chemical`, `nuclear` (per its Python client). There is no type for in-alert escalations or kamikaze-drone attacks.
 
@@ -219,17 +220,37 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - If they match, the raion main spec goes ahead. If not, see Q3.
 - **Q3. Fallback if Q2 fails.**
   - Options: an oblast-level main spec built from one consistent source, or a shorter, alerts.in.ua-only raion period.
-- **Q19. Which source covers the period after 2026-09-07?** (See "The volunteer CSV and its source channel" in section 5.)
-  - **Proposal:** parse `@UkraineAlarmSignal` ourselves, with the same type-aware rules as ADR-0005.
+- **Q19. Which source do the labels come from?** (See "The volunteer CSV and its source channel" in section 5.)
+  - **Channel history:**
+    - Created 2022-02-25 at 16:11 UTC; its first alert was "Тривога в Києві" at 16:36. That is 18 days before the official record starts.
+    - Formats:
+      - 2022–2024: oblast-level messages ("Харківська обл. | Тривога - Усі в укриття"), plus some city names in 2022.
+      - 2025: raion-level messages phase in (about 14% of alert messages in H1 2025, 79% in H2, about 96% in 2026).
+      - September 2026: yellow/red levels.
+  - **Agreement with the official record.** Spot checks after removing duplicates, with a ±5 min match window:
+
+    | Window (UTC) | Level | Official starts found in channel | Official ends found in channel | Median delay |
+    |---|---|---|---|---|
+    | 2022-06-15 00–12 | oblast | 5/7 | 6/9 | 9–27 s |
+    | 2023-06-15 00–12 | oblast | 17/17 | 24/24 | 22–28 s |
+    | 2024-06-15 00–12 | oblast | 35/35 | 47/47 | 33–41 s |
+    | 2025-06-15 00–12 | oblast + raion | 23/24 | 23/24 | 5–7 s |
+    | 2026-09-06 12–18 | raion | 88/88 | 102/102 | 17–25 s |
+
+    In the other direction, almost every channel alert also appears in the official record. 2022 is weaker: some official alerts are missing, and some messages name cities instead of oblasts.
+  - **Proposal: `@UkraineAlarmSignal` is the label source for the whole history from 2023-01-01.**
+    - One source and one parser cover training and test, the strongest form of ADR-0003.
+    - The official channel (ADR-0005) becomes the validation reference rather than the label source.
+    - 2022 is left out: it is the weakest period for this channel and an early-war regime anyway. The main spec is raion-level, so it starts in 2025 regardless.
+  - **Parsing:** our own type-aware rules, as in ADR-0005.
     - Air raid alerts only: "Повітряна тривога", the yellow/red levels, and "Відбій тривоги".
     - Its 🛸/💣/💥/⚠️ warnings are dropped from the labels.
   - **Why:**
     - It is live and raion-level, and it covers the 2026-09-07 → 09-12 gap.
     - It carries the levels (Q18).
     - It gives the overlap with the official record that alerts.in.ua cannot (ADR-0003).
-  - **Before accepting it:** confirm the 6-hour check over the whole overlap month (August 2026 → 2026-09-07), using a Telethon download of both channels.
+  - **Before accepting it:** repeat the spot checks over whole months, e.g. one month per year plus August 2026 → 2026-09-07, using a Telethon download of both channels.
   - **alerts.in.ua:** becomes an independent cross-check for the latest period, which turns Q2 into a three-way check.
-  - **Open sub-question:** use the channel only after 2026-09-07, or for the whole raion era (2025 →), so that one source covers training and test.
 - **Q4. Keeping the latest period current.**
   - Re-run the fetch before the final evaluation? Schedule regular alerts.in.ua snapshots so that history is not lost when the one-month window moves on?
 - **Q15. How do we keep only real air raid alerts in the labels, with correct start times?** (See "Hromada-level records" and "The official dataset's parser" in section 5.)
@@ -263,9 +284,11 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - Kharkiv and Zaporizhzhia cities have their own air raid alert zones. Kharkiv city alerts mostly fall inside Kharkivskyi raion alerts, but differ from them in about 12% of the time.
   - Options: the city becomes its own unit (like Kyiv city), or it is folded into its raion.
   - Depends on Q15, which determines which hromada zones carry real air raid alerts.
-- **Q18. What counts as an air raid alert under the yellow/red system?** (See "Yellow and red alert levels" in section 5.)
+- **Q18. What counts as an air raid alert under the yellow/red system?** *Decided 2026-10-12: an alert of either level.* (See "Yellow and red alert levels" in section 5.)
   - **The problem:** every training alert comes from the old single-level system. The whole test period, about 2026-09-14 → 2026-10-11, falls under the new one. The definition changes exactly at the train/test boundary.
-  - **Proposal: target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. Store the level as an attribute.
+  - **Target = an alert of either level (yellow or red).** The old "Повітряна тривога" covered drones and missiles alike, so "either level" is the closest match to the old definition. There are only about 5 weeks of level data, and nearly all of it falls in the test period.
+  - **Parsing:** a yellow↔red change continues the same alert (the Q17 repeated-start rule). An alert ends only at "Відбій тривоги".
+  - **The level is stored as an attribute.** It is used for exploratory analysis and to split test results after the fact ("does the model catch red alerts as well as yellow ones?"). Using it only to group outcomes is not an input to the model, so there is no leakage.
   - **Red-only as the target:** not possible. There is no red-level history to train on.
   - **Level as a feature:** not now, because it doesn't exist before September 2026 (same rule as escalations in Q17).
   - **Checks:**
