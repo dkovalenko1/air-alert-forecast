@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 
 START, END, CONTINUE, RETRACT, OTHER, UNKNOWN = "start", "end", "continue", "retract", "other", "unknown"
+ESCALATION = "escalation"  # a heightened threat inside an alert (official channel only)
 
 
 @dataclass(frozen=True)

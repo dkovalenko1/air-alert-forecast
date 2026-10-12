@@ -7,6 +7,8 @@ Each location is tracked on its own; mapping oblast-wide alerts onto raions happ
 - An all-clear closes the open alert. An all-clear with nothing open is counted and ignored.
 - A retraction ("Просимо вибачення, сталась технічна помилка…") removes the open alert: it was posted by mistake.
 - A continuation ("тривога триває") changes nothing.
+- An escalation ("Загроза ударних БпЛА…", official channel) never changes an open alert; with nothing open
+  it opens an alert flagged as implied.
 - Alerts still open when the data ends keep `finished_at = None`.
 """
 
@@ -14,7 +16,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from airalert.alarm_signal import CONTINUE, END, RETRACT, START, Location, Message
+from airalert.alarm_signal import CONTINUE, END, ESCALATION, RETRACT, START, Location, Message
 
 
 @dataclass
@@ -26,6 +28,7 @@ class Alert:
     end_message_id: int | None = None
     max_color: str | None = None  # "red" if the alert was ever red, else "yellow" if ever yellow
     restarts: int = 0
+    implied: bool = False  # opened by an escalation with no air raid alert open
 
 
 @dataclass
@@ -59,6 +62,12 @@ def build_alerts(messages: list[tuple[int, datetime, Message]]) -> AlertHistory:
                     history.stats["all-clear with no open alert"] += 1
             elif message.kind == RETRACT:
                 history.stats["retracted" if open_alerts.pop(location, None) else "retraction with no open alert"] += 1
+            elif message.kind == ESCALATION:
+                if current:
+                    history.stats["escalation during alert"] += 1
+                else:
+                    open_alerts[location] = Alert(location, time, message_id, implied=True)
+                    history.stats["implied alert from escalation"] += 1
             elif message.kind == CONTINUE and not current:
                 history.stats["continuation with no open alert"] += 1
     history.alerts.extend(open_alerts.values())  # still on alert when the data ends

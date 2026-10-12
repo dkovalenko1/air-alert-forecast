@@ -33,6 +33,11 @@ def _normalise(name: str) -> str:
     return " ".join(name.replace("’", "'").replace("ʼ", "'").split())
 
 
+def _key(name: str) -> str:
+    """Loose match key: '#Кам'янський_район', 'Кам’янський район' and 'камянський район' all match."""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
 def _oblast_name(name: str) -> str:
     """'Харківська обл.' and 'Харківська область' both become 'Харківська область'."""
     name = _normalise(name)
@@ -51,7 +56,8 @@ def _index() -> tuple[dict, dict]:
     with REGISTRY.open(encoding="utf-8") as f:
         for r in csv.DictReader(f):
             for name in [r["name"], *filter(None, r["aliases"].split("|"))]:
-                by_name[(r["oblast"], _normalise(name))] = r["unit_id"]
+                by_name[(r["oblast"], _key(name))] = r["unit_id"]
+                by_name[(None, _key(name))] = r["unit_id"]  # raion names are unique nationwide
             if r["kind"] == "raion":
                 by_oblast.setdefault(r["oblast"], []).append(r["unit_id"])
     return by_name, by_oblast
@@ -65,13 +71,14 @@ def resolve(location: Location) -> list[str]:
     """Unit ids an alert at `location` covers. Raises UnknownPlace for names not in the registry."""
     by_name, by_oblast = _index()
     if location.level == "city":
-        return ["м. Київ"] if _normalise(location.name) in ("Київ", "м. Київ") else []
-    oblast = _oblast_name(location.oblast or "")
+        return ["м. Київ"] if _key(location.name) in ("київ", "мкиїв") else []
+    oblast = _oblast_name(location.oblast) if location.oblast else None
     if location.level == "oblast":
+        oblast = next((o for o in by_oblast if _key(o) == _key(oblast or "")), oblast)
         if oblast not in by_oblast:
             raise UnknownPlace(oblast)
         return list(by_oblast[oblast])
-    unit_id = by_name.get((oblast, _normalise(location.name)))
+    unit_id = by_name.get((oblast, _key(location.name)))
     if unit_id is None:
         raise UnknownPlace(f"{location.name} ({oblast})")
     return [unit_id]
