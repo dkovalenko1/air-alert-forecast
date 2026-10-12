@@ -53,3 +53,33 @@ def test_all_clear_without_alert_is_counted_not_invented():
 def test_channel_warnings_do_not_open_alerts():
     drones = "🛸 Синельникове (Дніпропетровська обл.)\nЗагроза застосування БПЛА. Перейдіть в укриття!"
     assert run((drones, 0)).alerts == []
+
+
+HOUR_LIMIT = lambda location: timedelta(hours=12)  # noqa: E731
+
+
+def run_with_rule(*texts_and_minutes, data_end_minutes=None):
+    data_end = T0 + timedelta(minutes=data_end_minutes) if data_end_minutes is not None else None
+    return build_alerts([(i, T0 + timedelta(minutes=m), classify(t)) for i, (t, m) in enumerate(texts_and_minutes)],
+                        max_silence=HOUR_LIMIT, data_end=data_end)
+
+
+def test_restart_long_after_the_last_message_means_a_lost_all_clear():
+    [a] = run_with_rule((START, 0), (START, 90), (END, 120)).alerts
+    assert (a.started_at, a.finished_at) == (T0, T0 + timedelta(minutes=120))  # as published: features use this
+    assert a.unknown == [(T0, T0 + timedelta(minutes=90), T0 + timedelta(minutes=90))]  # detected at the restart
+    assert run_with_rule((START, 0), (START, 15), (END, 40)).alerts[0].unknown == []  # a quick repeat is not
+
+
+def test_level_changes_are_not_lost_all_clears():
+    yellow = "🟡 Синельниківський район (Дніпропетровська обл.)\nЖовтий рівень тривоги. Прямуйте в укриття!"
+    [a] = run_with_rule((yellow, 0), (RED, 90), (END, 120)).alerts
+    assert a.unknown == [] and a.max_color == "red"
+
+
+def test_silence_longer_than_the_limit_is_unknown():
+    [a] = run_with_rule((START, 0), (END, 20 * 60)).alerts
+    assert a.unknown == [(T0, T0 + timedelta(hours=20), T0 + timedelta(hours=12))]  # detected when the silence passed 12 h
+    [still_open] = run_with_rule((START, 0), data_end_minutes=13 * 60).alerts
+    assert still_open.finished_at is None and still_open.unknown == [(T0, T0 + timedelta(hours=13), T0 + timedelta(hours=12))]
+    assert run_with_rule((START, 0), (END, 11 * 60)).alerts[0].unknown == []

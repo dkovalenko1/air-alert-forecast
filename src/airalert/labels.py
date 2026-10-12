@@ -9,7 +9,9 @@ later or an end earlier, so asking "was the unit on alert at t, and since when?"
 before t.
 
 Two merged tables come out (ADR-0001): feature periods, as published (a retracted alert lasts until its
-retraction, since until then it was believed), and label periods, the corrected truth (retracted alerts dropped).
+retraction, since until then it was believed), and label periods, the corrected truth (retracted alerts dropped,
+stretches after a missing all-clear cut out). A corrections table records, for every retracted alert and every
+unknown stretch, when the correction became known, so training at a cutoff can use labels as known then.
 
 Every message is counted by kind, and unrecognised messages are written out for review (ADR-0005).
 
@@ -21,6 +23,7 @@ assumption (ADR-0007), cross-checked approximately by the month-by-month compari
 """
 
 import dataclasses
+import functools
 import json
 from collections import Counter
 
@@ -30,10 +33,25 @@ from airalert import alarm_signal, official_channel
 from airalert.alerts import build_alerts
 from airalert.alarm_signal import UNKNOWN
 from airalert.settings import RAW_DIR, ROOT
-from airalert.units import UnknownPlace, canonical, resolve, units
+from airalert.units import REGISTRY, UnknownPlace, _oblast_name, canonical, resolve, units
 
 CLASSIFIERS = {"UkraineAlarmSignal": alarm_signal.classify_all, "air_alert_ua": official_channel.classify}
 INTERIM_DIR = ROOT / "data" / "interim"
+MAX_SILENCE = REGISTRY.parent / "max_silence_hours.csv"  # scripts/calibrate_missing_all_clear.py
+MISSING_ALL_CLEAR_RULE = {"UkraineAlarmSignal"}  # the official channel is the reference and is left as published
+
+
+@functools.cache
+def _silence_limits() -> dict[str, pd.Timedelta]:
+    table = pd.read_csv(MAX_SILENCE)
+    return {row.oblast: pd.Timedelta(hours=row.max_silence_hours) for row in table.itertuples()}
+
+
+def max_silence(location) -> pd.Timedelta | None:
+    """Longest plausible stretch without news about an open alert at `location` (its oblast's limit)."""
+    if location.level == "city" and location.oblast is None:  # Kyiv
+        return _silence_limits().get("м. Київ")
+    return _silence_limits().get(_oblast_name(location.oblast)) if location.oblast else None
 
 
 def read_channel(channel: str) -> list[dict]:
@@ -71,11 +89,13 @@ def classify_messages(messages: list[dict], classify) -> tuple[list, Counter, li
     return parsed, stats, unknown
 
 
-def unit_alerts_from_messages(messages: list[dict], classify) -> tuple[pd.DataFrame, Counter, list[dict]]:
+def unit_alerts_from_messages(messages: list[dict], classify, max_silence=None) -> tuple[pd.DataFrame, Counter, list[dict]]:
     """One row per (alert, unit it covers). `finished_at` is NaT for alerts still open when the data ends;
-    `retracted` marks alerts ended by a retraction. Also returns counts and the unrecognised messages."""
+    `retracted` marks alerts ended by a retraction; `unknown` lists (from, to, detected_at) stretches after a missing
+    all-clear (only with `max_silence`, see alerts.py). Also returns counts and the unrecognised messages."""
     parsed, stats, unknown = classify_messages(messages, classify)
-    history = build_alerts(parsed)
+    data_end = pd.Timestamp(messages[-1]["date"]) if messages else None
+    history = build_alerts(parsed, max_silence=max_silence, data_end=data_end) if max_silence else build_alerts(parsed)
     stats.update(history.stats)
     excluded = {u.unit_id for u in units() if u.excluded}
     rows = []
@@ -98,13 +118,50 @@ def unit_alerts_from_messages(messages: list[dict], classify) -> tuple[pd.DataFr
                 "implied": alert.implied,
                 "restarts": alert.restarts,
                 "retracted": alert.retracted,
+                "unknown": list(alert.unknown),
             })
-    columns = ["unit_id", "started_at", "finished_at", "place_level", "place", "max_color", "implied", "restarts", "retracted"]
+    columns = ["unit_id", "started_at", "finished_at", "place_level", "place", "max_color", "implied", "restarts", "retracted", "unknown"]
     frame = pd.DataFrame(rows, columns=columns)
     for column in ("started_at", "finished_at"):
         frame[column] = pd.to_datetime(frame[column], utc=True)
     frame["retracted"] = frame["retracted"].astype(bool)
     return frame, stats, unknown
+
+
+def unknown_periods(alerts: pd.DataFrame) -> pd.DataFrame:
+    """Stretches with unknown state after a missing all-clear, per unit: unit_id, started_at, finished_at, corrected_at
+    (when it became clear the all-clear was missing). Retracted alerts are dropped from labels anyway."""
+    rows = [(row.unit_id, a, b, d) for row in alerts[~alerts.retracted].itertuples() for a, b, d in (row.unknown or [])]
+    frame = pd.DataFrame(rows, columns=["unit_id", "started_at", "finished_at", "corrected_at"])
+    for column in ("started_at", "finished_at", "corrected_at"):
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    return frame
+
+
+def known_pieces(alerts: pd.DataFrame) -> pd.DataFrame:
+    """The non-retracted alerts with their unknown stretches cut out: what labels count as on alert."""
+    rows = []
+    for row in alerts[~alerts.retracted].itertuples():
+        start = row.started_at
+        for a, b, _ in sorted(row.unknown or []):
+            if a > start:
+                rows.append((row.unit_id, start, pd.Timestamp(a)))
+            start = max(start, pd.Timestamp(b))
+        end = row.finished_at
+        if pd.isna(end) or end > start:
+            rows.append((row.unit_id, start, end))
+    frame = pd.DataFrame(rows, columns=["unit_id", "started_at", "finished_at"])
+    for column in ("started_at", "finished_at"):
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    return frame
+
+
+def corrections(alerts: pd.DataFrame) -> pd.DataFrame:
+    """Every label correction and when it became known: retracted alerts (label → calm, known at the retraction)
+    and unknown stretches (label → unknown, known when the missing all-clear could be detected)."""
+    retracted = alerts.loc[alerts.retracted, ["unit_id", "started_at", "finished_at"]]
+    retracted = retracted.assign(corrected_at=retracted.finished_at, unknown=False)
+    return pd.concat([retracted, unknown_periods(alerts).assign(unknown=True)], ignore_index=True)
 
 
 def merge_per_unit(alerts: pd.DataFrame, data_end: pd.Timestamp) -> pd.DataFrame:
@@ -129,21 +186,21 @@ def merge_per_unit(alerts: pd.DataFrame, data_end: pd.Timestamp) -> pd.DataFrame
 
 def build(channel: str) -> None:
     """Write data/interim/<channel>_alerts.parquet (per alert and unit), <channel>_merged.parquet (feature periods),
-    <channel>_label_periods.parquet (label periods), <channel>_corrections.parquet (retracted alerts, for labels as
-    known at a training cutoff) and <channel>_unknown.csv (unrecognised messages)."""
+    <channel>_label_periods.parquet (label periods), <channel>_corrections.parquet (retracted alerts and unknown
+    stretches, with when each became known) and <channel>_unknown.csv (unrecognised messages)."""
     messages = read_channel(channel)
     if not messages:
         raise SystemExit(f"No downloaded messages for {channel}: run `download-telegram {channel}` first.")
-    alerts, stats, unknown = unit_alerts_from_messages(messages, CLASSIFIERS[channel])
+    rule = max_silence if channel in MISSING_ALL_CLEAR_RULE else None
+    alerts, stats, unknown = unit_alerts_from_messages(messages, CLASSIFIERS[channel], max_silence=rule)
     data_end = pd.Timestamp(messages[-1]["date"])
     merged = merge_per_unit(alerts, data_end)
-    label_periods = merge_per_unit(alerts[~alerts.retracted], data_end)
+    label_periods = merge_per_unit(known_pieces(alerts), data_end)
     INTERIM_DIR.mkdir(parents=True, exist_ok=True)
-    alerts.to_parquet(INTERIM_DIR / f"{channel}_alerts.parquet", index=False)
+    alerts.drop(columns="unknown").to_parquet(INTERIM_DIR / f"{channel}_alerts.parquet", index=False)
     merged.assign(data_end=data_end).to_parquet(INTERIM_DIR / f"{channel}_merged.parquet", index=False)
     label_periods.assign(data_end=data_end).to_parquet(INTERIM_DIR / f"{channel}_label_periods.parquet", index=False)
-    alerts.loc[alerts.retracted, ["unit_id", "started_at", "finished_at"]].to_parquet(
-        INTERIM_DIR / f"{channel}_corrections.parquet", index=False)  # finished_at: when the retraction was posted
+    corrections(alerts).to_parquet(INTERIM_DIR / f"{channel}_corrections.parquet", index=False)
     pd.DataFrame(unknown, columns=["id", "date", "text"]).to_csv(INTERIM_DIR / f"{channel}_unknown.csv", index=False)
     print(f"{channel}: {len(messages):,} messages up to {data_end:%Y-%m-%d %H:%M} UTC → "
           f"{len(alerts):,} unit alerts, {len(merged):,} merged periods for {merged.unit_id.nunique()} units; "

@@ -283,6 +283,13 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
   - **Why it's fixed in advance:** with a pass mark chosen after seeing the results, any number can be explained away ("97% is fine").
   - **If a month fails:** we look for the cause (parser bug, channel outage, renamed places) and fix the parser, mark the period missing, or start training later.
   - **Output:** the per-month table goes into the README as evidence of label quality.
+  - **Result (2026-10-13): fails.** 35 of 176 month × kind × direction rows are below 98% (lowest 96.2%), mostly "official events found in the channel" in 2023, 2024-06 and 2025-10 to 2026-06. Causes found:
+    - the official channel's outage, 2026-08-29 07:55 to 2026-09-02 16:48 Kyiv time: now left out of the comparison (any silence over 24 h; normal quiet spells last at most about 12 h);
+    - a parser bug: messages with several sections (since 2026-07) lost all-clears; fixed;
+    - the channel misses some all-clears: handled by the missing-all-clear rule (Q17), which makes those stretches unknown;
+    - the channel misses some starts (it posts an all-clear for an alert it never announced): 0.1–0.4% of raion-hours per month are calm in our labels but on alert officially; not handled;
+    - the official record has broken alerts of its own (e.g. 135 h in Lviv and Chernivtsi raions, 2025-11-19 to 11-24).
+    - At the hour level, which is what the model uses, labels and the official record agree on 99.5–99.9% of known raion-hours per month from 2025-08 (97.2% in 2025-11).
   - **Pass mark:** in every month, at least 98% of official starts and ends are found in the channel within 5 min, and vice versa.
   - **Cost:**
     - Messages to download since 2023: about 303k for `@air_alert_ua` (to 2026-09-07) and about 607k for `@UkraineAlarmSignal`, which is needed for labels anyway.
@@ -352,6 +359,8 @@ Question numbers are stable IDs, not an order. When a question is answered, it i
 - **Q17. Parsing rules.** *Decided 2026-10-12: all three proposals accepted* ([ADR-0005](adr/0005-rebuild-alert-history-from-channel.md)). (See "Message types" in section 5.)
   - **Repeated start for a location that is already on alert:** keep the original start. This is exactly what fixes the overwrite problem.
   - **Missing all-clear** (an alert never closed, then a new start hours later): the true end is unknown. Close the alert at its last known message and mark the gap as unknown. Unknown periods are not trained on or scored. No end time is invented (the old parser used start + 1 h).
+    - *Implemented 2026-10-13, calibrated against the official channel (Q20) on data before validation:* a stretch between two messages about an open alert is unknown if a new start without a level arrives more than 20 min after the previous message (the official channel was calm in between in 86–100% of such cases), or if it is longer than the oblast's limit: twice the official 99th percentile of alert length, at least 12 h (`scripts/calibrate_missing_all_clear.py`, `reference/max_silence_hours.csv`). Features keep the alert as published; labels in an unknown stretch are missing unless a confirmed alert touches the hour; training at a cutoff sees the published label until the stretch could have been detected (ADR-0007).
+    - *Effect, 2025-08 to 2026-08:* hour-level agreement with the official channel on known hours rose from 95.0–99.7% to 99.5–99.9% per month (97.2% in 2025-11, where the official record itself has a broken 135-hour alert). Unknown share: 0.2–7.9% of raion-hours per month; 1.0% in validation, 0.4% in test.
   - **Escalation with no open alert:** e.g. "Загроза керованих авіабомб" arrives when no "Повітряна тривога" is open for that location. Open an implied air raid alert, flag it, and count how often this happens.
   - **Non-target types as features:** only types that also exist in the test period can be features. After 2026-09-07 the only alert source is alerts.in.ua. It has artillery shelling and urban fighting, but no escalations or kamikaze-drone attacks. So escalations can be used for exploratory analysis and the write-up, but not as model inputs. Telegram threat posts (`@kpszsu`, `@deraketaua`) cover that information in both periods.
 
@@ -414,10 +423,10 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 1 | Download alerts.in.ua history | — | done (27 locations, 16,812 alerts) |
 | 2 | Download Telegram channels (`@UkraineAlarmSignal`, `@air_alert_ua`, `@kpszsu`, `@deraketaua`) | login | running, about 4 h |
 | 3 | **Unit registry:** every raion with its oblast and name variants (renames, apostrophes, Ukrainian and English) | official CSV, alerts.in.ua | done (`units.py`, 122 raions + Kyiv, renamed aliases) |
-| 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | code done (`alarm_signal.py`, `alerts.py`, `labels.py`), except the missing-all-clear rule (needs the Q20 calibration); full run after the download |
+| 4 | **Label parser for `@UkraineAlarmSignal`:** message classifier per format period, and the alert state machine with the Q17 rules, producing the alert interval table | step 3; samples and Desktop export for development | done (`alarm_signal.py`, `alerts.py`, `labels.py`), incl. multi-section messages and the calibrated missing-all-clear rule |
 | 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | code done (`official_channel.py`); full run after the download |
-| 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | code done (`validation.py`, `check-labels`); blocked on downloads |
-| 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | code done (`validation.py`); blocked on the label channel's download |
+| 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | run 2026-10-13: **35 of 176 rows below the 98% mark** (event level); causes in the Q20 entry; decision pending |
+| 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | done: all rows pass (98.4–99.96%); 99.8% hour-level agreement |
 | 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | blocked |
 | 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | done (`reference/neighbours.csv`, 612 pairs) |
 | 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | done (`features.py`, leakage tests) |

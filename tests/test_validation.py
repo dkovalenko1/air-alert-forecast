@@ -77,3 +77,15 @@ def test_utc_bounds_are_read_as_kyiv_months():
     late_evening = alerts([("A/a", "2026-08-31 22:10:00", "2026-08-31 22:50:00")])  # September 1 in Kyiv
     report = monthly_report(late_evening, late_evening, pd.Timestamp("2026-08-31 22:00", tz="UTC"), pd.Timestamp("2026-08-31 23:00", tz="UTC"))
     assert report.month.unique().tolist() == ["2026-09"] and report.passes.all()
+
+
+def test_reference_outages_are_found_and_left_out():
+    from airalert.validation import outages
+    times = ["2026-08-29 04:00Z", "2026-08-29 04:55Z", "2026-08-30 12:42Z", "2026-09-02 13:48Z", "2026-09-02 14:00Z"]
+    gaps = outages(times)
+    assert gaps == [(pd.Timestamp("2026-08-29 04:55Z"), pd.Timestamp("2026-08-30 12:42Z")),
+                    (pd.Timestamp("2026-08-30 12:42Z"), pd.Timestamp("2026-09-02 13:48Z"))]
+    labels = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:40:00"), ("A/a", "2026-08-31 10:00:00", "2026-08-31 11:00:00")])
+    reference = alerts([("A/a", "2026-08-01 10:00:00", "2026-08-01 10:40:00")])  # silent on 08-31
+    assert not monthly_report(labels, reference, "2026-08-01", "2026-09-01").passes.all()
+    assert monthly_report(labels, reference, "2026-08-01", "2026-09-01", exclude=gaps).passes.all()

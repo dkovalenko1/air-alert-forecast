@@ -12,11 +12,20 @@ Each location is tracked on its own; mapping oblast-wide alerts onto raions happ
 - An escalation ("Загроза ударних БпЛА…", official channel) never changes an open alert; with nothing open
   it opens an alert flagged as implied.
 - Alerts still open when the data ends keep `finished_at = None`.
+- A missing all-clear (Q17) leaves the alert as published (features use it: nobody knew the all-clear was missing),
+  but marks the stretch with no information as unknown, so labels neither train nor score on it. A stretch
+  between two messages about the place is unknown if
+  - a new start without a level arrives more than `restart_gap` (20 min) after the previous message: the
+    all-clear in between was lost (in the official channel the place was calm in between in 86-100% of such
+    cases); detected when that start arrives;
+  - or it is longer than the place's `max_silence` (per oblast, calibrated on the official channel by
+    scripts/calibrate_missing_all_clear.py); detected once the silence passes that limit.
+  Level starts (yellow ↔ red) are level changes, not lost all-clears, so only the silence rule applies to them.
 """
 
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from airalert.alarm_signal import CONTINUE, END, ESCALATION, RETRACT, START, Location, Message
 
@@ -32,6 +41,8 @@ class Alert:
     restarts: int = 0
     implied: bool = False  # opened by an escalation with no air raid alert open
     retracted: bool = False  # posted by mistake: ended by a retraction, not an all-clear
+    last_message_at: datetime | None = None  # the latest message about the place while the alert was open
+    unknown: list = field(default_factory=list)  # (from, to, detected_at): stretches whose state is unknown
 
 
 @dataclass
@@ -44,19 +55,41 @@ def _raise_color(current: str | None, new: str | None) -> str | None:
     return "red" if "red" in (current, new) else new or current
 
 
-def build_alerts(messages: list[tuple[int, datetime, Message]]) -> AlertHistory:
-    """`messages` are (message_id, time, classified message) in channel order."""
+RESTART_GAP = timedelta(minutes=20)
+
+
+def _check_silence(alert: Alert, until: datetime, max_silence, stats: Counter) -> None:
+    """Mark the stretch from the alert's last message to `until` unknown if it is longer than the place's limit."""
+    limit = max_silence(alert.location) if max_silence else None
+    if limit is not None and until - alert.last_message_at > limit:
+        alert.unknown.append((alert.last_message_at, until, alert.last_message_at + limit))
+        stats["missing all-clear: long silence"] += 1
+
+
+def build_alerts(messages: list[tuple[int, datetime, Message]], max_silence=None, restart_gap=RESTART_GAP,
+                 data_end: datetime | None = None) -> AlertHistory:
+    """`messages` are (message_id, time, classified message) in channel order. `max_silence(location)` gives the
+    longest plausible stretch without news about an open alert (None: no limit); `data_end` is when the data ends."""
     history, open_alerts = AlertHistory(), {}
     for message_id, time, message in messages:
         for location in message.locations:
             current = open_alerts.get(location)
+            if current and message.kind != RETRACT:
+                silence_before = len(current.unknown)
+                _check_silence(current, time, max_silence, history.stats)
+                if (message.kind == START and message.color is None and len(current.unknown) == silence_before
+                        and time - current.last_message_at > restart_gap):
+                    current.unknown.append((current.last_message_at, time, time))
+                    history.stats["missing all-clear: restart"] += 1
+                if message.kind in (START, CONTINUE, ESCALATION):
+                    current.last_message_at = time
             if message.kind == START:
                 if current:
                     current.restarts += 1
                     current.max_color = _raise_color(current.max_color, message.color)
                     history.stats["restart while on alert"] += 1
                 else:
-                    open_alerts[location] = Alert(location, time, message_id, max_color=message.color)
+                    open_alerts[location] = Alert(location, time, message_id, max_color=message.color, last_message_at=time)
             elif message.kind == END:
                 if current:
                     current.finished_at, current.end_message_id = time, message_id
@@ -74,10 +107,13 @@ def build_alerts(messages: list[tuple[int, datetime, Message]]) -> AlertHistory:
                 if current:
                     history.stats["escalation during alert"] += 1
                 else:
-                    open_alerts[location] = Alert(location, time, message_id, implied=True)
+                    open_alerts[location] = Alert(location, time, message_id, implied=True, last_message_at=time)
                     history.stats["implied alert from escalation"] += 1
             elif message.kind == CONTINUE and not current:
                 history.stats["continuation with no open alert"] += 1
-    history.alerts.extend(open_alerts.values())  # still on alert when the data ends
+    for alert in open_alerts.values():  # still on alert when the data ends
+        if data_end is not None:
+            _check_silence(alert, data_end, max_silence, history.stats)
+        history.alerts.append(alert)
     history.alerts.sort(key=lambda a: (a.started_at, a.start_message_id))
     return history

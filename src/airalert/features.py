@@ -115,8 +115,10 @@ def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods
     """Hourly rows for t in [start, end) for every unit in `units` (calm ones included), whether or not it has periods.
 
     `periods` (columns unit_id, started_at, finished_at) are the alert periods as published, which features use;
-    `label_periods` the corrected truth, which labels use (default: the same). `corrections` are the retracted alerts
-    (finished_at = when the retraction was posted). For each horizon the grid also holds the label as published and
+    `label_periods` the corrected truth, which labels use (default: the same). `corrections` (labels.corrections)
+    are the retracted alerts and the unknown stretches after a missing all-clear, each with `corrected_at`, when it
+    became known (default: finished_at), and `unknown` (default False). A label is 1 if a label period touches its
+    hour, missing if an unknown stretch does, else 0. For each horizon the grid also holds the label as published and
     when a correction changed it (`published_label_h*`, `label_corrected_at_h*`), so that training at a cutoff can
     use the label as it was known then (ADR-0007). The unit list is fixed in advance (units.forecast_unit_ids()),
     so a unit's first alert never changes country, oblast or neighbour features before it.
@@ -137,14 +139,24 @@ def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods
         return np.where(complete, (np.diff(timeline.alert_seconds_before(edges)) > 0).astype(float), np.nan)
 
     def correction_times(group):
-        """Per grid hour: the latest posting time of a retraction whose alert overlapped that hour (-1: none)."""
+        """Per grid hour: when the latest correction touching that hour became known (-1: none)."""
         out = np.full(len(edges) - 1, -1, dtype=np.int64)
-        for s_, e_ in zip(_seconds(group.started_at), _seconds(group.finished_at)):
+        for s_, e_, c_ in zip(_seconds(group.started_at), _seconds(group.finished_at), _seconds(group.corrected_at)):
             hit = (edges[:-1] < e_) & (edges[1:] > s_)
-            out[hit] = np.maximum(out[hit], e_)
+            out[hit] = np.maximum(out[hit], c_)
         return out
 
-    corrections = periods.iloc[:0] if corrections is None else corrections
+    def unknown_hours(group):
+        hit = np.zeros(len(edges) - 1, dtype=bool)
+        for s_, e_ in zip(_seconds(group.started_at), _seconds(group.finished_at)):
+            hit |= (edges[:-1] < e_) & (edges[1:] > s_)
+        return hit
+
+    corrections = periods.iloc[:0].assign(corrected_at=periods.finished_at.iloc[:0], unknown=False) if corrections is None else corrections
+    if "corrected_at" not in corrections:
+        corrections = corrections.assign(corrected_at=corrections.finished_at)
+    if "unknown" not in corrections:
+        corrections = corrections.assign(unknown=False)
     by_unit = dict(tuple(periods.groupby("unit_id")))
     labels_by_unit = dict(tuple(label_periods.groupby("unit_id")))
     corrections_by_unit = dict(tuple(corrections.groupby("unit_id")))
@@ -155,8 +167,11 @@ def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods
         label_group = labels_by_unit.get(unit_id, empty)
         timeline = UnitTimeline(group.started_at, group.finished_at)
         label_timeline = timeline if label_periods is periods else UnitTimeline(label_group.started_at, label_group.finished_at)
-        block = _unit_block(timeline, t, hourly(timeline), hourly(label_timeline),
-                            correction_times(corrections_by_unit.get(unit_id, empty)), k0)
+        unit_corrections = corrections_by_unit.get(unit_id, corrections.iloc[:0])
+        label_active = hourly(label_timeline)
+        unknown = unknown_hours(unit_corrections[unit_corrections.unknown.astype(bool)])
+        label_active = np.where(unknown & (label_active != 1), np.nan, label_active)  # a confirmed alert still counts
+        block = _unit_block(timeline, t, hourly(timeline), label_active, correction_times(unit_corrections), k0)
         block["unit_id"] = unit_id
         block["t"] = pd.to_datetime(t, unit="s", utc=True)
         blocks.append(pd.DataFrame(block))

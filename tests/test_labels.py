@@ -82,3 +82,23 @@ def test_all_clear_in_a_later_section_closes_the_alert():
     sumy = alerts[alerts.unit_id == "Сумська область/Сумський район"]
     assert sumy.finished_at.tolist() == [pd.Timestamp(T("10:40"))] and stats["message with several sections"] == 1
     assert alerts[alerts.unit_id == "Сумська область/Шосткинський район"].started_at.tolist() == [pd.Timestamp(T("10:40"))]
+
+
+def test_unknown_stretch_is_cut_from_labels_but_not_from_feature_periods():
+    from airalert.labels import corrections, known_pieces, max_silence
+    msgs = messages((T("01:00"), RAION_START), (T("03:00"), RAION_START), (T("03:30"), RAION_END))  # all-clear lost before 03:00
+    alerts, stats, _ = unit_alerts_from_messages(msgs, classify, max_silence=max_silence)
+    assert stats["missing all-clear: restart"] == 1
+    assert merge_per_unit(alerts, pd.Timestamp(T("12:00"))).started_at.tolist() == [pd.Timestamp(T("01:00"))]  # one published alert
+    pieces = known_pieces(alerts)
+    assert list(zip(pieces.started_at, pieces.finished_at)) == [(pd.Timestamp(T("03:00")), pd.Timestamp(T("03:30")))]
+    [c] = corrections(alerts).itertuples()
+    assert (c.started_at, c.finished_at, c.corrected_at, c.unknown) == (
+        pd.Timestamp(T("01:00")), pd.Timestamp(T("03:00")), pd.Timestamp(T("03:00")), True)
+
+
+def test_silence_limits_come_from_the_calibration_table():
+    from airalert.alarm_signal import Location
+    from airalert.labels import max_silence
+    assert max_silence(Location("raion", "Сумський район", "Сумська область")) > max_silence(Location("raion", "Львівський район", "Львівська область"))
+    assert max_silence(Location("city", "Київ", None)) is not None

@@ -134,3 +134,34 @@ def test_near_permanent_counts_hours_with_any_alert():
     grid = build_grid(flicker, START, PERIOD[1], pd.Timestamp("2026-08-26", tz="UTC"), UNITS)
     assert grid[grid.unit_id == "B/c"].on_alert.max() == 0
     assert near_permanent_units(grid, *PERIOD) == {"B/c"}
+
+
+def test_lost_all_clear_hours_are_unknown_and_known_only_after_detection(monkeypatch):
+    """Published: on alert 2026-08-02 20:00 → 08-04 02:00. The all-clear was lost after 21:00; detected 08-03 09:00."""
+    data_end = pd.Timestamp("2026-08-26", tz="UTC")
+    published = pd.DataFrame({"unit_id": ["A/b"], "started_at": [pd.Timestamp("2026-08-02 20:00", tz="UTC")],
+                              "finished_at": [pd.Timestamp("2026-08-04 02:00", tz="UTC")]})
+    known = published.assign(finished_at=pd.Timestamp("2026-08-02 21:00", tz="UTC"))
+    unknown = pd.DataFrame({"unit_id": ["A/b"], "started_at": [pd.Timestamp("2026-08-02 21:00", tz="UTC")],
+                            "finished_at": [pd.Timestamp("2026-08-04 02:00", tz="UTC")],
+                            "corrected_at": [pd.Timestamp("2026-08-03 09:00", tz="UTC")], "unknown": [True]})
+    periods = pd.concat([synthetic_periods(), published], ignore_index=True)
+    grid = build_grid(periods, START, PERIOD[1], data_end, UNITS, pd.concat([synthetic_periods(), known]), unknown).set_index(["unit_id", "t"])
+    assert grid.loc[("A/b", pd.Timestamp("2026-08-02 20:00", tz="UTC")), "label_h1"] == 1  # confirmed alert in that hour
+    assert np.isnan(grid.loc[("A/b", pd.Timestamp("2026-08-02 23:00", tz="UTC")), "label_h1"])
+    assert grid.loc[("A/b", pd.Timestamp("2026-08-02 23:00", tz="UTC")), "published_label_h1"] == 1
+
+    fits = []
+
+    class Spy(MODELS["historical_rate"]):
+        def fit(self, frame, y):
+            fits.append(dict(zip(frame.t[frame.unit_id == "A/b"], np.asarray(y)[(frame.unit_id == "A/b").to_numpy()])))
+            return super().fit(frame, y)
+
+    monkeypatch.setitem(MODELS, "spy", Spy)
+    lost = pd.Timestamp("2026-08-02 23:00", tz="UTC")
+    run(grid.reset_index(), (pd.Timestamp("2026-08-03 03:00", tz="UTC"), pd.Timestamp("2026-08-03 04:00", tz="UTC")), ["spy"], horizons=(1,), train_start=START)
+    run(grid.reset_index(), (pd.Timestamp("2026-08-03 12:00", tz="UTC"), pd.Timestamp("2026-08-03 13:00", tz="UTC")), ["spy"], horizons=(1,), train_start=START)
+    before, after = fits
+    assert before[lost] == 1  # at 03:00 the alert was still believed on
+    assert lost not in after  # by 12:00 the lost all-clear was known: the hour is not trained on

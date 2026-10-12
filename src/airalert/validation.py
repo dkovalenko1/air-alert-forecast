@@ -5,6 +5,8 @@ has the same kind of event for the same unit within 5 minutes. Both directions a
 month, against the pass mark fixed in advance (Q20): at least 98% each way, every month. Every month × kind ×
 direction of the requested window gets a row; one with no events is marked as missing coverage and fails.
 Matching looks at the other source's events beyond the window too, so an event near the edge is not lost.
+Outages of the reference (no message at all for over 24 h; normal quiet spells last at most about 12 h) are left
+out on both sides: the official channel was silent from 2026-08-29 07:55 to 2026-09-02 16:48 Kyiv time.
 
 - Q20: `@UkraineAlarmSignal` vs the official channel `@air_alert_ua`, 2023-01 to 2026-08.
 - Q2: `@UkraineAlarmSignal` vs alerts.in.ua over the test period (the official channel is silent there).
@@ -22,6 +24,14 @@ from airalert.units import UnknownPlace, resolve, units
 
 PASS_MARK = 0.98
 TOLERANCE = pd.Timedelta(minutes=5)
+OUTAGE = pd.Timedelta(hours=24)
+
+
+def outages(message_times, min_silence=OUTAGE) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """Windows in which a channel posted nothing for longer than `min_silence`: (last message, next message)."""
+    times = pd.DatetimeIndex(sorted(pd.to_datetime(list(message_times), utc=True)))
+    gaps = times[1:] - times[:-1]
+    return [(a, b) for a, b, gap in zip(times[:-1], times[1:], gaps) if gap > min_silence]
 
 
 def events(alerts: pd.DataFrame) -> pd.DataFrame:
@@ -57,12 +67,19 @@ def _kyiv(x) -> pd.Timestamp:
     return x.tz_localize("Europe/Kyiv") if x.tzinfo is None else x.tz_convert("Europe/Kyiv")
 
 
-def monthly_report(labels: pd.DataFrame, reference: pd.DataFrame, start, end) -> pd.DataFrame:
+def monthly_report(labels: pd.DataFrame, reference: pd.DataFrame, start, end, exclude=()) -> pd.DataFrame:
     """Per Kyiv month and event kind: share of reference events found in the labels, and the other way round.
-    Months of [start, end) with no events of a kind get a row with `events` 0, `found` NaN and `passes` False."""
+    Months of [start, end) with no events of a kind get a row with `events` 0, `found` NaN and `passes` False.
+    Events within `exclude` windows (reference outages), widened by the tolerance, are left out on both sides."""
     start, end = _kyiv(start), _kyiv(end)
     all_ours, all_theirs = events(labels), events(reference)
-    window = lambda ev: ev[(ev.time >= start) & (ev.time < end)].reset_index(drop=True)  # noqa: E731
+
+    def window(ev):
+        keep = (ev.time >= start) & (ev.time < end)
+        for a, b in exclude:
+            keep &= ~((ev.time >= a - TOLERANCE) & (ev.time <= b + TOLERANCE))
+        return ev[keep].reset_index(drop=True)
+
     ours, theirs = window(all_ours), window(all_theirs)
     theirs["found"] = found_share(theirs, all_ours).to_numpy()  # matched against everything, not just the window
     ours["found"] = found_share(ours, all_theirs).to_numpy()
@@ -131,7 +148,12 @@ def main() -> None:
     labels = pd.read_parquet(INTERIM_DIR / "UkraineAlarmSignal_alerts.parquet")
     official_path = INTERIM_DIR / "air_alert_ua_alerts.parquet"
     if official_path.exists():
-        report = monthly_report(labels, pd.read_parquet(official_path), "2023-01-01", "2026-09-01")
+        from airalert.labels import read_channel
+
+        gaps = outages(m["date"] for m in read_channel("air_alert_ua"))
+        for a, b in gaps:
+            print(f"Official channel outage left out: {a.tz_convert('Europe/Kyiv'):%Y-%m-%d %H:%M} → {b.tz_convert('Europe/Kyiv'):%Y-%m-%d %H:%M} Kyiv time")
+        report = monthly_report(labels, pd.read_parquet(official_path), "2023-01-01", "2026-09-01", exclude=gaps)
         report.to_csv(out / "official_by_month.csv", index=False)
         failing = report[~report.passes]
         print(f"Q20: {len(report)} month × kind × direction rows, {len(failing)} below the {PASS_MARK:.0%} pass mark")

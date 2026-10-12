@@ -36,9 +36,9 @@ def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
 
 
 def label_known_at(frame: pd.DataFrame, cutoff: pd.Timestamp) -> np.ndarray:
-    """Labels as known at `cutoff`: corrections posted after it are not applied yet."""
+    """Labels as known at `cutoff`: corrections that became known after it are not applied yet. NaN: unknown."""
     later = frame.label_corrected_at.notna() & (frame.label_corrected_at > cutoff)
-    return np.where(later, frame.published_label, frame.label).astype(int)
+    return np.where(later, frame.published_label, frame.label).astype(float)
 
 
 def weeks(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
@@ -58,10 +58,11 @@ def run(grid: pd.DataFrame, period: str, model_names, horizons=HORIZONS, train_s
     for week_start, week_end in week_list:
         for h in horizons:
             frame = horizon_frame(grid, h)
-            train = frame[(frame.t >= train_start) & (frame.t + h * HOUR <= week_start) & frame.label.notna()]
+            candidates = frame[(frame.t >= train_start) & (frame.t + h * HOUR <= week_start)]
+            known = label_known_at(candidates, week_start)
+            train, y_train = candidates[~np.isnan(known)], known[~np.isnan(known)].astype(int)
             test = frame[(frame.t >= week_start) & (frame.t < week_end) & (frame.t + h * HOUR <= end) & frame.label.notna()]
             assert (train.t + h * HOUR <= week_start).all()  # the label cutoff
-            y_train = label_known_at(train, week_start)
             for name in model_names:
                 model = MODELS[name]().fit(train, y_train)
                 results.append(pd.DataFrame({
