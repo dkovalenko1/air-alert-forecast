@@ -175,7 +175,7 @@ def levels_by_day(alerts: pd.DataFrame) -> None:
 
 
 MODELS = {  # name in the test report: (label, colour), baselines first
-    "persistence": ("Persistence", NEUTRAL), "historical_rate": ("Historical rate", YELLOW),
+    "persistence": ("Persistence", NEUTRAL), "historical_rate": ("Historical rate", YELLOW), "recent_rate": ("Recent rate", RED),
     "logistic": ("Logistic regression", LIGHT_BLUE), "lightgbm": ("LightGBM", BLUE),
 }
 TEST_NOTE = "Test period 2026-09-14 to 2026-10-11 (Kyiv time), weekly retraining, all raions."
@@ -239,8 +239,8 @@ def calibration(predictions: pd.DataFrame) -> None:
 
 
 def example_forecast(predictions: pd.DataFrame, unit: str = "м. Київ", start="2026-10-04", end="2026-10-08") -> None:
-    """One unit over a few days: the hours with an alert, and LightGBM's forecasts for each hour made 1 and 6 hours
-    before it starts."""
+    """One unit over a few days: the hours with an alert, and LightGBM's forecasts for each hour made at its start
+    (h = 1) and 5 hours before it (h = 6)."""
     start, end = pd.Timestamp(start, tz=KYIV), pd.Timestamp(end, tz=KYIV)
     part = predictions[(predictions.model == "lightgbm") & (predictions.unit_id == unit)].copy()
     part["target"] = part.t + (part.horizon - 1) * HOUR  # start of the forecast hour
@@ -249,7 +249,7 @@ def example_forecast(predictions: pd.DataFrame, unit: str = "м. Київ", star
     truth = part[part.horizon == 1]
     for target in truth.loc[truth.y == 1, "target"]:
         ax.axvspan(target.tz_convert(KYIV), (target + HOUR).tz_convert(KYIV), color="#e8e7e3", linewidth=0)
-    for h, color, label in ((6, LIGHT_BLUE, "forecast made 6 h before the hour"), (1, BLUE, "forecast made 1 h before the hour")):
+    for h, color, label in ((6, LIGHT_BLUE, "made 5 h before the hour starts (h = 6)"), (1, BLUE, "made as the hour starts (h = 1)")):
         line = part[part.horizon == h].sort_values("target")
         ax.step(line.target.dt.tz_convert(KYIV), line.p, where="post", color=color, linewidth=1.6, label=label)
     ax.set_ylim(0, 1.05)

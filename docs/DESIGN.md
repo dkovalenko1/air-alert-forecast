@@ -172,7 +172,7 @@ Decision log (smaller choices that are easy to reverse):
 
 Known facts that shape the design:
 - **`@air_alert_ua` is silent:** the channel has posted nothing since 2026-09-07 06:09 UTC, and no reason has been published.
-- **Raion gap:** no raion-level source covers 2026-09-07 to about 2026-09-12.
+- **Raion gap:** no raion-level source in this table covers 2026-09-07 to about 2026-09-12 (the label channel `@UkraineAlarmSignal`, adopted later by ADR-0006, does).
 - **Sources disagree:** official and volunteer data agree on only 80.6% of oblast-hours (June–September 2026). In Volyn, official data has 81 alerts and 41 h under alert; volunteer data has 355 alerts and 405 h.
 - **Frontline oblasts:** if "oblast on alert" means "any raion on alert", frontline oblasts are on alert in about 100% of hours (Dnipropetrovsk 100%, Donetsk 99.8%, Kharkiv 99.4%; June–September 2026). These figures still include the non-air-raid hromada records described below.
 - **Permanent alerts:** Luhansk (since 2022-04-04) and Crimea (since 2022-12-10) are not in the datasets. The official data has only 2 Luhansk records, both from 2022.

@@ -6,6 +6,9 @@ status: accepted
 
 The code accepts any forecast spec: target × unit level × step × horizons. Only the **main spec** gets the full analysis: baselines, ablations, calibration, error analysis and write-up. A secondary spec answers one specific question: raion × 1 day × Minutes, for day-ahead planning. The oblast spec was dropped on 2026-10-12. Any other spec appears only in an automatically generated summary table.
 
+**Update 2026-10-13:** only the main spec (raion × 1 h × Active) was built. The code is organised by spec, but the
+secondary spec and the summary table of other specs were not implemented.
+
 Analysing every combination in depth is not worth it, for three reasons:
 - Checking and explaining results is the real cost: thousands of numbers across 24 specs × 24 horizons × several metrics.
 - Compute: each spec is a full backtest.

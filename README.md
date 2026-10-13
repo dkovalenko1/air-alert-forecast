@@ -169,8 +169,9 @@ Nothing a forecast for time t uses, and nothing its model is trained on, comes f
 - **The unit list is fixed in advance,** so a raion's first alert never changes country or neighbour features before it.
 - **Edited messages.** Telegram returns only a message's latest text, dated at its original posting time. In the
   label channel every message has been edited, mostly in two channel-wide re-edits (2024-01-30 and 2025-06-27)
-  and, since July 2025, automatically about 20 seconds after posting. Sampled late edits keep the channel's fixed
-  wording, so edits are treated as not changing an alert's kind or place. This is an evidence-backed assumption;
+  and, since July 2025, once more after posting: half within 29 seconds, but 13% more than 5 minutes later and
+  2.7% more than an hour later. Sampled late edits keep the channel's fixed wording, so edits are treated as not
+  changing an alert's kind or place. This is an evidence-backed assumption;
   the month-by-month comparison with the independent official channel (below) is an approximate cross-check.
   Telegram threat posts follow a stricter rule: a post counts only from its last edit, so a post edited at or
   after t is not used at t (ADR-0007).

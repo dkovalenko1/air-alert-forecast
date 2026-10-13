@@ -32,8 +32,8 @@ posted, not at the earlier time it names, which was not known before the message
 **Edited messages.** Telegram returns only a message's latest text, dated at its original posting time, and keeps no
 edit history. In the label channel every message has been edited at least once:
 - two channel-wide re-edits, on 2024-01-30 (about 40,000 messages) and 2025-06-27 (about 187,000);
-- since July 2025, an automatic edit about 20 seconds after posting (median), with about 6% edited more than 5
-  minutes later;
+- since July 2025, another edit after posting: half within 29 seconds, but 13% more than 5 minutes later and 2.7%
+  more than an hour later (July 2025 – October 2026);
 - sampled late edits still carry the channel's fixed wording, the same as unedited messages (e.g. a start
   message edited 65 minutes later still reads "🚨 … район (… обл.) Повітряна тривога. Прямуйте в укриття!").
 
