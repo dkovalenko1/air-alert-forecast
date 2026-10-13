@@ -46,3 +46,14 @@ def test_per_unit_trains_one_model_per_unit_and_handles_one_class_units():
     assert (p[(data.unit_id == "B/b").to_numpy()] == 0).all()
     unseen = data[data.unit_id == "A/a"].assign(unit_id=pd.Categorical(["C/c"] * (data.unit_id == "A/a").sum()))
     np.testing.assert_allclose(model.predict(unseen), y.mean())
+
+
+def test_telegram_option_adds_exactly_the_telegram_columns():
+    from airalert.telegram_features import TELEGRAM_FEATURES
+
+    data, y = frame()
+    data = data.assign(**{c: np.random.default_rng(1).random(len(data)) for c in TELEGRAM_FEATURES})
+    with_tg, without = LightGBM(telegram=True, n_estimators=10), LightGBM(n_estimators=10)
+    assert set(with_tg.columns) - set(without.columns) == set(TELEGRAM_FEATURES)
+    assert len(with_tg.fit(data, y).predict(data)) == len(data)
+    assert len(Logistic(telegram=True).fit(data, y).predict(data)) == len(data)

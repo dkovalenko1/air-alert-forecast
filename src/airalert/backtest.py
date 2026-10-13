@@ -16,6 +16,7 @@ from sklearn.metrics import average_precision_score, brier_score_loss, log_loss,
 
 from airalert.features import HORIZONS, HOUR, KYIV
 from airalert.models import MODELS, feature_columns
+from airalert.telegram_features import TELEGRAM_FEATURES
 
 # Pinned dates (Q4, Q9), Kyiv time.
 TRAIN_START = pd.Timestamp("2025-08-01", tz=KYIV)
@@ -32,7 +33,8 @@ def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
         f"target_active_day_ago_h{h}": "target_active_day_ago", f"target_active_week_ago_h{h}": "target_active_week_ago",
         f"label_h{h}": "label", f"published_label_h{h}": "published_label", f"label_corrected_at_h{h}": "label_corrected_at",
     })
-    return renamed[["t", "label", "published_label", "label_corrected_at", *feature_columns()]]
+    telegram = [c for c in TELEGRAM_FEATURES if c in grid.columns]
+    return renamed[["t", "label", "published_label", "label_corrected_at", *feature_columns(), *telegram]]
 
 
 def label_known_at(frame: pd.DataFrame, cutoff: pd.Timestamp) -> np.ndarray:
@@ -110,8 +112,9 @@ def score(predictions: pd.DataFrame, exclude_units=frozenset()) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def load_grid(period: str, train_start=TRAIN_START, channel: str = "UkraineAlarmSignal") -> pd.DataFrame:
-    """The hourly grid from the training start up to the end of `period`, built from the label tables."""
+def load_grid(period: str, train_start=TRAIN_START, channel: str = "UkraineAlarmSignal", telegram: bool = False) -> pd.DataFrame:
+    """The hourly grid from the training start up to the end of `period`, built from the label tables, with the
+    Telegram threat-post features (threats.build) if `telegram`."""
     from airalert.features import build_grid
     from airalert.labels import INTERIM_DIR
     from airalert.units import forecast_unit_ids
@@ -123,7 +126,13 @@ def load_grid(period: str, train_start=TRAIN_START, channel: str = "UkraineAlarm
     end = PERIODS[period][1]
     if data_end < end + 24 * HOUR:
         print(f"Warning: data ends {data_end:%Y-%m-%d %H:%M} UTC, before the {period} period's last labels.")
-    return build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods, corrections)
+    grid = build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods, corrections)
+    if telegram:
+        from airalert.telegram_features import add_telegram_features
+        from airalert.threats import EVENTS
+
+        grid = add_telegram_features(grid, pd.read_parquet(EVENTS))
+    return grid
 
 
 def main(period: str, model_names, horizons=HORIZONS, train_start=TRAIN_START) -> None:
