@@ -1,0 +1,6 @@
+{
+  "e1_training_start": {
+    "logistic": "2025-11-01",
+    "lightgbm": "2025-11-01"
+  }
+}
