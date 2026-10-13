@@ -1,18 +1,23 @@
 """Threat posts from `@kpszsu` (Air Force) and `@deraketaua` (volunteer monitoring) as dated events (Q12).
 
-Each post gets a set of threat types, read from its words first and, for the Air Force channel, from its leading
-emoji as a fallback (the channel uses 🚀 for guided bombs too, so words win):
+Each line of a post is read on its own, because one post often lists several threats and places, and an
+all-clear for one region next to threats for others ("⚠️3 шахеди на Харківщині … 📡Одещина – чисто"). A line gets
+a set of threat types, read from its words first and, for the Air Force channel, from its leading emoji as a
+fallback (the channel uses 🚀 for guided bombs too, so words win):
 
     drones, jet_drones, recon, missiles, ballistic, guided_bombs, aviation, intercept, clear
 
-`clear` ("відбій", "чисто", "немає", "не спостерігається") replaces the other types: such a post says a threat is
-over. Places come from places.find_places. A post becomes one row per (type, unit it names) with scope "local"
-(a city, settlement or raion) or "oblast" (a whole oblast or region), plus one "national" row per type that every
+`clear` replaces the other types of its line: the line says a threat is over. "Відбій" and "чисто" always mean
+that; "немає", "не спостерігається" and "відсутні" only on a short line, since longer lines with them are
+explanations or news ("в мене немає десятки адмінів"). Lines with a Telegram handle or link are channel signatures
+or adverts ("🍑 @deraketaua | Полтава | Київ") and are skipped: they name places that are not threatened. Places
+come from places.find_places. A line becomes one row per (type, unit it names) with scope "local" (a city,
+settlement or raion) or "oblast" (a whole oblast or region), plus one "national" row per type and post that every
 unit can see. Rule-based, no language model (Q12).
 
 Availability: a post counts from its edit time if it was edited, else from its publication time (Q12). Both feature
 channels edit almost every post within seconds, so this costs little, and a post edited much later is never used
-in a form it did not yet have.
+in a form it did not yet have. Post ids are unique only within a channel: (channel, post_id) identifies a post.
 """
 
 import json
@@ -25,7 +30,10 @@ from airalert.settings import RAW_DIR, ROOT
 
 CHANNELS = ("kpszsu", "deraketaua")
 TYPES = ("drones", "jet_drones", "recon", "missiles", "ballistic", "guided_bombs", "aviation", "intercept", "clear")
-CLEAR = re.compile(r"відбій|чисто|не спостеріга|немає|відсутн")
+CLEAR = re.compile(r"відбій|чисто")
+WEAK_CLEAR = re.compile(r"не спостеріга|немає|відсутн")  # an all-clear only on a short line
+WEAK_CLEAR_MAX_CHARS = 150
+SIGNATURE = re.compile(r"@\w|t\.me/")
 WORDS = [  # (pattern on the lowercased text, type)
     (r"реактивн", "jet_drones"),
     (r"розвідувальн", "recon"),
@@ -41,11 +49,17 @@ EMOJI = {"🛵": "drones", "🏍": "jet_drones", "🛸": "recon", "☄": "ballis
 EVENTS = ROOT / "data" / "interim" / "telegram_events.parquet"
 
 
+def lines_of(text: str | None) -> list[str]:
+    """The non-empty lines of a post, without signature and link lines."""
+    return [line.strip() for line in (text or "").splitlines() if line.strip() and not SIGNATURE.search(line)]
+
+
 def threat_types(text: str | None, channel: str = "kpszsu") -> frozenset[str]:
-    lowered = (text or "").lower()
-    if not lowered.strip():
+    """Threat types of one line."""
+    lowered = (text or "").lower().strip()
+    if not lowered:
         return frozenset()
-    if CLEAR.search(lowered):
+    if CLEAR.search(lowered) or (WEAK_CLEAR.search(lowered) and len(lowered) <= WEAK_CLEAR_MAX_CHARS):
         return frozenset({"clear"})
     found = {kind for pattern, kind in WORDS if re.search(pattern, lowered)}
     if found & {"jet_drones", "recon"}:
@@ -64,29 +78,30 @@ FOLLOW_UP = pd.Timedelta(minutes=30)
 def events_from_posts(posts: list[dict], channel: str) -> pd.DataFrame:
     """Rows: post_id, channel, available_at, type, scope (local / oblast / national), unit_id (None if national).
 
-    A follow-up post that names a place but no threat ("Курсом на Чорноморськ.") takes the threat types of the
-    channel's previous typed post, if that one is at most 30 minutes older. It only looks back, so it cannot leak.
+    A line that names a place but no threat ("Курсом на Чорноморськ.", "3 на Богодухів з півночі") takes the threat
+    types of the last line that had some, in the same post or in the channel's previous posts up to 30 minutes
+    older, unless that line was an all-clear. It only looks back, and it counts from when both its own post and the
+    one it borrows from were available, since the borrowed types come from that post's latest text.
     """
-    rows, last_types, last_time = [], frozenset(), None
+    rows, last = [], None  # last typed line: (types, posted, available_at)
     for post in sorted(posts, key=lambda p: p["id"]):
-        types = threat_types(post.get("text"), channel)
         posted = pd.Timestamp(post["date"])
-        mentions = find_places(post["text"]) if post.get("text") else []
-        if types:
-            last_types, last_time = types, posted
-        elif mentions and last_time is not None and posted - last_time <= FOLLOW_UP and "clear" not in last_types:
-            types = last_types
-        if not types:
-            continue
         available_at = pd.Timestamp(post.get("edit_date") or post["date"])
-        for kind in types:
-            rows.append((post["id"], channel, available_at, kind, "national", None))
-            for mention in mentions:
-                scope = "oblast" if mention.kind == "oblast" else "local"
-                rows.extend((post["id"], channel, available_at, kind, scope, unit_id) for unit_id in mention.unit_ids)
+        for line in lines_of(post.get("text")):
+            types, seen = threat_types(line, channel), available_at
+            mentions = find_places(line)
+            if types:
+                last = (types, posted, available_at)
+            elif mentions and last is not None and posted - last[1] <= FOLLOW_UP and "clear" not in last[0]:
+                types, seen = last[0], max(available_at, last[2])
+            for kind in types:
+                rows.append((post["id"], channel, seen, kind, "national", None))
+                for mention in mentions:
+                    scope = "oblast" if mention.kind == "oblast" else "local"
+                    rows.extend((post["id"], channel, seen, kind, scope, unit_id) for unit_id in mention.unit_ids)
     frame = pd.DataFrame(rows, columns=["post_id", "channel", "available_at", "type", "scope", "unit_id"])
     frame["available_at"] = pd.to_datetime(frame["available_at"], utc=True)
-    return frame.drop_duplicates(["post_id", "type", "scope", "unit_id"])
+    return frame.sort_values("available_at", kind="stable").drop_duplicates(["post_id", "type", "scope", "unit_id"])
 
 
 def build(since: str = "2025-01-01") -> None:

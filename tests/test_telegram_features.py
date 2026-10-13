@@ -19,8 +19,8 @@ def grid():
     return build_grid(no_alerts, START, END, DATA_END, UNITS)
 
 
-def event(post_id, minute_offset, kind, scope, unit=None, base="2026-08-02 10:00"):
-    return {"post_id": post_id, "channel": "kpszsu", "available_at": pd.Timestamp(base, tz="UTC") + pd.Timedelta(minutes=minute_offset),
+def event(post_id, minute_offset, kind, scope, unit=None, base="2026-08-02 10:00", channel="kpszsu"):
+    return {"post_id": post_id, "channel": channel, "available_at": pd.Timestamp(base, tz="UTC") + pd.Timedelta(minutes=minute_offset),
             "type": kind, "scope": scope, "unit_id": unit}
 
 
@@ -28,12 +28,13 @@ def random_events(seed, n=400):
     rng = np.random.default_rng(seed)
     kinds = ["drones", "jet_drones", "missiles", "ballistic", "guided_bombs", "aviation", "intercept", "clear"]
     rows = []
-    for i in range(n):
+    for i in range(n):  # both channels reuse the same post ids, as the real ones do
         minute = int(rng.integers(-60 * 30, 60 * 60))
-        kind = kinds[rng.integers(len(kinds))]
-        rows.append(event(i, minute, kind, "national"))
+        kind, channel = kinds[rng.integers(len(kinds))], ["kpszsu", "deraketaua"][rng.integers(2)]
+        post_id = int(rng.integers(n // 2))
+        rows.append(event(post_id, minute, kind, "national", channel=channel))
         unit = UNITS[rng.integers(len(UNITS))]
-        rows.append(event(i, minute, kind, ["local", "oblast"][rng.integers(2)], unit))
+        rows.append(event(post_id, minute, kind, ["local", "oblast"][rng.integers(2)], unit, channel=channel))
     return pd.DataFrame(rows)
 
 
@@ -87,3 +88,19 @@ def test_a_post_edited_after_t_is_not_seen_before_its_edit():
     frame = add_telegram_features(grid(), events)
     assert at(frame, KYIV, "2026-08-02 10:00").tg_local_drones_60m == 0
     assert at(frame, KYIV, "2026-08-02 11:00").tg_local_drones_60m == 1
+
+
+def test_the_same_post_id_in_two_channels_is_two_posts():
+    events = pd.DataFrame([event(7, -30, "drones", "national"), event(7, -20, "drones", "national", channel="deraketaua"),
+                           event(7, -30, "drones", "local", KYIV), event(7, -20, "drones", "local", KYIV, channel="deraketaua")])
+    row = at(add_telegram_features(grid(), events), KYIV, "2026-08-02 10:00")
+    assert row.tg_national_drones_60m == 2 and row.tg_local_drones_60m == 2 and row.tg_local_threat_60m == 2
+
+
+def test_a_unit_we_do_not_forecast_changes_no_feature():
+    """Luhansk raions are not forecast; their posts must not land in another unit's column."""
+    base = pd.DataFrame([event(1, -50, "drones", "local", BORYSPIL)])
+    extra = pd.concat([base, pd.DataFrame([event(2, -5, "drones", "local", "Луганська область/Сватівський район")])])
+    a, b = add_telegram_features(grid(), base), add_telegram_features(grid(), extra)
+    local = [c for c in ALL_TELEGRAM_FEATURES if not c.startswith("tg_national")]
+    pd.testing.assert_frame_equal(a[local], b[local])

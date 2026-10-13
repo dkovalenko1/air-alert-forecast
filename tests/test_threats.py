@@ -62,3 +62,39 @@ def test_follow_up_post_inherits_the_previous_type_within_30_minutes():
     events = events_from_posts(posts, "kpszsu")
     assert set(events[events.post_id == 2].type) == {"jet_drones"}
     assert not {3, 5} & set(events.post_id)
+
+
+def post(i, text, date, edited=None):
+    return {"id": i, "date": date, "edit_date": edited, "text": text}
+
+
+def test_signature_lines_name_no_places():
+    events = events_from_posts([post(1, "📡Київщина – по шахедах чисто\n\n🍑 @deraketaua | Полтава | Київ",
+                                     "2026-08-01T10:00:00+00:00")], "deraketaua")
+    units = set(events.unit_id.dropna())
+    assert units and all(u.startswith("Київська область/") for u in units)  # not Kyiv city, not Poltava
+
+
+def test_each_line_keeps_its_own_threat_and_places():
+    """A status list: drones for Kharkiv oblast (the second line inherits them), all-clear for Odesa oblast only."""
+    events = events_from_posts([post(1, "⚠️3 шахеди на Харківщині:\n3 на Богодухів з півночі\n\n📡Одещина – чисто",
+                                     "2026-08-01T10:00:00+00:00")], "deraketaua")
+    local = events[events.scope != "national"]
+    assert set(local[local.type == "drones"].unit_id.str.split("/").str[0]) == {"Харківська область"}
+    assert "Харківська область/Богодухівський район" in set(local[(local.type == "drones") & (local.scope == "local")].unit_id)
+    assert set(local[local.type == "clear"].unit_id.str.split("/").str[0]) == {"Одеська область"}
+    assert set(events[events.scope == "national"].type) == {"drones", "clear"}
+
+
+def test_weak_all_clear_words_count_only_on_short_lines():
+    assert threat_types("🟩 Станом на зараз активності стратегічної авіації немає", "deraketaua") == {"clear"}
+    long_line = ("❤️Друзі, канал веду сам, в мене немає десятки адмінів, і саме завдяки вам канал існує та працює майже "
+                 "24/7, я намагаюсь давати оперативну інформацію про шахеди без затримок")
+    assert threat_types(long_line, "deraketaua") == {"drones"}
+
+
+def test_a_follow_up_counts_from_when_the_post_it_borrows_from_was_last_edited():
+    posts = [post(1, "🏍 Реактивний БпЛА на Полтавщині.", "2026-08-01T10:00:00+00:00", "2026-08-01T10:20:00+00:00"),
+             post(2, "Курсом на Павлоград.", "2026-08-01T10:05:00+00:00", "2026-08-01T10:05:05+00:00")]
+    events = events_from_posts(posts, "kpszsu")
+    assert (events[events.post_id == 2].available_at == pd.Timestamp("2026-08-01T10:20:00Z")).all()

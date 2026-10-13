@@ -50,11 +50,15 @@ ALL_TELEGRAM_FEATURES = TELEGRAM_FEATURES + [c for c in TARGETED_FEATURES if c n
 TELEGRAM_SETS = {"all": TELEGRAM_FEATURES, "targeted": TARGETED_FEATURES}
 
 
+POST = ["channel", "post_id"]  # post ids are unique only within a channel
+
+
 def _grouped(events: pd.DataFrame) -> pd.DataFrame:
-    """One row per (post, group, scope, unit): a post counts once per group."""
+    """One row per (post, group, scope, unit), at the earliest time any of it was available: a post counts once
+    per group."""
     group_of = {kind: group for group, kinds in GROUPS.items() for kind in kinds}
-    out = events.assign(group=events["type"].map(group_of)).dropna(subset=["group"])
-    return out.drop_duplicates(["post_id", "group", "scope", "unit_id"])
+    out = events.assign(group=events["type"].map(group_of)).dropna(subset=["group"]).sort_values("available_at", kind="stable")
+    return out.drop_duplicates([*POST, "group", "scope", "unit_id"])
 
 
 def _counts(times: np.ndarray, t: np.ndarray, window_s: int) -> np.ndarray:
@@ -87,7 +91,7 @@ def add_telegram_features(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFr
             for w in WINDOWS_MIN:
                 columns[f"tg_{scope}_{group}_{w}m"] = per_unit(selected, w * 60)[t_idx, u_idx]
 
-    threats = events[events.group != "clear"].drop_duplicates(["post_id", "scope", "unit_id"])  # once per post
+    threats = events[events.group != "clear"].drop_duplicates([*POST, "scope", "unit_id"])  # once per post
     local_threats = threats[threats.scope == "local"]
     for scope in ("local", "oblast"):
         columns[f"tg_{scope}_threat_60m"] = per_unit(threats[threats.scope == scope], 3600)[t_idx, u_idx]
@@ -105,12 +109,14 @@ def add_telegram_features(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFr
     for group, w in NATIONAL_LONG.items():
         times = np.sort(_seconds(national.loc[national.group == group, "available_at"]))
         columns[f"tg_national_{group}_{w}m"] = _counts(times, t, w * 60).astype(np.float32)[t_idx]
-    threat_posts = np.sort(_seconds(national[national.group != "clear"].drop_duplicates("post_id")["available_at"]))
+    threat_posts = np.sort(_seconds(national[national.group != "clear"].drop_duplicates(POST)["available_at"]))
     columns["tg_national_threat_15m"] = _counts(threat_posts, t, 900).astype(np.float32)[t_idx]
 
     since = np.full((len(t), len(units)), CAP_MINUTES, dtype=np.float32)
     for unit, part in local_threats.groupby("unit_id"):
         j = units.get_indexer([unit])[0]
+        if j < 0:  # a unit we do not forecast (e.g. occupied Luhansk raions)
+            continue
         times = np.sort(_seconds(part["available_at"]))
         last = np.searchsorted(times, t, side="left") - 1  # the last post strictly before t
         since[:, j] = np.where(last >= 0, np.minimum((t - times[np.maximum(last, 0)]) / 60, CAP_MINUTES), CAP_MINUTES)
@@ -119,11 +125,10 @@ def add_telegram_features(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFr
 
 
 def reference_counts(events: pd.DataFrame, unit_id: str, t: pd.Timestamp, scope: str, group: str, window_min: int) -> int:
-    """One count, computed naively from the events available before t. `group="threat"`: any group but clear;
-    `scope="national"` ignores the unit."""
-    e = _grouped(events)
-    in_group = e.group != "clear" if group == "threat" else e.group == group
-    at_unit = True if scope == "national" else e.unit_id == unit_id
-    known = e[(e.scope == scope) & in_group & at_unit
-              & (e.available_at < t) & (e.available_at >= t - pd.Timedelta(minutes=window_min))]
-    return int(known.post_id.nunique())
+    """One count, computed naively from the events available before t. `group="threat"`: any group but clear, each
+    post from the first time it showed one; `scope="national"` ignores the unit."""
+    e = _grouped(events)  # sorted by availability
+    e = e[(e.scope == scope) & (True if scope == "national" else e.unit_id == unit_id)]
+    e = e[e.group != "clear"].drop_duplicates(POST) if group == "threat" else e[e.group == group]
+    known = e[(e.available_at < t) & (e.available_at >= t - pd.Timedelta(minutes=window_min))]
+    return len(known[POST].drop_duplicates())
