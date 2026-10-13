@@ -23,9 +23,25 @@ def frame(n_days=40, seed=0):
     return out, out.pop("y").to_numpy()
 
 
-def test_early_stopping_chooses_trees_on_training_rows_only():
+def test_early_stopping_chooses_the_number_of_trees_on_the_last_training_days_only(monkeypatch):
+    """The probe model is fitted on the earlier rows and stopped on the last 7 days of the training rows; the final
+    model is then fitted on all of them with that number of trees. Nothing outside the training rows is involved."""
+    import lightgbm as lgb
+
     data, y = frame()
+    fits = []
+    original = lgb.LGBMClassifier.fit
+
+    def spy(self, X, target, *args, **kwargs):
+        fits.append((X.index, kwargs.get("eval_X").index if kwargs.get("eval_X") is not None else None))
+        return original(self, X, target, *args, **kwargs)
+
+    monkeypatch.setattr(lgb.LGBMClassifier, "fit", spy)
     model = LightGBM(early_stopping_days=7, n_estimators=2000, learning_rate=0.1).fit(data, y)
+    (probe_rows, holdout_rows), (final_rows, no_holdout) = fits
+    last_week = data.index[data.t > data.t.max() - pd.Timedelta(days=7)]
+    assert holdout_rows.equals(last_week) and probe_rows.intersection(holdout_rows).empty
+    assert len(probe_rows) + len(holdout_rows) == len(data) and no_holdout is None and final_rows.equals(data.index)
     assert 1 <= model.n_estimators < 2000
     p = model.predict(data)
     assert ((p >= 0) & (p <= 1)).all() and p[y == 1].mean() > p[y == 0].mean() + 0.5

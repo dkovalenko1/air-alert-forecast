@@ -179,3 +179,33 @@ def test_a_label_with_only_some_corrections_known_is_not_trained_on():
                           "label_first_corrected_at": [before, after, before, pd.NaT],
                           "label_corrected_at": [before, after, after, pd.NaT]})
     np.testing.assert_array_equal(label_known_at(frame, cutoff), [0.0, 1.0, np.nan, 1.0])
+
+
+def test_a_correction_posted_exactly_at_the_cutoff_is_not_known_yet():
+    from airalert.backtest import label_known_at
+
+    cutoff = pd.Timestamp("2026-08-10", tz="UTC")
+    frame = pd.DataFrame({"label": [0.0, 0.0, 0.0], "published_label": [1.0, 1.0, 1.0],
+                          "label_first_corrected_at": [cutoff, cutoff - pd.Timedelta(seconds=1), cutoff - pd.Timedelta(seconds=1)],
+                          "label_corrected_at": [cutoff, cutoff - pd.Timedelta(seconds=1), cutoff]})
+    # posted at the cutoff: still the published label; a second before: corrected; one before and one at: mixed
+    np.testing.assert_array_equal(label_known_at(frame, cutoff), [1.0, 0.0, np.nan])
+
+
+def test_no_model_reads_the_label_columns():
+    """Scoring rows carry the answer (label, published_label, correction times) next to the features. Every model
+    must predict identically when those columns are scrambled."""
+    from airalert.backtest import horizon_frame, training_rows
+
+    grid = build_grid(synthetic_periods(), START, PERIOD[1], pd.Timestamp("2026-08-26", tz="UTC"), UNITS)
+    frame = horizon_frame(grid, 6)
+    train, y = training_rows(frame, 6, START, PERIOD[0])
+    rows = frame[(frame.t >= PERIOD[0]) & (frame.t < PERIOD[1]) & frame.label.notna()]
+    scrambled = rows.assign(label=1.0 - rows.label, published_label=1.0 - rows.label,
+                            label_first_corrected_at=pd.Timestamp("2026-08-05", tz="UTC"),
+                            label_corrected_at=pd.Timestamp("2026-08-06", tz="UTC"))
+    for name, factory in MODELS.items():
+        model = factory().fit(train, y)
+        np.testing.assert_array_equal(model.predict(rows), model.predict(scrambled), err_msg=name)
+        used = getattr(model, "columns", None) or getattr(model, "numeric", [])
+        assert not {"label", "published_label", "label_first_corrected_at", "label_corrected_at"} & set(used), name

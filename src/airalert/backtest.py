@@ -40,12 +40,13 @@ def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
 
 
 def label_known_at(frame: pd.DataFrame, cutoff: pd.Timestamp) -> np.ndarray:
-    """Labels as known at `cutoff`: the corrected label if every correction touching the hour was known by then, the
-    published one if none was. If only some were, the label as it stood at the cutoff is not stored (only the
-    published and the final versions are), so it is NaN, like an unknown label: the row is not trained on then."""
+    """Labels as known at `cutoff`: the corrected label if every correction touching the hour was posted strictly
+    before it, the published one if none was. If only some were, the label as it stood at the cutoff is not stored
+    (only the published and the final versions are), so it is NaN, like an unknown label: the row is not trained on
+    then. A correction posted exactly at the cutoff is not known yet (as-of data is strictly before t, ADR-0001)."""
     corrected = frame.label_corrected_at.notna()
-    none_known = corrected & (frame.label_first_corrected_at > cutoff)
-    some_known = corrected & (frame.label_first_corrected_at <= cutoff) & (frame.label_corrected_at > cutoff)
+    none_known = corrected & (frame.label_first_corrected_at >= cutoff)
+    some_known = corrected & (frame.label_first_corrected_at < cutoff) & (frame.label_corrected_at >= cutoff)
     labels = np.where(none_known, frame.published_label, frame.label).astype(float)
     return np.where(some_known, np.nan, labels)
 

@@ -126,3 +126,55 @@ def test_a_later_retraction_changes_labels_but_no_feature_before_it():
     at = lambda grid, t: grid[(grid.unit_id == KROPYVNYTSKYI) & (grid.t == pd.Timestamp(t, tz="UTC"))].iloc[0]  # noqa: E731
     assert at(retracted, "2026-08-03 17:00").on_alert == 1  # believed on alert at 17:00
     assert at(retracted, "2026-08-03 16:00").label_h1 == 0 and at(cleared, "2026-08-03 16:00").label_h1 == 1
+
+
+def one_unit_grid(periods, start="2026-08-03 00:00"):
+    frame = pd.DataFrame(periods, columns=["started_at", "finished_at"]).assign(unit_id="A/a")
+    grid = build_grid(frame, pd.Timestamp(start, tz="UTC"), pd.Timestamp(start, tz="UTC") + pd.Timedelta(hours=6),
+                      pd.Timestamp("2026-08-20", tz="UTC"), ("A/a",))
+    return grid.set_index("t")
+
+
+def utc(text):
+    return pd.Timestamp(text, tz="UTC")
+
+
+def test_an_alert_that_starts_exactly_at_t_is_not_known_at_t():
+    """Hand-worked boundary: the start is posted at 10:00:00, so the forecast made at 10:00 (data strictly before)
+    cannot see it, and the one at 11:00 can."""
+    grid = one_unit_grid([(utc("2026-08-03 02:00"), utc("2026-08-03 02:30"))])
+    at_start, an_hour_later = grid.loc[utc("2026-08-03 02:00")], grid.loc[utc("2026-08-03 03:00")]
+    assert (at_start.on_alert, at_start.starts_last_1h, at_start.minutes_since_all_clear) == (0, 0, 7 * 24 * 60)
+    assert (an_hour_later.on_alert, an_hour_later.starts_last_1h, an_hour_later.minutes_since_all_clear) == (0, 1, 30)
+    assert an_hour_later.alert_share_last_24h == pytest.approx(0.5 / 24)
+
+
+def test_an_alert_that_ends_exactly_at_t_is_still_on_alert_at_t():
+    """The all-clear is posted at 03:00:00, not strictly before 03:00, so at 03:00 the alert is ongoing; at 04:00 it
+    ended an hour ago."""
+    grid = one_unit_grid([(utc("2026-08-03 01:30"), utc("2026-08-03 03:00"))])
+    at_end, later = grid.loc[utc("2026-08-03 03:00")], grid.loc[utc("2026-08-03 04:00")]
+    assert (at_end.on_alert, at_end.alert_minutes_so_far, at_end.minutes_since_all_clear) == (1, 90, 0)
+    assert (later.on_alert, later.minutes_since_all_clear) == (0, 60)
+    assert at_end.alert_share_last_24h == pytest.approx(1.5 / 24) and later.starts_last_1h == 0
+
+
+def test_target_hour_and_weekday_follow_kyiv_local_time_across_midnight():
+    """Forecast time 2026-08-04 19:00 UTC is 22:00 Tuesday in Kyiv (UTC+3). h hours ahead targets the hour starting
+    h - 1 hours later: h=1 22:00 Tue, h=3 00:00 Wed, h=6 03:00 Wed, h=24 21:00 Wed."""
+    grid = one_unit_grid([], start="2026-08-04 19:00")
+    row = grid.loc[utc("2026-08-04 19:00")]
+    assert (row.hour, row.weekday, row.month) == (22, 1, 8)
+    expected = {1: (22, 1), 3: (0, 2), 6: (3, 2), 24: (21, 2)}
+    for h, (hour, weekday) in expected.items():
+        assert (row[f"target_hour_h{h}"], row[f"target_weekday_h{h}"]) == (hour, weekday), h
+
+
+def test_target_active_a_day_and_a_week_earlier_look_at_the_same_clock_hour():
+    """An alert 2026-08-03 05:00-05:30 UTC. The target hour 05:00 on the next day (h=6 from 2026-08-04 00:00) was
+    active a day earlier; the target hour 05:00 a week later (2026-08-10) was active a week earlier."""
+    frame = pd.DataFrame([("A/a", utc("2026-08-03 05:00"), utc("2026-08-03 05:30"))], columns=["unit_id", "started_at", "finished_at"])
+    grid = build_grid(frame, utc("2026-08-04 00:00"), utc("2026-08-10 01:00"), utc("2026-08-20"), ("A/a",)).set_index("t")
+    day, week = grid.loc[utc("2026-08-04 00:00")], grid.loc[utc("2026-08-10 00:00")]
+    assert day.target_active_day_ago_h6 == 1 and day.target_active_week_ago_h6 == 0
+    assert week.target_active_week_ago_h6 == 1 and week.target_active_day_ago_h6 == 0

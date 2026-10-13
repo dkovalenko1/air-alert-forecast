@@ -63,9 +63,9 @@ def train(cutoff: str | None = None) -> None:
     print(f"Saved {path.relative_to(ROOT)} (trained at {at.tz_convert(KYIV):%Y-%m-%d %H:%M} Kyiv)")
 
 
-def latest_saved() -> dict:
+def latest_saved(models_dir=MODELS_DIR) -> dict:
     """The saved model with the latest cutoff."""
-    paths = list(MODELS_DIR.glob("*.pkl"))
+    paths = list(models_dir.glob("*.pkl"))
     if not paths:
         raise SystemExit("No saved model: run `train` first.")
     saved = []
@@ -75,9 +75,11 @@ def latest_saved() -> dict:
     return max(saved, key=lambda s: s["cutoff"])
 
 
-def forecast(at: pd.Timestamp, saved: dict) -> pd.DataFrame:
-    """Units × horizons: the probability of an alert, plus whether each unit is on alert at `at`."""
-    grid = load_grid(at + HOUR, at, telegram="Telegram" in saved["model"])
+def forecast(at: pd.Timestamp, saved: dict, grid: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Units × horizons: the probability of an alert, plus whether each unit is on alert at `at`. `grid` (default:
+    built from the data on disk) must contain the rows at `at`."""
+    if grid is None:
+        grid = load_grid(at + HOUR, at, telegram="Telegram" in saved["model"])
     now = grid[grid.t == at]
     table = pd.DataFrame({"unit": now.unit_id.astype(str).to_numpy(), "on alert": now.on_alert.to_numpy().astype(bool)})
     for h, model in saved["models"].items():
