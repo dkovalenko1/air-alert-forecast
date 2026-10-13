@@ -4308,3 +4308,1502 @@ Four records: the boundary marker, the summary, a caveat line, and the `/compact
 
 - Tool call: Read
 - Tool call: Bash
+
+### Assistant (2026-10-13 12:00:28 UTC)
+
+The test passes. Running the export, then checking it for duplicate messages, leftover raw tags and secrets:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:00:43 UTC)
+
+No secret values in any tracked file or in the export; `.env`, the Telegram session, `data/` and `models/` are all untracked. The export has 4 redactions, so I'll check where they are:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:00:48 UTC)
+
+All four are the word `<redacted>` written in earlier messages of mine, not real replacements, so no secret ever reached the session logs. Committing:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:01:13 UTC)
+
+The write-up is done and committed: 4 commits, ending at `93676ea`. All 143 tests pass.
+
+- **README:**
+  - test results by horizon against the two baselines;
+  - the three new figures (error by horizon, calibration, an example few days in Kyiv);
+  - the E1–E5 table, the Telegram finding, how to run it, and a limitations section.
+- **Two new commands, `train` and `predict`.** The design promised them and the code didn't have them.
+  - `train` fits the chosen LightGBM setup on all data up to the last hour (about 40 seconds).
+  - `predict` prints every raion's probabilities in about 2 seconds. It refuses a forecast time earlier than the model's training cutoff, after the data ends, or not on the hour.
+  - The README shows real output from a forecast made at 00:00 on 13 October.
+- **DESIGN.md and ADR-0007:** brought up to date. The design doc no longer says "pre-build", its command table now lists the commands that actually exist, and two lines that still described the label check and the Telegram edit rule as future work are fixed.
+- **Conversation export:** re-exported, with 47 user messages and 217 assistant replies. I fixed how the script handles your `/compact`: before, the automatic summary would have appeared as a long message from you. It now shows `/compact` as your message plus a one-line note. No secret values are in the export or in any tracked file.
+
+Changes and findings while writing it up:
+- **No separate notebook.** The README carries the story with the figures. This changes what we decided in Q14, and I recorded the change in DESIGN.md. Say if you'd rather have a notebook as well.
+- **Two of my claims were wrong when I checked them, and I fixed them before committing:**
+  - Very short Kyiv alerts were a feature of one morning, not of October in general.
+  - Calibration is close one hour ahead, but a day ahead, mid-range forecasts run a little low: forecasts of 30–40% came true 43% of the time.
+- **City alert zones (Q16)** are listed under limitations: Kharkiv, Zaporizhzhia and the others are folded into their raions.
+
+Before you submit:
+1. **Push:** `main` is 6 commits ahead of `origin/main` on GitHub (`dkovalenko1/air-alert-forecast`). Should I push?
+2. **Re-export once more at the very end**, so the export includes this last reply: `uv run python scripts/export_conversation.py`, then commit. I can do it together with the push.
+
+---
+
+## User (2026-10-13 12:08:53 UTC)
+
+I want to spawn an agent to fully review this whole project from decisions to the final result, how should we prompt that?
+
+### Assistant (2026-10-13 12:09:29 UTC)
+
+I'll draft the prompt with the brief's exact wording, so I'm checking the saved task notes first:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:10:34 UTC)
+
+I'd write the prompt so a reviewer starting with no context can work through the project on its own:
+- **Read-only:** it changes nothing in the repo.
+- **Priorities:** leakage first, then whether the evaluation was honest, then how correct the pipeline is, then whether README claims match the files, then the design decisions, code and write-up.
+- **Known weak points listed upfront,** so it confirms or refutes them instead of spending time rediscovering them.
+- **Evidence for every finding:** a file and line, plus a command output or a worked example.
+
+**First, a real leak I found while drafting this.** When a Telegram post names a place but no threat ("Курсом на Павлоград."), it borrows the threat type of the channel's previous post. It reads that type from the previous post's final, edited text, but dates itself by its own time. I counted: 197 of about 4,900 such posts borrow from a post that was edited after they appeared, sometimes by weeks.
+- **The final model is not affected:** it uses no Telegram features.
+- **E4, E5 and the Telegram check in the test run are affected.** The leak most likely made Telegram look slightly better, and Telegram still didn't help, so the conclusion should stand.
+- **Fix:** date a borrowing post no earlier than the post it borrows from, then rerun the Telegram comparisons. I'd do that together with whatever the review finds.
+
+**The prompt:**
+
+```
+You are reviewing a finished project before it is submitted for a selection task. Review only: do not edit,
+create or delete files in the repo, do not commit, and do not use the network.
+
+## The task
+The repo is /Users/david/proj/air-alert-forecast. It answers this brief (KSE Stage 2 selection task, verbatim):
+
+> Mini pet project in Python solving a real-world defense problem: Time Series Analysis of air raid alerts in Ukraine.
+> Data and evaluation. Work with the most recent data available, and evaluate your solution on the latest period.
+> Make sure there is no data leakage: nothing your model is trained on or uses as an input may come from after the
+> time at which the forecast is made.
+> Optional: text and media data. You are encouraged, but not required, to go beyond the alert history and use text
+> or media data, for example news, official statements or public Telegram channels. The same rule applies: use only
+> content that was published before the time at which the forecast is made.
+
+The submission is the GitHub repo plus the full export of the AI conversation that built it
+(docs/ai-conversation.md). Selectors will read the README first, then DESIGN.md and the code.
+
+## What to review, most important first
+1. Leakage. Try hard to find any way a forecast at time t, or the model used for it, depends on information from
+   after t: features, labels and label corrections, the training-row cutoff, weekly retraining, early stopping, the
+   unit list, the baselines, the near-permanent units, Telegram posts (edit times, follow-up posts), and the
+   train/predict commands. Also check the test period: was any choice made after seeing test results?
+2. Evaluation integrity. DESIGN.md claims each validation experiment (E1–E5) had its protocol committed before it
+   ran. Check this against the git history (commit order and times). Check the walk-forward backtest, the scoring,
+   the selection rule, and that the test run used exactly the choices made on validation. Are the day-resampled
+   intervals sound, and fairly worded?
+3. Labels and the data pipeline. Parsing of the alert channel, the alert state machine, the unknown-hour rules,
+   unit mapping, neighbours, Telegram place matching and threat types. Look for bugs that would change results.
+4. Claims against evidence. Check every number and claim in README.md and the DESIGN.md decision log against
+   reports/ (or recompute it from the local data). List each one you checked and whether it holds.
+5. Decisions. Are the main design decisions (DESIGN.md, docs/adr/) sound for this task? Is anything missing that a
+   reviewer would expect: a baseline, a metric, a limitation?
+6. Code and tests. Do the tests, especially the leakage tests, really test what they claim? Look for dead code,
+   misleading names and fragile parts.
+7. Write-up. Is the README clear and honest for a reader who knows ML but not this project? Is anything overstated?
+
+## Already known (confirm or refute; don't report as new)
+- Telegram follow-up posts: a post with a place but no threat type takes the type of the channel's previous post,
+  read from that post's final (edited) text, but is dated by its own time. 197 of about 4,900 such posts borrow
+  from a post edited after they appeared. Telegram is not in the final model, but E4, E5 and the test-period
+  Telegram check used these features.
+- E5 was designed after E4's result (stated in DESIGN.md).
+- The label channel fails the message-level 98% check (README, "Label quality").
+- City alert zones other than Kyiv are folded into their raions (Q16 not done).
+- E3 started while E2 was still running, assuming E2's result; E2 then confirmed it.
+
+## Where things are
+- Docs: README.md, docs/DESIGN.md (section 3: evaluation protocol and experiments; section 4: decisions;
+  section 6: questions and answers), docs/adr/, CONTEXT.md (terms), docs/ai-conversation.md (why decisions were made).
+- Code: src/airalert/ (features, labels, backtest, models, experiments, final, forecast, threats,
+  telegram_features, …) and tests/.
+- Results: reports/validation/experiments/ (decisions.json, one CSV per experiment), reports/test/,
+  reports/label_quality/.
+- Local data, not in git: data/raw/ (downloads), data/interim/ (alert periods, Telegram events),
+  data/results/test_predictions.parquet.
+
+## What you may run
+- `uv run pytest`, `uv run python -m airalert test-report`, and your own read-only Python on the local data,
+  writing only to /tmp.
+- Do not run anything that writes to the repo or its reports: test-run, experiment, backtest, train, build-*,
+  download-*, scripts/make_figures.py, scripts/export_conversation.py. Do not open .env or airalert.session
+  (credentials and a Telegram login).
+- Never use the test period to compare new variants. To test an idea, use the validation period, and say so.
+
+## Report
+- Findings ranked by severity: critical (breaks a result or the no-leakage claim), major (a reviewer would object;
+  changes a number or a claim), minor, nit. For each: file:line, what is wrong, evidence (a command and its output,
+  or a worked example), the impact on results or claims, and a suggested fix. Mark each as confirmed (reproduced)
+  or plausible (reasoning only).
+- Then the README and DESIGN claims you checked, and whether each holds.
+- Last, a short verdict: is there leakage? Do the results support the conclusions? Which three changes would most
+  improve the submission?
+```
+
+**Who should run it:** I recommend GPT-6.1-sol on extra-high effort through T3 Code, as for the earlier code review. A model from a different family is less likely to share my blind spots than a Claude subagent would be. A full review will take a while; I'd let it run in the background.
+
+**Afterwards:** I go through each finding with you, fix what's confirmed, and send a second round to the reviewer with our responses to anything we disagree with.
+
+Should I send it as is, to GPT-6.1-sol? You can also edit the prompt first.
+
+---
+
+## User (2026-10-13 12:13:43 UTC)
+
+Prompt looks ok. Spawn GPT-6-Astra on xhigh effort (no fast mode). The review should be complex and cover as much of the areas of the project as possible. Tell me when it finishes and list all the things it found in the codebase.
+
+- Tool call: ToolSearch
+- Tool call: mcp__t3-code__orchestrator_capabilities
+- Tool call: mcp__t3-code__delegate_task
+
+### Assistant (2026-10-13 12:14:11 UTC)
+
+The review is running: GPT-6-Astra, Extra High effort, standard tier (no fast mode), in the background.
+
+It got the prompt you approved plus the two lines asking it to cover every module and to report which areas it looked at and how deeply. It's told not to change the repo; I'll still check that the repo is unchanged when it reports back.
+
+When it finishes, I'll tell you and list every finding, grouped by severity, with the file and line, its evidence, and whether the reviewer reproduced it or only reasoned about it. I won't fix anything until we've gone through the list together.
+
+---
+
+## User (2026-10-13 12:39:54 UTC)
+
+Delegated task node:delegated-task:command%3Amcp%3A36f1ada6-0957-4eac-aec1-f5124095b61a%3Adelegate-task%3Afull-project-review-round-1-2026-10-13 reached a terminal state. Use task_status with taskId node:delegated-task:command%3Amcp%3A36f1ada6-0957-4eac-aec1-f5124095b61a%3Adelegate-task%3Afull-project-review-round-1-2026-10-13 to read the result.
+
+- Tool call: mcp__t3-code__task_status
+- Tool call: ToolSearch
+- Tool call: Bash
+- Tool call: mcp__t3-code__t3_thread_read
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:40:19 UTC)
+
+The reviewer stopped partway because Codex hit its usage limit. I'm pulling whatever it found before that from its thread.
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:40:30 UTC)
+
+Before stopping, the reviewer posted progress notes with four findings. To recover as much as I can, I'm reading the rest of its thread and the evidence files it wrote to `/tmp`:
+
+- Tool call: mcp__t3-code__t3_thread_read
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:41:22 UTC)
+
+The evidence files say more than the progress notes. Reading the remaining four files:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:42:24 UTC)
+
+The evidence is enough to reconstruct what the reviewer found, but it never wrote a final report, so I'll confirm the main items myself before listing them:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:43:07 UTC)
+
+The review did not finish. GPT-6-Astra hit the Codex usage limit after about 26 minutes, and the error says to try again at 8:14 PM. It never wrote its final report, ranked list or verdict.
+
+Its progress notes and the evidence files it left in `/tmp` show what it found up to that point. Below is everything it found. I re-checked the items marked **verified**; the rest rest on its evidence only. The repo is unchanged.
+
+## What it confirmed is correct
+- **Experiment protocols:** E1–E5 were each committed before their results, according to the git history.
+- **Tests:** all 143 pass.
+- **Reported test numbers:** the metrics, summary and intervals reproduce exactly from the saved predictions.
+- **No leakage in the main model.** This is the strongest check. It rebuilt labels and features using only messages available before each of the 8 weekly retraining dates (5 validation, 3 test). Training labels and features came out identical every time.
+- **Validation labels:** no later correction touches them.
+- **Other tables:** the near-permanent-unit scores reproduce, and the raion list and neighbour table are consistent.
+
+## Problems in the Telegram features
+These features are not in the final model, but they affect E4, E5 and the Telegram check in the test run.
+
+1. **Message IDs clash between the two channels (leak, verified).** Duplicate removal ignores which channel a post came from, and 30,553 IDs exist in both channels.
+   - So a later post can silently remove an earlier one with the same ID.
+   - About 19,000 events are lost, 1,361 of them in validation.
+   - Adding later posts changed a past feature, 2026-08-29 09:00 UTC: national drone posts in the last hour went from 12 to 11.
+   - Cause: `telegram_features.py:45`, plus the same pattern in my E5 code.
+2. **Follow-up posts borrow from later-edited posts (leak, the one I found).** It reproduced this: 197 posts.
+3. **The volunteer channel's footer counts as naming two places (verified).** Every `@deraketaua` post ends with "🍑 @deraketaua | Полтава | Київ". About 7,000 posts are therefore tagged as naming Kyiv, and about 6,700 as naming Poltava raion, only because of that footer.
+4. **The all-clear rule fires too easily (verified).** Any "немає" turns a whole post into an all-clear. Examples: "У нас немає чим збивати ракети", "Інформації про пуски ракет наразі немає".
+5. **A raion we don't forecast can overwrite Kyiv's value (verified in code, `telegram_features.py:113`).**
+   - The "minutes since the raion was last named" loop doesn't skip raions outside our list, such as Svatove raion in Luhansk oblast. Their values land in the last column, which belongs to Kyiv city.
+   - Real data happens to hide this, because Kyiv's own values are written afterwards.
+
+## Problems in labels and the main pipeline
+6. **A label correction can be undone (verified in code; no effect on the actual runs).** If one hour gets two corrections, one before the training cutoff and one after, training falls back to the original uncorrected label.
+   - Cause: `backtest.py:42` keeps only the latest correction time.
+   - The rebuild check above found this never happened at our 8 cutoffs.
+7. **"Alert continues" messages for a raion with no open alert are ignored.** The raion stays calm although the message says an alert is on.
+   - 12 cases, 4 of them since November 2025.
+   - 2 are in the test period: Kramatorsk on 29 Sep and Lozova on 30 Sep. alerts.in.ua shows both as on alert.
+
+## Claims in the write-up
+8. **Our Historical rate baseline is weak.**
+   - A simpler baseline, each raion's share of alert hours in the last 28 days, scores 0.1277 on validation. Ours scores 0.1524.
+   - Against the simpler one, LightGBM's lead is about 15%, not 29%. The README's "25% better" depends on the weak baseline.
+   - It checked this on validation only.
+9. **README "Alert starts" bullet (verified).** It quotes ROC-AUC for all rows (0.955 and 0.890). For raions calm at the time, the figures are 0.845 one hour ahead and 0.840 a day ahead.
+10. **The example figure mislabels timing (verified).**
+    - The 1-hour forecast is made at the start of the hour it covers, not an hour before.
+    - The 6-hour forecast is made 5 hours before.
+    - The README text has the same mistake.
+11. **The edit-timing claim is off.** The README says the label channel edits messages "about 20 seconds after posting". Since July 2025 the median is 29 seconds, and 13% of messages were edited more than 5 minutes after posting. ADR-0007 relies on this claim.
+12. **"Best in every test week" needs a qualifier.** It holds among the README table's models. But LightGBM with the 7 Telegram features scored marginally better in weeks 1–2 and at 1 hour ahead.
+
+It also left one result I couldn't interpret: 9,648 hours that changed from alert to calm in some comparison of official-channel labels. That question stays open.
+
+## What this means
+- **The main result holds.** The rebuild check is strong evidence that the alert-history model is leakage-free.
+- **"Telegram didn't help" is not established as written.** The features had two leaks and three other bugs. The honest version for now is "our Telegram features, which had bugs, didn't help". Fixing them and rerunning E4 and E5 on validation, then the Telegram check on the test period, would settle it.
+- **The write-up needs corrections** (items 8–12).
+
+## Your call
+1. **Fixes:** the Telegram bugs (1–5), with reruns as above; the latent label bug (6); and the write-up claims (8–12).
+   - Item 8 means running the simpler baseline on the test period too. That is reporting only: no choice depends on it.
+   - Item 7 changes labels, so fixing it means rerunning everything for 4 cases. I'd document it as a limitation instead.
+2. **A second review round after 8:14 PM**, when the Codex limit resets. It would get these notes, finish the parts it didn't reach (ADRs, figures, the claim-by-claim check, a verdict), and then re-check the fixes.
+
+Should I start on the fixes now and send round 2 after the reset?
+
+---
+
+## User (2026-10-13 12:57:40 UTC)
+
+If i will use the reset, will it continue where it stopped? How long will it take to run the review to the end?
+
+### Assistant (2026-10-13 12:57:57 UTC)
+
+**It won't pick up where it stopped.** The first run has ended for good, and its working memory went with it. After the reset I'd start a new review, and it would begin with no memory of the first one. It doesn't have to redo everything, though:
+- **Its findings go into the new prompt:** the list above, plus what it already confirmed, such as the rebuild check that found no leakage in the main model.
+- **Its scripts and outputs are still in `/tmp`,** so it can reuse them. One caveat: macOS clears `/tmp` on restart, so I'd copy them somewhere outside the repo first.
+- **It can concentrate on what it didn't reach:** the ADRs, the figures, the claim-by-claim check of README and DESIGN, and the verdict.
+
+**How long it will take:** the first run used 26 minutes before the limit. By its own progress list, it had finished reading the docs and every source file and test, was partway through reproducing results, and hadn't started the final claim check and report. With the first round's work handed over, my rough guess is 20–40 minutes, but that's an estimate, not a measurement.
+
+**The risk is the limit itself.** The 8:14 PM reset is about 4½ hours away, if that's your local time. A shorter round is less likely to hit the limit again, but there's no guarantee. Other GPT models, such as GPT-6.1-Sol, use the same Codex account and its limit.
+
+**My suggestion:** use the wait to make the fixes we agree on, then run round 2 after the reset. Its job would be to finish the review and check the fixes, so one round covers both. If you'd rather not wait, the second Claude account is available now. But it's the same model family as me, so it's more likely to share my blind spots, which is why I suggested GPT in the first place.
+
+Should I start the fixes now?
+
+---
+
+## User (2026-10-13 13:08:32 UTC)
+
+Let’s make the fixes it found, and then what i want to do it to run the general complex prompt once again, with no context of the findings and fixes from this one. We will use Sol for that one, not astra since it’s too expensive. Maybe we can tweak the prompt if needed, i want it to go through the whole project, decisions we made, sources we use, results we got etc. Ir should challenge our implementation and help find weak spots and rooms for improvement, maybe we did something stupid and missed the easy/more profitable paths. After your fixes scratch the prompt, it should not be huge, but it must define what are we looking for and set the goal/point that it should reach to stop. It can investigate everything it needs, tweak (if needed) and run the code to check assumptions, but do not commit it and cleanup after tests.
+
+### Assistant (2026-10-13 13:10:22 UTC)
+
+Plan:
+1. **Fixes, each with a test:**
+   - the five Telegram bugs;
+   - the label-correction bug;
+   - a closer look at the "alert continues" case before deciding how to change it;
+   - a stronger simple baseline;
+   - the write-up corrections.
+2. **Reruns:** E4 and E5 on validation with the fixed features, then the test run once more with the same chosen configuration. The README will say openly that the test period was rerun after the fixes.
+3. **Cleanup:** delete the first reviewer's files from `/tmp`, so round 2 starts with no memory of round 1.
+4. **The round 2 prompt** for Sol, which I'll show you before sending.
+
+Starting with the Telegram footers, to see what signatures the channels use:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:13:00 UTC)
+
+Now tests for the new reading rules:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:13:09 UTC)
+
+The Telegram reading tests pass. Now the feature-side fixes: identify each post by channel and ID, and skip raions we don't forecast:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:13:48 UTC)
+
+All Telegram tests pass, including the check that later posts never change features at t, now with post IDs shared between channels. Committing:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:14:09 UTC)
+
+Next, the label-correction bug. Checking where these columns are used before changing them:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:14:44 UTC)
+
+All 150 tests pass. Now the red-to-yellow message. Here is how it's classified and tested at the moment:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:15:38 UTC)
+
+All 151 tests pass. Next, the stronger simple baseline: each raion's share of alert hours over the last four weeks, without the hour-and-weekday split.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:16:55 UTC)
+
+Rebuilt in under 30 seconds. Now the comparison: how many raion-hours changed, by period? If validation is unchanged, E1–E3 stand without a rerun.
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:17:24 UTC)
+
+While those run, the write-up fixes. First I'm checking the edit-timing numbers myself, since the README and ADR-0007 both make that claim:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:18:07 UTC)
+
+Now the figures: the example chart's timing labels, and the new baseline in the error-by-horizon chart.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:18:17 UTC)
+
+Code changes are done. E4 is running; checking its progress:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:18:59 UTC)
+
+The code and doc fixes are done. E4 and E5 are rerunning on the fixed Telegram features in the background, about 50 minutes for both.
+
+What's done so far (6 commits, all 152 tests pass):
+- **Telegram:** posts are now identified by channel and ID, which fixes the leak where a later post removed an earlier one. Follow-up lines count only once the post they borrow from was available, which fixes the second leak. Posts are read line by line, the weaker all-clear words count only on short lines, and signature lines are skipped. Raions we don't forecast no longer overwrite Kyiv's value.
+- **Labels:** an hour whose corrections fall on both sides of a training cutoff is left out of training at that cutoff. "Відбій червоної тривоги" now opens an alert when none is open. After rebuilding, no label changed in any period, and one feature changed on 11 test-period rows. So E1–E3 stand without a rerun.
+- **New baseline:** each raion's alert share over the last 4 weeks scores 0.1277 on validation (Historical rate: 0.1524), so it's the fairer comparison. LightGBM beats it by 15%.
+- **Docs:** the edit-timing claim is corrected (half within 29 seconds, 13% after more than 5 minutes), along with two stale statements in ADR-0002 and DESIGN.md. The example figure now labels forecast times correctly.
+- **Cleanup:** the first reviewer's files in `/tmp` are deleted.
+
+Still to do, once E4 and E5 finish:
+1. **Rerun the test period** with the configuration E4 and E5 now give. This is the second use of the test period, so I'll say so in the README and DESIGN.md; the first run stays in the git history.
+2. **Update the README** with the new numbers and the remaining wording fixes: the AUCs for raions calm at the time, and "best in every week".
+3. **Retrain the forecast model,** so `predict` and the README excerpt match the fixed code.
+4. **Write the round-2 prompt** for Sol and show it to you before sending.
+
+**System notification** (2026-10-13 13:33:03 UTC): background task completed: Background command "Rerun experiments E4 and E5 with the fixed Telegram features" completed (exit code 0)
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:33:41 UTC)
+
+The test rerun takes about 35 minutes. Meanwhile I'm updating the DESIGN.md decision log with the new E4/E5 numbers, the fixes, and a note on why the test period was run a second time:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:34:01 UTC)
+
+The test rerun has started (168 model fits). Meanwhile, the README's Telegram section gets the new validation numbers and a note on the fixes:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:34:08 UTC)
+
+E4/E5 results and the DESIGN.md and README text updates are done (not yet committed). The test rerun is in progress, about 30 more minutes. When it finishes I'll:
+1. update the README results with the new numbers;
+2. retrain the forecast model and refresh the `predict` excerpt;
+3. redraw the figures;
+4. commit;
+5. show you the round-2 prompt for Sol.
+
+**System notification** (2026-10-13 13:40:27 UTC): background task completed: Background command "Delete the old test report and rerun the test period" completed (exit code 0)
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+**Note** (2026-10-13 13:41:08 UTC): the first Claude Code account reached its usage limit here, and the assistant's turn stopped. Retries failed until the context handoff below.
+
+**Context handoff** (2026-10-13 13:43:01 UTC): T3 Code moved this chat back to the second Claude Code account and gave it the part of the thread it had not seen (the work above, done on the other account), which is not repeated here. The next message follows.
+
+---
+
+## User (2026-10-13 13:43:01 UTC)
+
+Continue where you stopped
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:43:23 UTC)
+
+I'm missing some recent context, so I'm reading back what the review found and what was still planned:
+
+- Tool call: mcp__t3-code__t3_thread_read
+- Tool call: mcp__t3-code__t3_thread_read
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:45:19 UTC)
+
+The report now includes per-horizon intervals. Adding a test for it:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:45:45 UTC)
+
+153 tests pass. Now the README. Reading its results section as it stands:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:46:03 UTC)
+
+The calibration numbers are unchanged: 30–40% forecasts came true 35% of the time one hour ahead and 43% a day ahead. Rewriting the results section:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:46:23 UTC)
+
+Now the test-period Telegram numbers, which changed with the rerun, and the design doc's test-run entry:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:46:36 UTC)
+
+The design doc is updated. Checking the README's limitations section for anything the new finding affects:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:46:45 UTC)
+
+I'm adding the short-term finding to the limitations, then retraining the forecast model on the rebuilt labels and refreshing the `predict` excerpt:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Read
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:48:07 UTC)
+
+Committed as `2ca5ac6`, with all 153 tests passing. Next, round 2 needs a clean start, so I'm checking `/tmp` for files the first reviewer left behind:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:48:26 UTC)
+
+They're all my own scratch work from earlier sessions: exploration scripts, old data copies and logs. The committed reports hold everything that matters, so I'm deleting them:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 13:49:08 UTC)
+
+Everything from your list is done. Before the round-2 prompt, one result changed the story; you should see it first.
+
+## The rerun result
+After the review fixes I reran the test period with the same configuration. **LightGBM's score didn't change: 0.1180 mean Brier** (logistic regression 0.1217).
+
+The stronger simple baseline the review asked for changes the story, though. It's each raion's share of hours on alert over the last 4 weeks, and it scores 0.1324. Against it, per horizon, with 95% intervals from resampling days:
+
+| Horizon | LightGBM's lead over the recent rate |
+|---|---|
+| 1 h | **0.056** (0.050 … 0.063) |
+| 6 h | **0.005** (0.002 … 0.008) |
+| 12 h | 0.0004 (−0.003 … +0.003), no measurable difference |
+| 24 h | −0.0007 (−0.004 … +0.002), no measurable difference |
+
+So **the model's value is in the next few hours.** A day ahead, it knows little more than how often the raion has been on alert lately. For raions calm at the forecast time, the lead is clear only up to 3 hours. On validation LightGBM led at every horizon, so this only showed on the test period.
+
+Here's how the write-up handles it:
+- **README:** the results now lead with this finding, including the new baseline row and a link to the per-horizon intervals. There's a new limitation, "little skill a day ahead". The ROC-AUC quoted for calm raions was really the all-rows figure; it's now the calm one (0.845 one hour ahead, 0.840 a day ahead).
+- **Design doc:** the test-run entry records the same finding.
+
+`test-report` now writes the per-horizon intervals to `reports/test/differences_by_horizon.csv`, with a test. I also retrained the model, refreshed the `predict` excerpt and redrew the figures. It's committed as `2ca5ac6`, and all 153 tests pass.
+
+**Cleanup:** the Astra reviewer's files were already gone from `/tmp`. I also deleted my own scratch files there (exploration scripts, old data copies, logs), so round 2 finds nothing from round 1. The repo's README and design doc do mention that an external review found Telegram bugs; that's part of the project record now.
+
+## The round-2 prompt for Sol
+```
+You are an independent reviewer of a finished student project, before it is submitted. Your job is to
+challenge it: find what is wrong, what is weak, and what better or easier path we missed.
+
+## The project
+Repo: /Users/david/proj/air-alert-forecast. It answers this brief (KSE Stage 2 selection task, verbatim):
+
+> Mini pet project in Python solving a real-world defense problem: Time Series Analysis of air raid alerts in
+> Ukraine. Data and evaluation. Work with the most recent data available, and evaluate your solution on the
+> latest period. Make sure there is no data leakage: nothing your model is trained on or uses as an input may
+> come from after the time at which the forecast is made. Optional: text and media data. You are encouraged,
+> but not required, to go beyond the alert history and use text or media data, for example news, official
+> statements or public Telegram channels. The same rule applies: use only content that was published before
+> the time at which the forecast is made.
+
+Graders read README.md first, then docs/DESIGN.md (decisions, protocol, results log), docs/adr/, the code
+(src/airalert/, scripts/, tests/) and the results (reports/). Local data, not in git: data/raw (Telegram
+downloads, alerts.in.ua), data/interim (alert periods, Telegram events), data/results (test predictions),
+models/.
+
+## What to look for
+Go through the whole project: the framing (what is predicted, for which units, at which horizons), the data
+sources and how labels are built, features, models, the evaluation protocol and baselines, the Telegram part,
+the results and how they are claimed, and the write-up. For each, ask:
+1. Is it wrong? Leakage, bugs that change results, numbers in README/DESIGN that the reports or data don't support.
+2. Is it weak? A decision a careful reviewer would question, an unfair comparison, a missing check or limitation.
+3. Did we miss an easier or more profitable path? A simpler model, a feature, a data source, a framing or a
+   use of the data that would likely do better, or tell the story better, for the effort.
+Be concrete and sceptical. Prefer a quick experiment to an opinion: for any claim of "this would help" or
+"this is broken", test it if you can within a few minutes of compute.
+
+## Rules
+- You may read everything, run the tests, and run your own scripts on the local data. You may change code
+  temporarily to test an idea.
+- Never commit, never push, no network. Do not run commands that rewrite data/, models/ or reports/
+  (download-*, build-*, train, test-run, experiment, backtest, test-report, scripts/*). Load the data in your own
+  scripts instead, and write outputs only under /tmp/review-2/.
+- When you finish: restore every file you changed (`git status` must be clean, as it is now), delete
+  /tmp/review-2/, and give your report as your final answer.
+- If you might run out of time or quota, keep the report draft current in /tmp/review-2/report.md as you go.
+
+## When to stop
+Stop when you can give, with evidence:
+- a verdict: do the headline claims hold (no leakage; the test result; Telegram did not help)?
+- every wrong or weak point you found, ranked by how much it matters to the result or to a grader;
+- the 3–7 best improvement opportunities, ranked by expected gain for the effort, each with its quick-test result
+  if you ran one.
+Don't polish style or list minor nits; stop once more digging would only add small items.
+
+## Report format
+For each finding: severity (critical / major / minor), category (wrong / weak / missed opportunity), where (file
+and line, or report and number), the evidence (command and output, or a worked example), whether you reproduced
+it or reasoned only, and the suggested fix with a rough effort. Then the improvement list, then the verdict.
+```
+
+**What changed from round 1's prompt:**
+- **It challenges the whole project.** The old prompt was mainly an audit; this one also asks about decisions, sources, framing and missed easier paths, as you asked.
+- **Experiments are allowed.** It may change code temporarily, but only works outside `data/`, `models/` and `reports/`, and must leave `git status` clean.
+- **It has a clear stopping point:** a verdict, the ranked findings, and 3–7 improvements.
+- **Nothing about round 1.** The "Already known" list and the review's findings are left out.
+- **It keeps a draft report in `/tmp`,** so a quota stop doesn't lose the work again.
+
+**Settings:** GPT-6.1-Sol at Extra High effort, standard tier. Fast mode uses up the shared Codex quota faster, and that quota already cut round 1 short.
+
+**Timing:** the Codex limit resets at **8:14 PM**, about 3½ hours from now, so it can't run before then. Should I send it as is, or do you want to change anything? I can also schedule it to start automatically just after the reset.
+
+---
+
+## User (2026-10-13 14:09:27 UTC)
+
+I like this prompt, send it to 6.1 so on xhigh no fast mode now, usage is restored
+
+- Tool call: ToolSearch
+
+### Assistant (2026-10-13 14:09:35 UTC)
+
+Checking that the repo is clean, since the prompt tells the reviewer to leave it that way:
+
+- Tool call: Bash
+- Tool call: mcp__t3-code__delegate_task
+
+### Assistant (2026-10-13 14:09:53 UTC)
+
+The review is running in the background: **GPT-6.1-Sol at Extra High effort, standard tier (no fast mode)**, with the prompt exactly as you approved it. The repo was clean when it started, at commit `2ca5ac6`, and nothing from round 1 is in `/tmp`.
+
+When it finishes, I'll:
+- check that it left `git status` clean and deleted `/tmp/review-2/`;
+- list every finding with its severity, evidence and whether it reproduced it, plus its improvement ideas and verdict;
+- check the most important claims myself before recommending fixes.
+
+If it hits the quota limit again, its draft report in `/tmp/review-2/report.md` should survive, and I'll recover what it found from there.
+
+---
+
+## User (2026-10-13 14:38:56 UTC)
+
+Delegated task node:delegated-task:command%3Amcp%3A22684eda-ccd1-4b16-a715-84670d8b65b0%3Adelegate-task%3Aaaf-project-review-round-2-sol reached a terminal state. Use task_status with taskId node:delegated-task:command%3Amcp%3A22684eda-ccd1-4b16-a715-84670d8b65b0%3Adelegate-task%3Aaaf-project-review-round-2-sol to read the result.
+
+- Tool call: mcp__t3-code__task_status
+
+### Assistant (2026-10-13 14:39:07 UTC)
+
+The review finished. Before reporting, I'm checking that it left the repo clean, and spot-checking three of its claims myself:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 14:39:45 UTC)
+
+Round 2 finished cleanly. Sol edited nothing in the repo, `git status` is clean, and it deleted its `/tmp/review-2/` folder. All 153 tests pass. I re-checked three of its findings myself (2, 5 and 7) and they hold.
+
+## Verdict
+- **The test result holds.** LightGBM's 0.1180 reproduces exactly, and scoring the same rows against alerts.in.ua instead of our labels gives 0.1182, with the same ranking.
+- **"Telegram didn't help" holds** for the two feature sets, the models and the hourly task we tested.
+- **"No leakage" holds for everything it could check, but our wording is too strong.** It checked the training cutoffs, the label corrections and a feature rebuild using only data available at each point, and found no new leak. But it says the edited-message assumption should be presented as an assumption, not a guarantee.
+
+## Findings, most important first
+| # | Severity | What it found | My view |
+|---|---|---|---|
+| 1 | Major | **The "no leakage" claim is unconditional,** but the label parser uses each message's latest edited text at its original posting time. 17,181 alert messages since November 2025 were edited after the next forecast hour. It showed a forecast *could* use an edit early. It found no case where an edit actually changed an alert's type or place. | Agree. Fix the wording: state it as an assumption, with the evidence. A strict replay is impossible because Telegram keeps no edit history. |
+| 2 | Major | **Timing is described too generously.** "h=1" covers the hour *starting at* t, so the example's "forecast made one hour ahead" really covers an hour that's already starting (✓ checked). 30% of h=1 rows were already on alert, which explains much of the strong 1-hour score. The "calm at t" analysis, which the README calls "the onset question", measures whether an alert is on in the target hour, not whether one starts. | Agree. Correct the wording and rename the analysis. True alert-start labels would be a separate experiment. |
+| 3 | Major | **Pooled ROC-AUC hides the per-raion picture.** For calm raions a day ahead it's 0.84 pooled, but **0.54 within each raion on average**. So most of that discrimination comes from telling risky raions from safe ones, not from timing. Calibration also differs by raion: Mykolaiv raion's forecasts average 0.61 where 0.76 came true. | Agree. This matters: add within-raion metrics and qualify "the probabilities mean what they say". |
+| 4 | Major | **A cheap baseline we missed:** a probability table per raion × "on alert now or not", from the last 28 days. It scores **0.1210**, better than logistic regression (0.1217) and better than LightGBM a day ahead. LightGBM's mean lead over it is only 0.003. | Agree; add it. Use the 4-week window like the other baselines, and say it was added after the test run, at the reviewer's suggestion. A 7-day version won on validation but did worse on test, so picking the window now would be cherry-picking. |
+| 5 | Major | **The README's reproduction steps fail on a fresh clone.** `test-run` refuses to run because the report is committed (✓ checked). There's also no record of exactly which raw data files were used. | Agree. Let `test-run` write to a separate folder, and add a manifest of the input files with hashes. |
+| 6 | Major | **The AI conversation export is out of date:** it ends at 12:00 UTC today. | Already planned as the last step before submission. The reviewers' reports are in our session log as tool results, so they'll be in the export. |
+| 7 | Minor | **All-clears with a time in front of them** ("15:57 \| Відбій тривоги…") are read as unrecognised (✓ checked: 2 real messages, one of them part of the 12-day Lviv case). Fixing it changes 16 training hours; LightGBM goes from 0.11801 to 0.11809. | Fix the parser. Strictly, labels change, so the test needs a third run, documented like the second. |
+| 8 | Minor | **Telegram all-clear handling still drops threats within mixed lines:** "Цей не спостерігається ⚠️ ще 1 шахед повз Бровари…" loses the drone. | Telegram isn't in the final model. Fixing it means rerunning E4 and E5 again, so I'd document it as a known gap instead. |
+| 9 | Minor | **Kharkiv city deserves its own unit (Q16).** It differs from its raion in 8.9% of test hours, above the 5% threshold. | It's already a listed limitation; add the number. The full Q16 check is half a day to a day. |
+
+## Its improvement ideas
+1. Make the claims precise (findings 1–3): the cheapest and most valuable fix for graders.
+2. Make the submission reproducible and complete (findings 5–6).
+3. Add the conditional baseline (finding 4).
+4. **Mix in some of the recent rate for long horizons.** A 25% blend helped on both validation and test at 12 and 24 hours. But the gain over all six horizons on validation (0.0002) is below our 0.0005 rule, so it should only be reported as exploratory.
+5. Complete the Kharkiv city check.
+6. Audit the Telegram extraction on a hand-labelled sample.
+
+It also tried two ideas that **didn't** work: a 90-day training window, and the recent alert share as an extra feature.
+
+## My recommendation
+**Do now:** findings 1–7.
+- **Wording:** findings 1 and 2.
+- **Within-raion metrics:** finding 3.
+- **Conditional baseline:** finding 4, with its window fixed at 4 weeks.
+- **Reproduction:** an output folder for `test-run` and the data manifest (finding 5).
+- **Parser fix:** the time-prefixed all-clears (finding 7). Labels change, so the test is run a third time, documented.
+- **Export:** re-export last (finding 6).
+
+**Document only:** finding 8, finding 9 with the 8.9% number, and the long-horizon blend as an exploratory result.
+
+That's roughly 2–3 hours, including the reruns. Should I go ahead with this split, or change it?
+
+**Context handoff** (2026-10-13 14:54:14 UTC): T3 Code moved this chat back to the first Claude Code account and gave it the part of the thread it had not seen (the work above, done on the other account), which is not repeated here. The next message follows.
+
+---
+
+## User (2026-10-13 14:54:14 UTC)
+
+How else can we ask the Sol to review the project? What looks weak? We have plenty of usage left for it, so we can dig as deep as we need. Maybe find areas to improve the model or change the approach; check the quality of the code and test suite, whether it is actually strong, and whether each test brings actual value. Maybe let's drop some details, make the prompt general and short, and let the model investigate the project itself? I want to see deep, fundamental review.
+
+**Note** (2026-10-13 14:54:15 UTC): the first Claude Code account reached its usage limit here, and the assistant's turn stopped. Retries failed until the context handoff below.
+
+**Context handoff** (2026-10-13 14:54:43 UTC): T3 Code moved this chat back to the second Claude Code account and gave it the part of the thread it had not seen (the work above, done on the other account), which is not repeated here. The next message follows.
+
+---
+
+## User (2026-10-13 14:54:43 UTC)
+
+How else can we ask the Sol to review the project? What looks weak? We have plenty of usage left for it, so we can dig as deep as we need. Maybe find areas to improve the model or change the approach; check the quality of the code and test suite, whether it is actually strong, and whether each test brings actual value. Maybe let's drop some details, make the prompt general and short, and let the model investigate the project itself? I want to see a deep, fundamental review. Sorry for the handoff, picked wrong account(
+
+### Assistant (2026-10-13 14:55:05 UTC)
+
+You didn't do anything wrong: T3 Code moved the chat back to the other account and passed along your message, so nothing was lost.
+
+Before I suggest a prompt, one practical question: can a reviewer work on its own copy of the repo? Then it could change code and retrain models freely without touching the real one. Checking the size of the data:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 14:56:28 UTC)
+
+A private copy works: it takes 3 seconds, the offline environment uses the copy's own code, and all 153 tests pass there. So the reviewer can change anything and rerun anything, retraining included, without touching the real repo.
+
+## What I think looks weak
+These are fundamental doubts, not bugs:
+
+1. **The headline number flatters the model.** The 1-hour forecast covers the hour that's starting right now, and 30% of those rows are already on alert. A day ahead, the model barely tells good hours from bad ones *within* a raion (ROC-AUC 0.54); it mostly knows *where* alerts happen, not *when*.
+2. **Hourly resolution may hide what Telegram knows.** Threat posts ("drones heading for X") come minutes before an alert, but an "any alert in this hour" label at hourly steps can't use minutes of warning. "Telegram didn't help" may say more about our framing than about Telegram.
+3. **Little signal for attack waves.** Big combined attacks drive alerts across the country, but the model only sees the alert history of each raion and its neighbours. Nothing tells it a wave is coming.
+4. **Thin evaluation.** All choices rest on one 4-week validation period and one 4-week test period.
+5. **The tests were written together with the code.** They may check that the code does what it does, rather than catch real mistakes. Earlier deliberate-bug checks covered specific fixes, not the whole suite.
+
+## A shorter, open prompt
+I'd leave all of the above out, so the reviewer finds its own problems; if it independently reaches the same points, that's stronger evidence:
+
+```
+Review this project deeply and independently: /Users/david/proj/air-alert-forecast, a forecasting project
+for a university selection task (the brief is quoted in README.md and docs/DESIGN.md). Treat nothing in its
+docs as correct until you have checked it.
+
+Work in a private copy, so you can change and run anything:
+  rsync -a --exclude .venv /Users/david/proj/air-alert-forecast/ /tmp/review-3/repo/
+  cd /tmp/review-3/repo && uv sync --offline
+Never modify the original repo, never commit or push, no network. Keep a draft report in /tmp/review-3/ as
+you go, and delete /tmp/review-3/ when you finish.
+
+Answer four questions, with evidence; prefer experiments to opinions:
+1. Is the approach right: framing, data, labels, features, model, evaluation? If you started over with the
+   same data and a few days, what would you do differently, and would it actually work better? Try the most
+   promising ideas.
+2. How good is the model really, and where does its skill come from? What would make it meaningfully better?
+3. Is the code sound: correctness, design, the parts most likely to hide bugs?
+4. Is the test suite strong? Which tests would catch real bugs (break the code on purpose to find out), which
+   add nothing, and what important behaviour is untested?
+
+For model experiments, choose on the validation period; use the test period only to confirm, and say when you did.
+
+Stop when further digging would only add minor points. Report: a short verdict; then the findings ranked by
+importance (severity, where, evidence, reproduced or only reasoned, fix and effort); then the improvements you
+would make, ranked by expected gain for the effort, with your experiment results.
+```
+
+**What's different from round 2:**
+- **Shorter, and it names no areas to check;** the four questions set the direction.
+- **It may change anything** and run anything, in its own copy, including new models and framings.
+- **The test suite gets a real check:** it breaks code on purpose to see which tests notice.
+- **It asks for the best way forward,** not only what's wrong.
+
+## Settings
+GPT-6.1-Sol, standard tier, at **Max** effort rather than Extra High, since you want depth and have the quota. Max is the level above Extra High; it costs more and takes longer.
+
+## The round-2 fixes
+They haven't started; you hadn't answered yet. The reviewer works on a snapshot taken when it starts, so I can make the round-2 fixes in the real repo at the same time without interfering. It will probably find some of the same issues again; that's independent confirmation, not wasted work. If it proposes a bigger change, such as a different framing, we decide afterwards what to build on.
+
+Should I send it with Max effort and start the round-2 fixes alongside?
+
+---
+
+## User (2026-10-13 15:05:10 UTC)
+
+Give it more freedom in the research. Like checking the web, finding new sources, and comparing different theories to find out whether they make any difference. I like the Max suggestion; we'll use that. 
+You can send the modified prompt to the model and start fixing the findings. I will also like to polish the docs, maybe debloat it a little. Check whether the info in the README (and others) is essential; can it be shrinked carrying the same value? And is it the actual README structure, and not just the log of everything we found out? I think of the README as the landing page of the project, with the essentials on how to run it, what is it and needed context. But you can defend the point of each section in it.
+
+### Assistant (2026-10-13 15:05:20 UTC)
+
+Sending round 3 now. Besides the extra research freedom, I made one safety change to the copy step: it leaves out `.env` and the Telegram login. With network access the reviewer could otherwise use your API keys or Telegram account.
+
+- Tool call: mcp__t3-code__delegate_task
+
+### Assistant (2026-10-13 15:05:30 UTC)
+
+Sending failed with "parent not active", which looks like a leftover from the account switch. Retrying the same request:
+
+- Tool call: mcp__t3-code__delegate_task
+- Tool call: mcp__t3-code__t3_thread_read
+
+### Assistant (2026-10-13 15:05:46 UTC)
+
+The thread does show this session as the active run, so the error may be stale. Checking whether the orchestrator answers at all:
+
+- Tool call: ToolSearch
+- Tool call: mcp__t3-code__orchestrator_capabilities
+
+### Assistant (2026-10-13 15:05:52 UTC)
+
+The orchestrator responds normally and says this session can start child tasks. The failed attempt may be cached under its request ID, so I'm retrying with a new one:
+
+- Tool call: mcp__t3-code__delegate_task
+
+### Assistant (2026-10-13 15:06:11 UTC)
+
+The review hasn't started. Every attempt to send it fails with "The calling provider no longer owns an active thread run". It looks like a leftover of the account switch: T3 Code still treats the delegation connection as belonging to the other Claude account's session, so it rejects child tasks from this one. Starting a new request didn't help, and I can't fix that from inside this session.
+
+Two ways to get it running:
+1. **I launch it as a separate T3 thread** running GPT-6.1-Sol at Max effort, with the same prompt. That works now and doesn't depend on the delegation connection. The difference: it shows up as its own conversation in your sidebar, not as a child task of this one. I'd keep its thread ID and read its report from there when it finishes.
+2. **Wait for the next message you send.** The connection may be rebuilt for the new turn, and then I retry the normal way. That's not guaranteed.
+
+I'd go with 1. Should I launch it that way?
+
+Meanwhile I'll start on the fixes and the README cleanup, so the review isn't holding anything up. The reviewer copies the repo when it starts, so it may see some fixes already in place; that doesn't affect its independence.
+
+---
+
+## User (2026-10-13 15:07:56 UTC)
+
+Try again; if it fails, go with 1. Don't start the fixes afterwards just yet.
+
+- Tool call: ToolSearch
+- Tool call: mcp__t3-code__delegate_task
+
+### Assistant (2026-10-13 15:08:16 UTC)
+
+The child-task route failed again with the same error, so I'm using option 1: launching the review as its own T3 thread on the project folder, GPT-6.1-Sol at Max effort, standard tier.
+
+- Tool call: mcp__t3-code__t3_thread_launch
+
+### Assistant (2026-10-13 15:08:35 UTC)
+
+Neither route worked. The retry failed again, and launching a separate thread failed with the same error: "The calling provider no longer owns an active thread run." Since both use the same connection, T3 Code is rejecting all orchestration calls from this session, not just child tasks. Most likely the connection is still tied to the run on the other Claude account. I can't repair that from inside this session, so nothing is running and I haven't started the fixes.
+
+**Quickest way forward: start it yourself in T3 Code.** Open a new thread on this project, choose **GPT-6.1-Sol**, Reasoning **Max**, Service Tier **Standard**, and paste the prompt below. It's the version you approved, unchanged. When it finishes, tell me, or paste its thread link here, and I'll read the report from it and check its findings like last time.
+
+```
+Review this project deeply and independently: /Users/david/proj/air-alert-forecast, a forecasting project
+for a university selection task (the brief is quoted in README.md and docs/DESIGN.md). Treat nothing in its
+docs as correct until you have checked it.
+
+Work in a private copy, so you can change and run anything:
+  rsync -a --exclude .venv --exclude .env --exclude '*.session*' /Users/david/proj/air-alert-forecast/ /tmp/review-3/repo/
+  cd /tmp/review-3/repo && uv sync --offline
+Never modify the original repo, never commit or push. Keep a draft report in /tmp/review-3/ as you go, and
+delete /tmp/review-3/ when you finish.
+
+You may use the web: read papers and articles, look for other data sources (public datasets, APIs, channels,
+news), download public data into your copy, and install packages there if you need them. Do not use the
+project's credentials, log in to any service, or publish or send anything (including the project's code or data)
+anywhere.
+
+Answer four questions, with evidence; prefer experiments to opinions:
+1. Is the approach right: framing, data, labels, features, model, evaluation? If you started over with the
+   same goal and a few days, what would you do differently, and would it actually work better? Where there
+   are competing ideas (about what drives alerts, what data carries signal, how to frame or evaluate the
+   forecast), state them and test which ones make a measurable difference. Try the most promising ideas,
+   including new data sources.
+2. How good is the model really, and where does its skill come from? What would make it meaningfully better?
+3. Is the code sound: correctness, design, the parts most likely to hide bugs?
+4. Is the test suite strong? Which tests would catch real bugs (break the code on purpose to find out), which
+   add nothing, and what important behaviour is untested?
+
+For model experiments, choose on the validation period; use the test period only to confirm, and say when you
+did. Respect the brief's no-leakage rule in everything you try: an input must have been published before the
+forecast time, including any new data source.
+
+Stop when further digging would only add minor points. Report: a short verdict; then the findings ranked by
+importance (severity, where, evidence, reproduced or only reasoned, fix and effort); then the improvements you
+would make, ranked by expected gain for the effort, with your experiment results and sources (links) for any
+new data or research you relied on.
+```
+
+**One thing to check in that thread: web access.** The prompt allows web research, but Codex may block the network depending on the thread's permission mode. If the reviewer reports that it can't reach the web, switching that thread to full access fixes it.
+
+**If you'd rather I launch it:** restarting T3 Code, or switching this chat's account and back, may reconnect the orchestration so I can try again from here. That isn't guaranteed.
+
+---
+
+## User (2026-10-13 15:10:07 UTC)
+
+It's ok; try one more time. I restarted the app. If it fails, I'll run it myself.
+
+- Tool call: ToolSearch
+- Tool call: mcp__t3-code__delegate_task
+
+### Assistant (2026-10-13 15:10:23 UTC)
+
+The restart fixed it: **round 3 is running** as a background child task of this chat. It's GPT-6.1-Sol at **Max** effort on the standard tier, with the prompt you approved: a private copy without your credentials, web research allowed, and the four questions.
+
+Nothing else is running, and I haven't started the fixes or the README cleanup.
+
+When it finishes, I'll:
+- check that the original repo is untouched and that it deleted `/tmp/review-3/`;
+- list everything it found, its experiments and their results, and the sources it used;
+- re-check the most important claims myself before suggesting anything.
+
+If it hits a quota limit partway, its draft report in `/tmp/review-3/` should survive, and I'll recover what it found from there.
+
+---
+
+## User (2026-10-13 15:10:52 UTC)
+
+/compact
+
+**Context compaction** (2026-10-13 15:11:59 UTC): after the user's `/compact`, Claude Code replaced the earlier conversation in the model's working context with a summary. The summary is not repeated here: the full conversation is above. The conversation continues below.
+
+---
+
+## User (2026-10-13 15:12:30 UTC)
+
+You can go and fix the findings and think about the docs cleanup.
+
+- Tool call: ToolSearch
+- Tool call: Bash
+- Tool call: mcp__t3-code__task_status
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:13:01 UTC)
+
+Round 3 is still running. I'm starting the round-2 fixes you approved, findings 1–7, and checking which of them the last two commits already covered.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:13:46 UTC)
+
+Starting with the parser fix for time-prefixed all-clears, then I'll measure how many labels it changes.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:14:18 UTC)
+
+Now rebuilding the labels and comparing them with the previous ones:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:15:44 UTC)
+
+Baseline added and tested. Now making `test-run` reproducible on a fresh clone: an output folder option and a manifest of the input data.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:16:33 UTC)
+
+Now the CLI flags, tests, and the figures script's model list:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:16:57 UTC)
+
+Now the figure script, so the new baseline appears in the chart:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:17:31 UTC)
+
+All 157 tests pass. Now the third test run: first the validation backtest (with the new baseline and corrected labels), then the test run, the report and the figures. Running it in the background:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:17:38 UTC)
+
+While that runs, I'm checking the reviewer's Kharkiv city number (8.9% of test hours) before I put it in the docs:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:18:10 UTC)
+
+City zones are left out of the alert table, so I'll check the number straight from the messages:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:18:37 UTC)
+
+Fast, a few minutes. Meanwhile I'm reading the rest of DESIGN.md to plan the cleanup:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:19:20 UTC)
+
+The test rerun is still going. Meanwhile I found 5 data figures the script draws that no doc shows, so I'm looking at them to decide whether the README needs any:
+
+- Tool call: Read
+- Tool call: Read
+- Tool call: Read
+- Tool call: Bash
+
+### Assistant (2026-10-13 15:19:32 UTC)
+
+While it runs, I'm making the doc edits that don't depend on the new numbers. First CONTEXT.md and DESIGN §1 and §3:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+**Note** (2026-10-13 15:19:51 UTC): the second Claude Code account reached its usage limit here, and the assistant's turn stopped. Retries failed until the context handoff below.
+
+**System notification** (2026-10-13 15:31:13 UTC): background task completed: Background command "Rerun validation backtest, test run, report, figures" completed (exit code 0)
+
+---
+
+## User (2026-10-13 15:47:59 UTC)
+
+Delegated task node:delegated-task:command%3Amcp%3A9ec457cc-c779-4134-bb12-8aa9560968e4%3Adelegate-task%3Aaaf-project-review-round-3-sol-max-d reached a terminal state. Use task_status with taskId node:delegated-task:command%3Amcp%3A9ec457cc-c779-4134-bb12-8aa9560968e4%3Adelegate-task%3Aaaf-project-review-round-3-sol-max-d to read the result.
+
+**Context handoff** (2026-10-13 16:52:47 UTC): T3 Code moved this chat back to the first Claude Code account and gave it the part of the thread it had not seen (the work above, done on the other account), which is not repeated here. The next message follows.
+
+---
+
+## User (2026-10-13 16:52:47 UTC)
+
+Continue
+
+### Assistant (2026-10-13 16:53:06 UTC)
+
+I'll check where the work stopped: repo state, the third test run, and which edits are uncommitted.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:53:14 UTC)
+
+The third test run finished and the figures were redrawn, but nothing from it is committed yet. First I'll read the run's results and the state of the tests.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:54:36 UTC)
+
+The saved alerts drop city zones, so I'll re-derive Kharkiv city's alert periods straight from the channel messages using the same parser and state machine.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:54:46 UTC)
+
+I'll try one cheap pass: feed the raw messages through the same alert state machine and keep Kharkiv city's own periods. If it takes more than that, I'll attribute the number to the reviewer instead.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:55:59 UTC)
+
+Now I have the numbers. First I'll retrain the forecast model with the final code and labels, so the README's `predict` excerpt is real:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:56:43 UTC)
+
+Now I'll rewrite the README results block with the exact run-3 numbers, generated from the CSV so nothing is retyped by hand:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:56:59 UTC)
+
+The bolding was computed over every model including the Telegram variants, which is why LightGBM isn't bold at h = 1. I'll restrict it to the models in the table:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:57:23 UTC)
+
+Before writing the "without frontline units" bullet, I'll check what the run-3 numbers say about the ranking there:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:57:36 UTC)
+
+Now the README edits. I'll replace the whole Results block first, then fix the individual claims below it.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:58:12 UTC)
+
+The rest of the README needs the same treatment. First I'll verify the calibration figures I quoted against run 3's saved predictions, since they were first computed on the earlier run:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:58:23 UTC)
+
+Both calibration figures hold (35% and 43%). Now the Telegram numbers, the usage section, the leakage wording and the limitations:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:58:48 UTC)
+
+The README now cites `test-run --out`, so I'll confirm the CLI supports it and that the full test suite and the figure script still run clean:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:59:15 UTC)
+
+All 157 tests pass, and the reproduction path behaves as the README says. I'll check the redrawn figures with the extra baseline, since five lines on one chart can easily collide:
+
+- Tool call: Read
+- Tool call: Read
+
+### Assistant (2026-10-13 16:59:33 UTC)
+
+The charts read fine, but the right-hand labels drift up from their lines (Historical rate's label sits well above its line). I'll tighten the label spacing and redraw:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 16:59:37 UTC)
+
+BSD `sed` rejects the second pattern (it contains a slash-free quote issue), so I'll make the same edit with Python:
+
+- Tool call: Bash
+- Tool call: Read
+
+### Assistant (2026-10-13 16:59:52 UTC)
+
+The labels now collide. A legend below the charts is cleaner than end-of-line labels with five similar lines, so I'll switch to that:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Read
+
+### Assistant (2026-10-13 17:00:05 UTC)
+
+The legend overlaps the x-axis label. I'll push it lower and use three columns:
+
+- Tool call: Bash
+- Tool call: Read
+
+### Assistant (2026-10-13 17:00:15 UTC)
+
+The chart is clean now. Next is the DESIGN.md decision log, which still describes the first test run's numbers. Let me read its current state:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:00:24 UTC)
+
+I'll bring the decision log up to run 3 and record the second review's fixes. One caveat belongs in the record: experiments E1–E5 ran before the clock-prefix parser fix.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:00:44 UTC)
+
+Now I'll commit in logical pieces: parser fix, models and test-run changes, reports, figures, then docs. The commit attribution follows the current session's model.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:01:31 UTC)
+
+The alerts.in.ua history does carry the level, so I can close that open item too. Applying the stale-text fixes now.
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:02:34 UTC)
+
+The fixes are in and committed: 8 commits, 157 tests passing, and the repo is clean. Here's what changed since the second review, then the prompt for the deep review.
+
+**Fixes**
+- **Parser:** all-clears that start with a time ("15:57 | Відбій тривоги") are now recognised. The test period was run a third time because of it. LightGBM scored 0.1181 (it was 0.1180 on the first two runs), and the ranking is the same.
+- **New baseline: Recent rate by state.** It is the strongest simple one, and it ties LightGBM at 12 and 24 hours. It leads on average by only 0.0032 (95% interval 0.0014–0.0049), and clearly only up to 6 hours. The README now says this plainly.
+- **Per-raion metrics:** pooled ROC-AUC mostly measures telling raions apart. Within each raion it is 0.66 one hour ahead and 0.54 a day ahead for raions that are calm at the time.
+- **Reproduction:** `test-run --out <folder>` reproduces the run elsewhere without touching the committed report, and a manifest lists the input files with hashes.
+- **README wording:**
+  - the test period is described as run three times;
+  - "h = 1" is described as the hour starting at t, not an alert start;
+  - the leakage claim states its one assumption, with numbers: 17,816 of 187,066 alert messages since November 2025 were edited after the next hour;
+  - Kharkiv city is listed as limitation: two quick counts (mine 8.6%, the reviewer's 8.9%) put it apart from its raion in about 9% of test hours, above our 5% threshold.
+- **Docs cleanup:** I fixed the stale statuses: plan rows 8, 11 and 12, the section 6 title, two ADRs that still called Q2 open, and the alerts.in.ua level question (the history does carry a level). I did not restructure anything.
+- **E1–E5 ran before the parser fix and were not rerun.** The fix touches 16 training hours, so I judged the effect too small to matter and documented it.
+- **Forecast model:** I retrained it, and the README excerpt of `predict` output is regenerated from it.
+
+**What looks weakest, in my view**
+1. **Skill drops off a day ahead.** There, the model is no better than a two-numbers-per-raion table, so a different target or approach may matter more than tuning.
+2. **Model choices rest on four validation weeks,** about 20 variants in total, and the test period is also four weeks of one season.
+3. **The feature set is small:** alert history only, since Telegram failed. Nothing like weather, strike-wave patterns or day-of-attack structure.
+4. **Tests:** the leakage tests (comparing against a naive reimplementation, and rewriting data after t) look strong. I'm less sure about the rest, such as the config tests, the scripts and the figure code. There is no end-to-end test.
+5. **Code:** many modules have long lines and big tables in the code, and there's no linter or CI.
+
+**Proposed deep-review prompt for GPT-6.1-Sol (Extra High, standard tier)**
+
+```
+You are a senior ML engineer reviewing a finished mini-project: probabilistic forecasts of air raid alerts in
+Ukraine (per raion, hourly, horizons 1–24 h) from alert history; Telegram posts were tried and did not help.
+Repo: /Users/david/proj/air-alert-forecast. The brief it answers: "Time series analysis of air raid alerts in
+Ukraine. Use the most recent data and evaluate on the latest period. No data leakage: nothing the model is trained
+on or uses as input may come from after the forecast time. Text/media data is optional, same rule." Selectors will
+read the README, docs/DESIGN.md and the code.
+
+Be fundamental, not cosmetic. Start at README.md, then investigate however you like: docs, src/airalert, scripts,
+tests, reports/, and the local data in data/ (not in git). Challenge everything: the problem framing and target,
+the label source, the evaluation design, the features and model, the conclusions drawn, and what we may have
+missed: easier or more valuable approaches, obvious baselines, better targets or metrics, overlooked data.
+
+Judge in particular:
+1. Whether the headline results hold and whether anything leaks.
+2. Whether a different approach could do materially better, especially a day ahead. Test promising ideas with
+   real experiments, not opinions.
+3. Code quality, and how strong the test suite really is. For each test file say what it protects and how well;
+   find tests that cannot fail or protect little; find important behaviour nothing tests (for example, break the
+   code on purpose and see whether any test notices).
+
+Rules:
+- Work only in a scratch copy at /tmp/review-3 (a git worktree is fine; symlink data/). Edit and run freely there.
+  Never write to the main working tree, never commit, no network, never open .env or airalert.session.
+- Experiments use the validation period only (2026-08-17 to 2026-09-14). The test period (2026-09-14 to
+  2026-10-12) must not be used to compare or choose anything.
+- Keep a running draft of your report at /tmp/review-3-report.md as you go, so a cutoff loses nothing.
+- When finished, delete the scratch copy and your temp files (except the report until you have sent it), and confirm
+  `git status` in the main tree is unchanged.
+
+Stop when you can answer, with evidence: Would a skeptical expert trust the headline result? Which three changes
+would pay off most (with measured effect where you could measure)? Which code and tests are weakest?
+
+Report: ranked findings (severity, file:line, evidence or commands, suggested fix); improvement ideas with measured
+effect; a per-file assessment of the tests; a short verdict.
+```
+
+The differences from round 2 are that it doesn't hand over our known problems, so it can't be steered by them. It may edit and run code, but only in a scratch copy in `/tmp`. It keeps a running draft of its report, so a usage-limit cutoff doesn't lose its work. And it has a stopping rule: three questions answered with evidence.
+
+Should I send it as is, or change anything first? After the review, I'll go through its findings with you the same way as before, then do the final conversation re-export last.
+
+---
+
+## User (2026-10-13 17:09:18 UTC)
+
+The review agent has already finished; check it. We started it a few messages ago
+
+### Assistant (2026-10-13 17:09:26 UTC)
+
+I don't have a record of that run in my current context, so I'll look for it in the thread list.
+
+- Tool call: ToolSearch
+- Tool call: mcp__t3-code__t3_thread_list
+- Tool call: mcp__t3-code__t3_thread_read
+
+### Assistant (2026-10-13 17:10:12 UTC)
+
+The round-3 review (GPT-6.1-Sol at Max effort) finished. It reviewed the snapshot at commit `2ca5ac6`, so some of its findings were fixed before it reported. It left no files behind, and its own `/tmp` copy is deleted. Separately, your top-level thread "Review Model and Project Architecture" is still running. I haven't touched it.
+
+## Verdict
+- **The approach is sensible and the results reproduce.**
+  - All 472,908 test predictions matched to 5×10⁻¹⁵.
+  - Mean Brier is 0.1180.
+  - The model keeps real short-term skill.
+- **The leakage claim is conditional on one assumption.** The reviewer calls it unverified, not wrong.
+
+## Findings (P1 = most important)
+| # | What it found | Status |
+|---|---|---|
+| 1 (P1) | **The edited-message assumption is material.** 7.3% of label messages crossed an hourly boundary before their last edit, and 3.1% were edited over an hour later. A pessimistic replay (everything available only from its last edit) raised validation Brier by 0.0107, and at h=1 from 0.0686 to 0.0968. It stresses this is a sensitivity bound, not proof that edits changed anything. | **New.** The README states the assumption, but not this sensitivity number. |
+| 2 (P1) | **Stronger baseline and pooled-score interpretation.** A 7-day rate split by raion and current alert state scores 0.1243 on test (LightGBM 0.1180). Pooled day-ahead ROC-AUC is 0.890, but 0.551 within each raion. | **Mostly fixed.** I added the 28-day state-split baseline and the within-raion metrics. The 7-day window differs, but it was chosen after seeing test results, so I won't switch to it. |
+| 3 (P2) | **Unknown hours are the hardest ones.** Where the official channel could supply a target, 312 otherwise-unscored validation targets scored Brier 0.296 at h=1 (normal rows: 0.069). So reported scores are conditional on excluding some source failures. | **New.** Needs a limitation with these numbers. |
+| 4 (P2) | **Test gaps.** 7 of 22 deliberate code breaks went unnoticed by the 153 tests: reading the answer column in prediction, early-stopping on the wrong rows, target calendar shifted by an hour, an off-by-one at the exact cutoff (twice), forecasts assigned to the wrong raion, and loading the oldest saved model. It found no sign that LightGBM actually reads answers. | **New.** |
+| 5 (P2) | **The official reference doesn't rebuild identically:** 9,648 of 3.8M hourly labels differ. This affects only the label-quality check, not the model. | **New.** The same 9,648 appeared in round 1, so it's consistent. |
+| 6 (P2) | **A correction timestamped exactly at the cutoff counts as known.** It happens zero times at the real cutoffs. | **New.** I confirmed it in `backtest.py`: `>` should be `>=`. |
+| 7 (P3) | Clock-prefixed all-clears misread. | **Already fixed** in `99cba65`. |
+
+The reviewer's model experiments found nothing worth adopting. It tried weather forecasts (issued 48 hours ahead), geography, drone-volume summaries, shorter training windows, recency weighting, blends and a separate first-hour model. Removing all country, oblast and neighbour features changed validation Brier by only 0.00009, so the "neighbours matter" explanation in our docs is weaker than it reads. Removing current-state features cost 0.0096, and removing calendar features 0.0009. One lead: a live 7-day rate beat LightGBM at 24 hours on test (by 0.0021, interval 0.0003–0.0039). But picking it now would use test results to choose, so it can only be a future-work idea.
+
+## My recommendation
+**Do now (about 2–3 hours)**
+1. **Provenance (#1):** reproduce the pessimistic replay myself, then put the sensitivity bound in the README and ADR-0007, clearly labelled as an upper bound.
+2. **Tests (#4):** add tests that kill the 7 surviving breaks, plus the exact-cutoff fix (#6).
+3. **Reference rebuild (#5):** rebuild the official reference, rerun `check-labels` and refresh the README's label-quality numbers.
+4. **Unknown hours (#3):** document the 312-target result as a limitation.
+
+**Optional, worth it for a grader:** a robustness backtest of the frozen configuration on 2–3 earlier four-week periods, since four weeks of one season is the main evaluation weakness the reviewer names. Roughly 30 minutes per period, and it never touches the test period. Note that earlier periods predate the September yellow/red alert levels, so it tests stability, not the same regime.
+
+**Document only:** the 7-day-rate idea and the "neighbour features add little" finding.
+
+Should I go ahead with the "do now" list, and do you want the optional robustness backtest?
+
+---
+
+## User (2026-10-13 17:13:24 UTC)
+
+Let's cover only the "Do now" section.
+
+### Assistant (2026-10-13 17:13:40 UTC)
+
+I'll start with the quick code fix and the test gaps. First I need the relevant code: the cutoff logic, the timeline's boundary handling, and the existing tests for both.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:13:46 UTC)
+
+An untracked `reports/review-2026-10-13/` folder has appeared that I didn't create in this session. I'll look at it before touching anything:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:14:45 UTC)
+
+Note that the existing random-data tests can only hit an exact-boundary case by luck, which is why those breaks survived. I'll add deterministic fixtures. Source changes first:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:14:56 UTC)
+
+Now the tests. For each of the seven surviving breaks there is a deterministic fixture whose expected values are worked out by hand, not by calling the code under test:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:15:09 UTC)
+
+They pass against the real code, which confirms my hand-worked values. Now the exact-cutoff, label-isolation, early-stopping and forecast tests:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:15:35 UTC)
+
+Now the forecast tests: forecast-to-raion assignment and the model selection in `latest_saved`.
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:16:34 UTC)
+
+Every break is now caught by a test, and the source files were restored (the diff shows only my intended edits). Full suite, then commit:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:19:06 UTC)
+
+The published-side tables are identical; only the label side changed (520 correction rows that the old cache lacked). Now what did that do to the label-quality numbers the README quotes?
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:21:26 UTC)
+
+I'll add the alerts.in.ua hour-level check to `check-labels` so the number is produced by code:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:23:04 UTC)
+
+I'll update the three places, keeping the older "effect of the rule" figure but marking it as measured before the rebuild:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:23:31 UTC)
+
+Label figures are in. Now the provenance replay (item 1). Before I write it, I need to see how the label build is assembled, because I'll re-run it with every message dated by its last edit:
+
+- Tool call: Bash
+- Tool call: Write
+- Tool call: Bash
+- Tool call: Write
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:26:53 UTC)
+
+It's still running. I'll wait on it properly instead of polling:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:27:05 UTC)
+
+The replay is running in the background. So far this session's work, ahead of the results:
+- **Done and committed:** the strictly-before cutoff fix and the test gaps (`6170aaf`; all seven broken-code cases are now caught).
+- **Done, uncommitted:** the official-reference rebuild, with refreshed label-quality figures and the new alerts.in.ua hour-level check (99.84%).
+- **In progress:** the last-edit replay (item 1). The unknown-hours script (item 4) is written and waits for the replay to finish so the two don't compete for CPU.
+
+I'll report when the replay finishes.
+
+**System notification** (2026-10-13 17:28:53 UTC): background task completed: Background command "Wait for the replay to finish and print its result" completed (exit code 0)
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:39:58 UTC)
+
+The warning is gone and the numbers are identical. Now I'll record all four results in the README, ADR-0007 and the DESIGN decision log:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:40:37 UTC)
+
+All 165 tests pass. Committing in three pieces, naming paths explicitly so the other thread's review folder stays out:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 17:40:49 UTC)
+
+The four "Do now" items are done and committed (4 commits, 165 tests passing, repo clean except the other thread's review folder, which I left alone).
+
+**1. Provenance (edited messages).** I reproduced the sensitivity, but I get a smaller number than the reviewer. In my replay every message counts only from its last edit, for both features and training labels, with scoring against our standard outcomes. Validation Brier then rises by at most 0.0036 on average (3%). Most of that is at 1 hour ahead (+0.0087). For raions calm at the time it's +0.0008. The reviewer got 0.0107. The two differ in how outcomes are scored, and I wrote that in ADR-0007. This is an upper bound, since it also delays every alert start by the edit delay. It's now in the README and ADR-0007, with the script and CSV (`scripts/replay_edit_times.py`, `provenance_replay.csv`).
+
+**2. Tests and the cutoff boundary.**
+- **Breaks now caught:** the seven undetected breaks are covered by new tests, and I re-created each break and confirmed a test fails. The tests include hand-worked fixtures for alert starts and ends exactly at t, target calendar features across midnight, and the earlier-day and earlier-week features. Others check that no model reads the label columns, that early stopping uses only the last 7 training days, that forecast rows go to the right raion, and that the newest saved model is loaded.
+- **Cutoff fix:** a correction posted exactly at a training cutoff no longer counts as known. It never happened at the real cutoffs, so no score changed.
+- **Seams in `forecast.py`:** `forecast` and `latest_saved` can now be tested without disk data, with no change in behaviour.
+
+**3. Official reference.** The cached official tables predated two builder commits, so the label-quality figures were stale. After rebuilding, hour-level agreement with the official record is 99.7–99.8% per year (was 99.5–99.7%) and the worst month is 98.8% (was 97.3%). The message-level result is unchanged: 33 of 176 rows still below 98%. The README's "99.8% hour-level agreement" with alerts.in.ua had no code behind it, so I added the check. It now reports 99.84%.
+
+**4. Unknown hours.** I reproduced the reviewer's finding. On 312 unknown-label rows per horizon where the official record gives the outcome, Brier is 0.30 at 1 hour and 0.24–0.26 at 6–24 hours, against 0.07 and 0.12 on normally scored rows. These are 0.4% of rows, but they are the hours after a missed all-clear. It's in the README limitations and the DESIGN decision log.
+
+**Left alone, as you asked:**
+- the optional robustness backtest;
+- the 7-day-rate idea (choosing it now would use test results);
+- the "neighbour features add little" finding, which I did not document.
+
+**Still to do before submitting:**
+1. The reviews' reports are in our session log. Your other review thread ("Review Model and Project Architecture") was still running, and its output sits untracked in `reports/review-2026-10-13/`.
+2. The final conversation re-export, last, once you're done with that thread.
+
+Should I wait for that thread, or do the export now?
+
+---
+
+## User (2026-10-13 17:43:50 UTC)
+
+Ignore reports/review-2026-10-13, it was my local tests. Let's export the final version of the conversation, and we are done.
+
+- Tool call: Bash
