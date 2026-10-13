@@ -15,5 +15,9 @@
   "e4_telegram": {
     "logistic": "without",
     "lightgbm": "without"
+  },
+  "e5_telegram_targeted": {
+    "logistic": "without",
+    "lightgbm": "without"
   }
 }

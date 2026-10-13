@@ -146,6 +146,13 @@ Decision log (smaller choices that are easy to reverse):
 - **Complete raw downloads:** downloads cover every location, including ones we won't forecast. Exclusions happen when units are built, so they are visible and reversible. *(2026-10-12)*
 - **Excluded from forecasting:** Luhansk oblast, Crimea and Sevastopol. Their alerts are permanent, so there is nothing to predict. *(2026-10-12)*
 - **Time zones:** timestamps are stored in UTC. Calendar features (hour, weekday) are computed in Europe/Kyiv local time, so they follow daylight saving. *(2026-10-12)*
+- **Validation experiments, results** (mean Brier over the six horizons; files in `reports/validation/experiments/`): *(2026-10-13)*
+  - **E1, training start:** 2025-11-01 for both models (logistic 0.11013, LightGBM 0.11046), ahead of 2023-01-01 (0.11226 / 0.11231) and the 2025-08-01 default (0.11245 / 0.11268). Likely reason: the alert pattern changes over time, so older rows describe a regime that no longer applies.
+  - **E2, shared or per unit:** shared for both (logistic 0.11013 vs 0.11359 per unit; LightGBM 0.11046 vs 0.12209). Likely reason: one raion's own rows (about 7,000 hours since November 2025) are too few to learn from alone.
+  - **E3, LightGBM settings:** no unit identity (0.10881) beats the default (0.11046); the other settings fall between 0.11011 and 0.11174. Likely reason: without raion and oblast names the model must rely on what is happening around the unit, which carries over to new weeks better than a raion's own past.
+  - **E4, all Telegram features:** left out of both models. Logistic gains 0.00032 (0.11013 → 0.10981), below the 0.0005 threshold; LightGBM gets worse (0.10881 → 0.10910).
+  - **E5, targeted Telegram set (7 features):** left out of both models. Logistic gains 0.00037 (0.11013 → 0.10976), below the threshold; LightGBM gets worse (0.10881 → 0.10948), at every horizon. Telegram threat posts add little beyond the alert history of the unit and its neighbours at hourly resolution. Per E5's protocol, no further Telegram variants are tried on validation.
+  - **Configuration for the test run:** training from 2025-11-01, one shared model, LightGBM without unit identity, alert-history features only; logistic regression and both baselines alongside; each model also with the targeted Telegram set (ablation).
 
 ## 5. Data sources (checked 2026-10-12)
 
@@ -471,7 +478,7 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | done (`features.py`, leakage tests) |
 | 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | main spec done (`features.py`: raion × 1 h × Active, h = 1–24); other specs (e.g. the daily Minutes spec) planned; real run after the download |
 | 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | code done (`backtest.py`, `models.py`); results blocked |
-| 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | running: experiments E1–E3 on validation (section 3) |
-| 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | place matching done (`places.py`); threat-type rules open (all channels downloaded) |
-| 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | blocked |
+| 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | done: E1–E3 (section 3); chosen: training from 2025-11-01, one shared model, LightGBM without unit identity |
+| 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | done (`places.py`, `threats.py`, `telegram_features.py`): 99% of `@kpszsu` and 93% of `@deraketaua` posts typed |
+| 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | E4, E5 done (Telegram not kept); test run open |
 | 16 | **Final run:** `update-data`, pinned test period, figures, README, notebook, AI conversation export | everything | blocked |
