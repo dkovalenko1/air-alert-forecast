@@ -1,4 +1,4 @@
-"""Forecasting models for one horizon: three baselines, logistic regression and LightGBM.
+"""Forecasting models for one horizon: four baselines, logistic regression and LightGBM.
 
 Every model has `fit(frame, y)` and `predict(frame) -> probability of an alert in the target hour`.
 `frame` holds the features of `feature_columns()`, with the horizon-specific ones already renamed
@@ -78,6 +78,28 @@ class RecentRate:
     def predict(self, frame):
         p = self.by_unit.reindex(frame["unit_id"].astype(object)).to_numpy()
         return np.where(np.isnan(p), self.overall, p)
+
+
+class RecentRateByState:
+    """Like RecentRate, but separately for hours when the unit was on alert at t and when it was calm: the share of
+    those hours whose target hour had an alert. Added after the test run, at an external reviewer's suggestion."""
+
+    name = "recent_rate_by_state"
+
+    def __init__(self, window=pd.Timedelta(days=28)):
+        self.window = window
+
+    def fit(self, frame, y):
+        recent = frame["t"] >= frame["t"].max() - self.window
+        data = frame.loc[recent, ["unit_id", "on_alert"]].assign(y=np.asarray(y)[recent.to_numpy()])
+        self.by_unit = data.groupby(["unit_id", "on_alert"], observed=True)["y"].mean()
+        self.by_state = data.groupby("on_alert")["y"].mean()
+        return self
+
+    def predict(self, frame):
+        keys = pd.MultiIndex.from_frame(frame[["unit_id", "on_alert"]].astype(object))
+        p = self.by_unit.reindex(keys).to_numpy()
+        return np.where(np.isnan(p), self.by_state.reindex(frame["on_alert"]).to_numpy(), p)
 
 
 class Logistic:
@@ -185,4 +207,4 @@ class PerUnit:
         return p
 
 
-MODELS = {m.name: m for m in (Persistence, HistoricalRate, RecentRate, Logistic, LightGBM)}
+MODELS = {m.name: m for m in (Persistence, HistoricalRate, RecentRate, RecentRateByState, Logistic, LightGBM)}

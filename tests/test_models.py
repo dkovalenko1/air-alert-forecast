@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from airalert.models import CATEGORICAL, NUMERIC, LightGBM, Logistic, PerUnit, RecentRate
+from airalert.models import CATEGORICAL, NUMERIC, LightGBM, Logistic, PerUnit, RecentRate, RecentRateByState
 
 
 def frame(n_days=40, seed=0):
@@ -70,3 +70,16 @@ def test_recent_rate_is_each_units_share_of_alert_hours_in_the_last_four_weeks()
     assert np.allclose(p[(data.unit_id == "A/a").to_numpy()], expected_a) and (p[(data.unit_id == "B/b").to_numpy()] == 0).all()
     unseen = data.iloc[:3].assign(unit_id=pd.Categorical(["C/c"] * 3))
     assert np.allclose(model.predict(unseen), y[recent].mean())
+
+
+def test_recent_rate_by_state_splits_each_units_share_by_its_state_at_t():
+    data, y = frame(n_days=40)
+    data["on_alert"] = np.random.default_rng(2).integers(2, size=len(data))
+    model = RecentRateByState().fit(data, y)
+    recent = (data.t >= data.t.max() - pd.Timedelta(days=28)).to_numpy()
+    p = model.predict(data)
+    for state in (0, 1):
+        rows = (data.unit_id == "A/a").to_numpy() & (data.on_alert == state).to_numpy()
+        assert np.allclose(p[rows], y[recent & rows].mean())
+    unseen = data.iloc[:2].assign(unit_id=pd.Categorical(["C/c"] * 2), on_alert=[0, 1])
+    assert np.allclose(model.predict(unseen), [y[recent & (data.on_alert == s).to_numpy()].mean() for s in (0, 1)])

@@ -8,6 +8,7 @@ known at the cutoff: if a retraction posted after the cutoff later corrected it,
 depend on outcomes in the test period.
 """
 
+import pathlib
 import time
 
 import numpy as np
@@ -149,9 +150,18 @@ def load_grid(period, train_start=TRAIN_START, channel: str = "UkraineAlarmSigna
     return grid
 
 
-def main(period: str, models, horizons=HORIZONS, train_start=TRAIN_START, telegram: bool = False) -> pd.DataFrame:
-    """Build the grid from the label periods, run the walk-forward backtest and write predictions and metrics.
-    `models` as in `run`; `telegram` adds the Telegram feature columns to the grid."""
+def predictions_path(report_dir) -> pathlib.Path:
+    """Where a report's predictions are saved: data/results/<report folder name>_predictions.parquet."""
+    from airalert.settings import ROOT
+
+    return ROOT / "data" / "results" / f"{report_dir.name}_predictions.parquet"
+
+
+def main(period: str, models, horizons=HORIZONS, train_start=TRAIN_START, telegram: bool = False,
+         report_dir=None) -> pd.DataFrame:
+    """Build the grid from the label periods, run the walk-forward backtest and write predictions and metrics
+    (to reports/<period>/ unless `report_dir` is given). `models` as in `run`; `telegram` adds the Telegram feature
+    columns to the grid."""
     from airalert.settings import ROOT
 
     start, end = PERIODS[period]
@@ -159,10 +169,10 @@ def main(period: str, models, horizons=HORIZONS, train_start=TRAIN_START, telegr
     print(f"{period}: {start:%Y-%m-%d} → {end:%Y-%m-%d}, {len(grid):,} grid rows, models: {', '.join(models)}", flush=True)
     predictions = run(grid, period, models, horizons, train_start)
 
-    results_dir, report_dir = ROOT / "data" / "results", ROOT / "reports" / period
-    results_dir.mkdir(parents=True, exist_ok=True)
+    report_dir = report_dir or ROOT / "reports" / period
+    predictions_path(report_dir).parent.mkdir(parents=True, exist_ok=True)
     report_dir.mkdir(parents=True, exist_ok=True)
-    predictions.to_parquet(results_dir / f"{period}_predictions.parquet", index=False)
+    predictions.to_parquet(predictions_path(report_dir), index=False)
     permanent = near_permanent_units(grid, *PERIODS["validation"])  # chosen on validation only (Q8)
     metrics = pd.concat([score(predictions).assign(units="all"),
                          score(predictions, exclude_units=permanent).assign(units="without near-permanent")])

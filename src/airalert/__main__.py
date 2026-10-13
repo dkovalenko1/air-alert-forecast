@@ -1,6 +1,7 @@
 """Command-line entry point: `uv run python -m airalert <command>`."""
 
 import argparse
+import pathlib
 
 from airalert import backtest, experiments, final, forecast, labels, telegram, threats, validation
 from airalert.models import MODELS
@@ -25,8 +26,11 @@ def main() -> None:
     experiment.add_argument("name", choices=list(experiments.EXPERIMENTS))
     experiment.add_argument("--assume-e2", choices=["shared", "per unit"],
                             help="start E3 while E2 is still running, assuming its LightGBM choice (checked afterwards)")
-    commands.add_parser("test-run", help="the single test run with the configuration chosen on validation")
-    commands.add_parser("test-report", help="intervals for model differences and weekly scores, from the saved test predictions")
+    test_run = commands.add_parser("test-run", help="the single test run with the configuration chosen on validation")
+    test_report = commands.add_parser("test-report", help="intervals, weekly and per-raion scores, from the saved test predictions")
+    for command in (test_run, test_report):
+        command.add_argument("--out", type=pathlib.Path, default=final.REPORT,
+                             help="report folder (default: reports/test; use another one to reproduce the run)")
     fit = commands.add_parser("train", help="fit the model chosen on validation on everything known at a cutoff, and save it")
     fit.add_argument("--cutoff", help="Kyiv time, e.g. '2026-10-12 21:00' (default: the last whole hour of the data)")
     pred = commands.add_parser("predict", help="print each unit's alert probability per horizon, with the saved model")
@@ -48,9 +52,9 @@ def main() -> None:
         else:
             experiments.EXPERIMENTS[args.name]()
     elif args.command == "test-run":
-        final.main()
+        final.main(args.out)
     elif args.command == "test-report":
-        final.report()
+        final.report(args.out)
     elif args.command == "train":
         forecast.train(args.cutoff)
     elif args.command == "predict":

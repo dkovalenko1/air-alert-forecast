@@ -3,20 +3,24 @@
 The configuration is read from the experiments' decisions (reports/validation/experiments/decisions.json): training
 start (E1), shared or per unit (E2), LightGBM settings (E3), Telegram or not (E4, E5). Each model also runs with the
 targeted Telegram set, the ablation fixed in E5's protocol, and the baselines run alongside. The run refuses to
-start if the test report already exists: the test period is used once. `report` adds day-resampled intervals for
-the differences between models and a per-week table, from the saved predictions (no model is run again).
+start if its report folder already has results: the test period is used once. To reproduce it, write to another
+folder (`test-run --out reports/test-rerun`). Each run also lists its input files with their hashes
+(data_manifest.csv). `report` adds day-resampled intervals for the differences between models, a per-week table and
+per-raion metrics, from the saved predictions (no model is run again).
 """
 
+import hashlib
 import json
 
 import numpy as np
 import pandas as pd
+from sklearn.metrics import roc_auc_score
 
 from airalert import backtest
 from airalert.experiments import OUT, chosen_factory
 from airalert.features import KYIV
-from airalert.models import HistoricalRate, Persistence, RecentRate
-from airalert.settings import ROOT
+from airalert.models import HistoricalRate, Persistence, RecentRate, RecentRateByState
+from airalert.settings import RAW_DIR, ROOT
 
 REPORT = ROOT / "reports" / "test"
 SUFFIX = {None: "", "targeted": " + Telegram (targeted)", "all": " + Telegram (all)"}
@@ -36,7 +40,9 @@ def configuration(decisions: dict) -> tuple[pd.Timestamp, dict, dict]:
     starts = set(decisions["e1_training_start"].values())
     if len(starts) != 1:
         raise SystemExit(f"E1 chose different training starts per model ({sorted(starts)}); the test run uses one.")
-    factories, chosen = {"persistence": Persistence, "historical_rate": HistoricalRate, "recent_rate": RecentRate}, {}
+    factories = {"persistence": Persistence, "historical_rate": HistoricalRate, "recent_rate": RecentRate,
+                 "recent_rate_by_state": RecentRateByState}
+    chosen = {}
     for model in ("logistic", "lightgbm"):
         choice = telegram_choice(decisions, model)
         for telegram in dict.fromkeys([choice, None, "targeted"]):  # the chosen variant first, no duplicates
@@ -53,19 +59,34 @@ def summary(metrics: pd.DataFrame) -> pd.DataFrame:
                          "mean_log_loss": main.log_loss.mean(), "mean_roc_auc": main.roc_auc.mean()}).sort_values("mean_brier")
 
 
-def main() -> None:
-    if (REPORT / "metrics.csv").exists():
-        raise SystemExit(f"{REPORT / 'metrics.csv'} exists: the test period is used once. Delete it only to rerun on purpose.")
+def data_manifest(raw_dir=RAW_DIR) -> pd.DataFrame:
+    """Every downloaded Telegram file with its message count, date range and SHA-256. Telegram returns each message's
+    latest text, so a later download of the same months can differ (edits, deleted messages); compare hashes."""
+    rows = []
+    for path in sorted((raw_dir / "telegram").glob("*/*.jsonl")):
+        data = path.read_bytes()
+        dates = [json.loads(line)["date"] for line in data.decode("utf-8").split("\n") if line]
+        rows.append({"file": path.relative_to(raw_dir).as_posix(), "messages": len(dates),
+                     "first": min(dates, default=None), "last": max(dates, default=None),
+                     "sha256": hashlib.sha256(data).hexdigest()})
+    return pd.DataFrame(rows)
+
+
+def main(out=REPORT) -> None:
+    if (out / "metrics.csv").exists():
+        raise SystemExit(f"{out / 'metrics.csv'} exists: the test period is used once. To reproduce it, "
+                         "write to another folder: test-run --out reports/test-rerun")
     decisions = json.loads((OUT / "decisions.json").read_text())
     train_start, factories, chosen = configuration(decisions)
-    REPORT.mkdir(parents=True, exist_ok=True)
-    (REPORT / "configuration.json").write_text(json.dumps({
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "configuration.json").write_text(json.dumps({
         "period": [f"{d:%Y-%m-%d}" for d in backtest.PERIODS["test"]], "train_start": f"{train_start:%Y-%m-%d}",
         "models": list(factories), "chosen": chosen, "decisions": decisions,
     }, indent=2, ensure_ascii=False) + "\n")
-    metrics = backtest.main("test", factories, train_start=train_start, telegram=True)
+    data_manifest().to_csv(out / "data_manifest.csv", index=False)
+    metrics = backtest.main("test", factories, train_start=train_start, telegram=True, report_dir=out)
     table = summary(metrics)
-    table.to_csv(REPORT / "summary.csv")
+    table.to_csv(out / "summary.csv")
     print(f"\nChosen on validation: {', '.join(chosen.values())}\nMean over the six horizons:\n{table.round(5).to_string()}")
 
 
@@ -109,18 +130,39 @@ def differences_by_horizon(predictions: pd.DataFrame, pairs: list[tuple[str, str
     return pd.concat(rows, ignore_index=True)[["a", "b", "subset", "horizon", "difference", "low", "high", "share_b_better"]]
 
 
-def report() -> None:
-    predictions = pd.read_parquet(ROOT / "data" / "results" / "test_predictions.parquet")
-    config = json.loads((REPORT / "configuration.json").read_text())
+def within_units(predictions: pd.DataFrame) -> pd.DataFrame:
+    """Per model, horizon and subset (all rows, units calm at t): ROC-AUC pooled over all units and averaged within
+    each unit, and how far each unit's mean forecast is from its alert share. Pooled ROC-AUC also rewards telling
+    risky raions from safe ones; the within-unit one asks only whether the forecast picks the right hours."""
+    rows = []
+    for subset, part in (("all", predictions), ("calm at t", predictions[predictions.on_alert == 0])):
+        for (model, h), group in part.groupby(["model", "horizon"]):
+            units = group.groupby("unit_id")
+            auc = units.apply(lambda u: roc_auc_score(u.y, u.p) if u.y.nunique() == 2 else np.nan, include_groups=False)
+            gap = units.p.mean() - units.y.mean()
+            rows.append({"model": model, "horizon": h, "subset": subset, "pooled_roc_auc": roc_auc_score(group.y, group.p),
+                         "within_unit_roc_auc": auc.mean(), "units_with_both_outcomes": int(auc.notna().sum()),
+                         "mean_abs_unit_gap": gap.abs().mean(), "largest_unit_gap": gap[gap.abs().idxmax()],
+                         "largest_gap_unit": gap.abs().idxmax()})
+    return pd.DataFrame(rows)
+
+
+def report(out=REPORT) -> None:
+    predictions = pd.read_parquet(backtest.predictions_path(out))
+    config = json.loads((out / "configuration.json").read_text())
     table = differences(predictions, comparisons(config["models"], config["chosen"]))
-    table.to_csv(REPORT / "differences.csv", index=False)
+    table.to_csv(out / "differences.csv", index=False)
     by_horizon = differences_by_horizon(predictions, [(a, b) for a, b in comparisons(config["models"], config["chosen"])
                                                       if " + Telegram" not in a])
-    by_horizon.to_csv(REPORT / "differences_by_horizon.csv", index=False)
+    by_horizon.to_csv(out / "differences_by_horizon.csv", index=False)
     weekly = (predictions.assign(se=(predictions.p - predictions.y) ** 2).groupby(["week", "model"]).se.mean()
               .unstack("model")[config["models"]])
-    weekly.to_csv(REPORT / "weekly.csv")
+    weekly.to_csv(out / "weekly.csv")
+    units = within_units(predictions[~predictions.model.str.contains(" + Telegram", regex=False)])
+    units.to_csv(out / "within_units.csv", index=False)
     print(f"Mean Brier differences, a − b (> 0: b is better), 95% day-resampled interval:\n{table.round(5).to_string()}")
     print(f"\nBrier by week (all horizons pooled):\n{weekly.round(4).to_string()}")
     recent = by_horizon[by_horizon.a == "recent_rate"]
     print(f"\nRecent rate − LightGBM by horizon (> 0: LightGBM is better):\n{recent.round(4).to_string(index=False)}")
+    lightgbm = units[(units.model == config["chosen"]["lightgbm"])]
+    print(f"\nLightGBM, ROC-AUC pooled and within units:\n{lightgbm.round(3).to_string(index=False)}")
