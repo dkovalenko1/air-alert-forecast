@@ -135,14 +135,15 @@ def load_grid(period: str, train_start=TRAIN_START, channel: str = "UkraineAlarm
     return grid
 
 
-def main(period: str, model_names, horizons=HORIZONS, train_start=TRAIN_START) -> None:
-    """Build the grid from the label periods, run the walk-forward backtest and write predictions and metrics."""
+def main(period: str, models, horizons=HORIZONS, train_start=TRAIN_START, telegram: bool = False) -> pd.DataFrame:
+    """Build the grid from the label periods, run the walk-forward backtest and write predictions and metrics.
+    `models` as in `run`; `telegram` adds the Telegram feature columns to the grid."""
     from airalert.settings import ROOT
 
     start, end = PERIODS[period]
-    grid = load_grid(period, train_start)
-    print(f"{period}: {start:%Y-%m-%d} → {end:%Y-%m-%d}, {len(grid):,} grid rows, models: {', '.join(model_names)}", flush=True)
-    predictions = run(grid, period, model_names, horizons, train_start)
+    grid = load_grid(period, train_start, telegram=telegram)
+    print(f"{period}: {start:%Y-%m-%d} → {end:%Y-%m-%d}, {len(grid):,} grid rows, models: {', '.join(models)}", flush=True)
+    predictions = run(grid, period, models, horizons, train_start)
 
     results_dir, report_dir = ROOT / "data" / "results", ROOT / "reports" / period
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -154,3 +155,4 @@ def main(period: str, model_names, horizons=HORIZONS, train_start=TRAIN_START) -
     metrics.to_csv(report_dir / "metrics.csv", index=False)
     summary = metrics[(metrics.subset == "all") & (metrics.units == "all")].pivot(index="horizon", columns="model", values="brier")
     print(f"Near-permanent units (validation): {len(permanent)}\nBrier score by horizon (lower is better):\n{summary.round(4)}")
+    return metrics

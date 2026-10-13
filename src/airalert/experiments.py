@@ -160,25 +160,27 @@ def require_valid_e3(decisions: dict) -> dict:
     return e3
 
 
+def chosen_factory(model: str, decisions: dict, telegram: str | None = None):
+    """'logistic' or 'lightgbm' as chosen by E2 and E3, optionally with a set of Telegram features."""
+    per_unit = decisions["e2_shared_or_per_unit"][model] == "per unit"
+    if model == "logistic":
+        base = functools.partial(Logistic, telegram=telegram)
+    else:
+        params = {**LIGHTGBM_SETTINGS[require_valid_e3(decisions)["lightgbm"]], **({"n_jobs": 1} if per_unit else {})}
+        base = functools.partial(LightGBM, telegram=telegram, **params)
+    return functools.partial(PerUnit, base) if per_unit else base
+
+
 def _without_or_with(name: str, title: str, feature_set: str, label: str) -> dict:
     """Each model as chosen by E1-E3, without (default) and with one set of Telegram features (E4, E5)."""
     decisions = json.loads((OUT / "decisions.json").read_text())
-    e2, e3 = decisions["e2_shared_or_per_unit"], require_valid_e3(decisions)
     parts, chosen = [], {}
     for model in ("logistic", "lightgbm"):
-        train_start, per_unit = _start(model), e2[model] == "per unit"
+        train_start = _start(model)
         grid = load_grid("validation", train_start, telegram=True)
-
-        def factory(telegram: str | None):
-            if model == "logistic":
-                base = functools.partial(Logistic, telegram=telegram)
-            else:
-                params = {**LIGHTGBM_SETTINGS[e3["lightgbm"]], **({"n_jobs": 1} if per_unit else {})}
-                base = functools.partial(LightGBM, telegram=telegram, **params)
-            return functools.partial(PerUnit, base) if per_unit else base
-
-        metrics = pd.concat([_evaluate(grid, {model: factory(telegram)}, train_start).assign(variant=variant)
-                             for variant, telegram in (("without", None), (label, feature_set))])
+        variants = {"without": None, label: feature_set}
+        metrics = pd.concat([_evaluate(grid, {model: chosen_factory(model, decisions, telegram)}, train_start)
+                             .assign(variant=variant) for variant, telegram in variants.items()])
         parts.append(metrics)
         chosen[model] = choose(metrics, "without")
         del grid

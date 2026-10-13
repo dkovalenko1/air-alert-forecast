@@ -2,7 +2,7 @@
 
 import argparse
 
-from airalert import backtest, experiments, labels, telegram, threats, validation
+from airalert import backtest, experiments, final, labels, telegram, threats, validation
 from airalert.models import MODELS
 
 
@@ -16,8 +16,8 @@ def main() -> None:
     build = commands.add_parser("build-labels", help="turn downloaded channel messages into alert periods per unit")
     build.add_argument("channels", nargs="*", default=list(labels.CLASSIFIERS),
                        help=f"channels to parse (default: {' '.join(labels.CLASSIFIERS)})")
-    bt = commands.add_parser("backtest", help="walk-forward backtest on the validation or test period")
-    bt.add_argument("period", choices=list(backtest.PERIODS))
+    bt = commands.add_parser("backtest", help="walk-forward backtest on the validation period (the test period: test-run)")
+    bt.add_argument("period", choices=["validation"])
     bt.add_argument("--models", nargs="+", default=list(MODELS), choices=list(MODELS))
     commands.add_parser("check-labels", help="compare labels with the official channel (Q20) and alerts.in.ua (Q2)")
     commands.add_parser("build-telegram", help="turn @kpszsu and @deraketaua posts into dated threat events (Q12)")
@@ -25,6 +25,7 @@ def main() -> None:
     experiment.add_argument("name", choices=list(experiments.EXPERIMENTS))
     experiment.add_argument("--assume-e2", choices=["shared", "per unit"],
                             help="start E3 while E2 is still running, assuming its LightGBM choice (checked afterwards)")
+    commands.add_parser("test-run", help="the single test run with the configuration chosen on validation")
     args = parser.parse_args()
 
     if args.command == "telegram-login":
@@ -41,6 +42,8 @@ def main() -> None:
             experiments.lightgbm_settings(args.assume_e2)
         else:
             experiments.EXPERIMENTS[args.name]()
+    elif args.command == "test-run":
+        final.main()
     elif args.command == "backtest":
         backtest.main(args.period, args.models)
     elif args.command == "build-labels":
