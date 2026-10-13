@@ -11,5 +11,9 @@
     "lightgbm": "no unit identity",
     "e2_mode": "shared",
     "e2_assumed": true
+  },
+  "e4_telegram": {
+    "logistic": "without",
+    "lightgbm": "without"
   }
 }
