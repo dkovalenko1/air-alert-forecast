@@ -1,6 +1,6 @@
 # Design: air raid alert forecasting
 
-Status: **pre-build**. Last updated 2026-10-12.
+Status: **built and evaluated** (single test run on 2026-10-13; results in the README). Last updated 2026-10-13.
 
 Related documents:
 - Terms used here are defined in [CONTEXT.md](../CONTEXT.md).
@@ -8,7 +8,7 @@ Related documents:
 
 ## 1. Product overview
 
-**What it is.** A Python tool that forecasts air raid alerts in Ukraine. At a forecast time t it uses only information published before t: the alert history and Telegram threat posts. For each unit (raion or oblast) it outputs the probability of an alert in each of the coming hours.
+**What it is.** A Python tool that forecasts air raid alerts in Ukraine. At a forecast time t it uses only information published before t: the alert history and Telegram threat posts. For each unit (raion, or Kyiv city) it outputs the probability of an alert in each of the coming hours.
 
 **What question it answers.** "How likely is an alert here in the next hour, this evening, or this time tomorrow?" This helps people, schools and businesses plan. It is not a warning system and does not replace official alerts.
 
@@ -16,21 +16,22 @@ Related documents:
 
 | Command | Result |
 |---|---|
-| `update-data` | Download new alert history and Telegram posts. Incremental. |
-| `train --spec …` | Fit the models for a forecast spec on everything before a training cutoff, and save them. |
-| `predict --spec … --at <time>` | Load saved models and print probabilities per unit × horizon. Takes seconds and does no retraining. |
-| `backtest --spec …` | Walk-forward evaluation on the latest period against baselines. Writes metric tables and plots. |
+| `download-telegram` | Download new messages from the four channels. Incremental. |
+| `build-labels`, `build-telegram` | Rebuild the alert periods and the threat events from the downloads. |
+| `train [--cutoff …]` | Fit the configuration chosen on validation on everything known at a cutoff, and save it (about a minute). |
+| `predict [--at …]` | Load the saved model and print probabilities per unit × horizon. Takes seconds and does no retraining. Refuses a time before the model's cutoff. |
+| `backtest validation`, `experiment …`, `test-run`, `test-report` | Walk-forward evaluation against the baselines: validation, the experiments of section 3, and the single test run. |
 
-Long training and backtest runs print an estimated duration first. The estimate comes from a timed trial fit scaled to the full data size.
+Only the main spec (raion × 1 h × Active) is built; the code is organised by spec, but other specs are not implemented. Backtests print an estimate of the time left after the first fit.
 
-Example of `predict` output (the numbers are illustrative):
+Example of `predict` output (real, abridged):
 
 ```
-Forecast spec: raion × 1 h × Active   Forecast time: 2026-10-12 18:00 Kyiv (data up to 17:59)
-Raion                 h=1    h=3    h=6    h=12   h=24
-Kharkivskyi           0.83   0.66   0.58   0.49   0.55
-Kyiv city             0.11   0.19   0.27   0.34   0.21
-…
+Forecast time: 2026-10-13 00:00 Kyiv (data up to 2026-10-13 00:50); model: lightgbm, trained at 2026-10-13 00:00 Kyiv
+                                       unit  on alert  h=1  h=2  h=3  h=6  h=12  h=24
+       Харківська область/Харківський район      True 1.00 0.88 0.86 0.85  0.91  0.90
+             Одеська область/Одеський район     False 0.42 0.36 0.41 0.42  0.47  0.52
+         Львівська область/Львівський район     False 0.01 0.02 0.01 0.01  0.03  0.05
 ```
 
 **Task constraints (from the KSE brief):**
@@ -157,6 +158,7 @@ Decision log (smaller choices that are easy to reverse):
   - **LightGBM 0.1180**, logistic 0.1217, Historical rate 0.1576, Persistence 0.2148. LightGBM beats logistic by 0.0037 (0.0023 … 0.0054) and Historical rate by 0.0396 (0.0350 … 0.0440): 25% better than Historical rate (29% on validation).
   - **The validation ranking holds** in every week of the test period. Scores are higher than on validation (0.1088) partly because the test period had more alerts (42% of hours vs 38%).
   - **Telegram ablation:** the targeted set changes LightGBM by +0.0004 (−0.0002 … +0.0011) and logistic by −0.0002 (−0.0012 … +0.0006). Both intervals include zero, as on validation.
+- **No separate notebook** (changes Q14): the README carries the narrative, with the figures drawn by `scripts/make_figures.py`, so the results live in one place. *(2026-10-13)*
 
 ## 5. Data sources (checked 2026-10-12)
 
@@ -485,4 +487,4 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | done: E1–E3 (section 3); chosen: training from 2025-11-01, one shared model, LightGBM without unit identity |
 | 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | done (`places.py`, `threats.py`, `telegram_features.py`): 99% of `@kpszsu` and 93% of `@deraketaua` posts typed |
 | 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | done: E4, E5 (Telegram not kept); test run 2026-10-13 (`reports/test/`) |
-| 16 | **Final run:** `update-data`, pinned test period, figures, README, notebook, AI conversation export | everything | blocked |
+| 16 | **Final run:** pinned test period, figures, README, AI conversation export | everything | done 2026-10-13 (`train`/`predict` added; no separate notebook, see the decision log) |

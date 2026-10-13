@@ -39,13 +39,13 @@ edit history. In the label channel every message has been edited at least once:
 
 So edits are treated as not changing an alert's kind or place, and each message keeps its posting time. This is an
 assumption backed by the evidence above, not a proof. The month-by-month comparison with the independent official
-channel (Q20, 98% pass mark both ways, not yet run) is an approximate cross-check: an edit that moved an alert to
+channel (Q20, 98% pass mark both ways; run 2026-10-13, see the README) is an approximate cross-check: an edit that moved an alert to
 another place or changed its kind would mostly show up as a mismatch, but matching within 5 minutes cannot catch
 every case (two short alerts close together can match one).
 
 For the Telegram feature channels (`@kpszsu`, `@deraketaua`), whose posts are written by people and can change
-meaning, the stricter rule from Q12 is planned: a post edited at or after t is not used for forecasts at t. It is
-not implemented yet; those channels are not downloaded yet.
+meaning, the stricter rule from Q12 applies: a post counts only from its last edit (`threats.py`), so a post edited
+at or after t is not used for forecasts at t.
 
 ## Considered options
 
