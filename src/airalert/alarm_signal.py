@@ -82,6 +82,7 @@ _THREATS = [
 _RAION = re.compile(r"(?P<name>[^()•|]+? район) \((?P<oblast>[^()]+? обл\.)\)")
 _CITY = re.compile(r"(?P<name>[^()•|]+?) \((?:[^()]*?, )?(?P<oblast>[^(),]+? обл\.)\)")
 _OBLAST = re.compile(r"^(?P<name>[^()•|,]+? обл\.)$")
+_CLOCK = re.compile(r"^\d{1,2}:\d{2}\s*\|?\s*")  # a few all-clears start with a time: "15:57 | Відбій тривоги…"
 
 
 def _clean(line: str) -> str:
@@ -108,7 +109,7 @@ def _apology_kind(body: str) -> str:
 
 
 def _phrase_kind(phrase: str) -> tuple[str, str | None]:
-    lowered = _clean(phrase).lower()
+    lowered = _CLOCK.sub("", _clean(phrase).lower())
     for pattern, kind, color in _PHRASES:
         if re.search(pattern, lowered):
             return kind, color

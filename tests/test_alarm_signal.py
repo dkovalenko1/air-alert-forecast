@@ -19,6 +19,7 @@ def test_all_clear_both_wordings():
     assert classify("🟢 Київ\nВідбій тривоги - будьте обережні").kind == END
     assert classify("🟢 Куп'янський район (Харківська обл.)\nВідбій тривоги. Будьте обережні!").kind == END
     assert classify("🟢 Сумська обл.\nВідбій тривоги та загрози обстрілу - будьте обережні!").kind == END
+    assert classify("🟢 Львівська обл.\n15:57 | Відбій тривоги. Будьте обережні!").kind == END  # time in front
 
 
 def test_level_messages_with_several_raions():
