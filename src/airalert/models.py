@@ -1,4 +1,4 @@
-"""Forecasting models for one horizon: two baselines, logistic regression and LightGBM.
+"""Forecasting models for one horizon: three baselines, logistic regression and LightGBM.
 
 Every model has `fit(frame, y)` and `predict(frame) -> probability of an alert in the target hour`.
 `frame` holds the features of `feature_columns()`, with the horizon-specific ones already renamed
@@ -56,6 +56,27 @@ class HistoricalRate:
         keys = pd.MultiIndex.from_frame(frame[["unit_id", "target_hour", "target_weekday"]].astype(object))
         p = self.by_slot.reindex(keys).to_numpy()
         p = np.where(np.isnan(p), self.by_unit.reindex(frame["unit_id"].astype(object)).to_numpy(), p)
+        return np.where(np.isnan(p), self.overall, p)
+
+
+class RecentRate:
+    """Share of the last 4 weeks of training hours with an alert, per unit. Simpler than HistoricalRate (no split by
+    hour and weekday, so no small, noisy cells), and a stronger baseline."""
+
+    name = "recent_rate"
+
+    def __init__(self, window=pd.Timedelta(days=28)):
+        self.window = window
+
+    def fit(self, frame, y):
+        recent = frame["t"] >= frame["t"].max() - self.window
+        data = frame.loc[recent, ["unit_id"]].assign(y=np.asarray(y)[recent.to_numpy()])
+        self.by_unit = data.groupby("unit_id", observed=True)["y"].mean()
+        self.overall = data["y"].mean()
+        return self
+
+    def predict(self, frame):
+        p = self.by_unit.reindex(frame["unit_id"].astype(object)).to_numpy()
         return np.where(np.isnan(p), self.overall, p)
 
 
@@ -164,4 +185,4 @@ class PerUnit:
         return p
 
 
-MODELS = {m.name: m for m in (Persistence, HistoricalRate, Logistic, LightGBM)}
+MODELS = {m.name: m for m in (Persistence, HistoricalRate, RecentRate, Logistic, LightGBM)}

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from airalert.models import CATEGORICAL, NUMERIC, LightGBM, Logistic, PerUnit
+from airalert.models import CATEGORICAL, NUMERIC, LightGBM, Logistic, PerUnit, RecentRate
 
 
 def frame(n_days=40, seed=0):
@@ -59,3 +59,14 @@ def test_telegram_option_adds_exactly_that_set_of_columns(feature_set):
     assert set(with_tg.columns) - set(without.columns) == set(TELEGRAM_SETS[feature_set])
     assert len(with_tg.fit(data, y).predict(data)) == len(data)
     assert len(Logistic(telegram=feature_set).fit(data, y).predict(data)) == len(data)
+
+
+def test_recent_rate_is_each_units_share_of_alert_hours_in_the_last_four_weeks():
+    data, y = frame(n_days=40)
+    model = RecentRate().fit(data, y)
+    recent = (data.t >= data.t.max() - pd.Timedelta(days=28)).to_numpy()
+    expected_a = y[recent & (data.unit_id == "A/a").to_numpy()].mean()
+    p = model.predict(data)
+    assert np.allclose(p[(data.unit_id == "A/a").to_numpy()], expected_a) and (p[(data.unit_id == "B/b").to_numpy()] == 0).all()
+    unseen = data.iloc[:3].assign(unit_id=pd.Categorical(["C/c"] * 3))
+    assert np.allclose(model.predict(unseen), y[recent].mean())

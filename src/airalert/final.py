@@ -2,7 +2,7 @@
 
 The configuration is read from the experiments' decisions (reports/validation/experiments/decisions.json): training
 start (E1), shared or per unit (E2), LightGBM settings (E3), Telegram or not (E4, E5). Each model also runs with the
-targeted Telegram set, the ablation fixed in E5's protocol, and both baselines run alongside. The run refuses to
+targeted Telegram set, the ablation fixed in E5's protocol, and the baselines run alongside. The run refuses to
 start if the test report already exists: the test period is used once. `report` adds day-resampled intervals for
 the differences between models and a per-week table, from the saved predictions (no model is run again).
 """
@@ -15,7 +15,7 @@ import pandas as pd
 from airalert import backtest
 from airalert.experiments import OUT, chosen_factory
 from airalert.features import KYIV
-from airalert.models import HistoricalRate, Persistence
+from airalert.models import HistoricalRate, Persistence, RecentRate
 from airalert.settings import ROOT
 
 REPORT = ROOT / "reports" / "test"
@@ -36,7 +36,7 @@ def configuration(decisions: dict) -> tuple[pd.Timestamp, dict, dict]:
     starts = set(decisions["e1_training_start"].values())
     if len(starts) != 1:
         raise SystemExit(f"E1 chose different training starts per model ({sorted(starts)}); the test run uses one.")
-    factories, chosen = {"persistence": Persistence, "historical_rate": HistoricalRate}, {}
+    factories, chosen = {"persistence": Persistence, "historical_rate": HistoricalRate, "recent_rate": RecentRate}, {}
     for model in ("logistic", "lightgbm"):
         choice = telegram_choice(decisions, model)
         for telegram in dict.fromkeys([choice, None, "targeted"]):  # the chosen variant first, no duplicates

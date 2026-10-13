@@ -19,7 +19,7 @@ DECISIONS = {
 def test_chosen_configuration_and_the_telegram_ablation():
     start, factories, chosen = configuration(DECISIONS)
     assert start == pd.Timestamp("2025-11-01", tz="Europe/Kyiv")
-    assert list(factories) == ["persistence", "historical_rate", "logistic", "logistic + Telegram (targeted)",
+    assert list(factories) == ["persistence", "historical_rate", "recent_rate", "logistic", "logistic + Telegram (targeted)",
                                "lightgbm", "lightgbm + Telegram (targeted)"]
     assert chosen == {"logistic": "logistic", "lightgbm": "lightgbm"}
     lightgbm = factories["lightgbm"]()
