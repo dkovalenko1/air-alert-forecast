@@ -1,12 +1,16 @@
-"""Exploratory figures for the README and notebook (docs/figures/*.png).
+"""Figures for the README (docs/figures/*.png).
 
-Built from the label periods (`build-labels UkraineAlarmSignal` first). Only data before the test period is used
-(up to the end of validation, 2026-09-13): these charts inform modelling choices, so the test weeks stay unseen.
+Exploratory figures are built from the label periods (`build-labels UkraineAlarmSignal` first). They use only data
+before the test period (up to the end of validation, 2026-09-13): they informed modelling choices, so the test weeks
+stayed unseen. Result figures read the single test run's report and predictions (`test-run` first); they are drawn
+after it and change nothing in it.
 
 "On alert in an hour" means any alert during that hour, as the Active label counts it (Q7).
 
-Usage: uv run python scripts/make_figures.py
+Usage: uv run python scripts/make_figures.py [explore|results]   (default: both)
 """
+
+import sys
 
 import matplotlib
 
@@ -29,6 +33,7 @@ END = PERIODS["validation"][1]  # nothing from the test period
 # Reference palette (dataviz skill, light mode)
 SURFACE, INK, INK_2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
 BLUE, YELLOW, RED, NEUTRAL = "#2a78d6", "#eda100", "#e34948", "#a9a8a3"
+LIGHT_BLUE = "#86b6ef"
 BLUES = LinearSegmentedColormap.from_list("blues", ["#cde2fb", "#86b6ef", "#3987e5", "#256abf", "#184f95", "#0d366b"])
 
 plt.rcParams.update({
@@ -169,7 +174,108 @@ def levels_by_day(alerts: pd.DataFrame) -> None:
     save(fig, "alert_levels_by_day.png")
 
 
-def main() -> None:
+MODELS = {  # name in the test report: (label, colour), baselines first
+    "persistence": ("Persistence", NEUTRAL), "historical_rate": ("Historical rate", YELLOW),
+    "logistic": ("Logistic regression", LIGHT_BLUE), "lightgbm": ("LightGBM", BLUE),
+}
+TEST_NOTE = "Test period 2026-09-14 to 2026-10-11 (Kyiv time), weekly retraining, all raions."
+
+
+def spread(values: dict, gap: float) -> dict:
+    """Label positions at least `gap` apart, each as close to its value as possible (bottom-up)."""
+    out, last = {}, -np.inf
+    for key, value in sorted(values.items(), key=lambda kv: kv[1]):
+        out[key] = last = max(value, last + gap)
+    return out
+
+
+def brier_by_horizon(metrics: pd.DataFrame) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6), sharey=True)
+    for ax, subset, title in ((axes[0], "all", "All raion-hours"), (axes[1], "calm at t", "Raions calm at t")):
+        part = metrics[(metrics.units == "all") & (metrics.subset == subset)]
+        ends = {}
+        for model, (label, color) in MODELS.items():
+            line = part[part.model == model].sort_values("horizon")
+            x = np.arange(len(line))
+            ax.plot(x, line.brier, color=color, linewidth=2.6 if model == "lightgbm" else 1.8, marker="o", markersize=4)
+            ends[model] = line.brier.iloc[-1]
+        if ax is axes[1]:
+            for model, y in spread(ends, gap=0.012).items():
+                label, color = MODELS[model]
+                ax.annotate(label, (x[-1], y), xytext=(8, 0), textcoords="offset points", va="center",
+                            color=color if model != "persistence" else INK_2, fontsize=9)
+        ax.set_xticks(x, line.horizon.astype(str))
+        ax.set_xlabel("horizon h (hours ahead)")
+        ax.set_title(title, fontsize=10)
+        ax.yaxis.grid(True, color=GRID, linewidth=0.8)
+        ax.set_axisbelow(True)
+    axes[0].set_ylabel("Brier score (lower is better)")
+    axes[0].set_ylim(0, None)
+    fig.suptitle("Forecast error by horizon, test period", x=0.06, ha="left", fontweight="bold", fontsize=12)
+    fig.text(0.06, -0.04, TEST_NOTE, color=INK_2, fontsize=8)
+    save(fig, "brier_by_horizon.png")
+
+
+def calibration(predictions: pd.DataFrame) -> None:
+    """LightGBM: share of hours with an alert against the forecast probability, in bins of 0.1."""
+    fig, ax = plt.subplots(figsize=(5.2, 4.6))
+    ax.plot([0, 1], [0, 1], color=GRID, linewidth=1.2)
+    part = predictions[predictions.model == "lightgbm"]
+    for h, color in ((1, BLUE), (6, LIGHT_BLUE), (24, YELLOW)):
+        rows = part[part.horizon == h]
+        bins = pd.cut(rows.p, np.linspace(0, 1, 11), include_lowest=True)
+        table = rows.groupby(bins, observed=True).agg(p=("p", "mean"), y=("y", "mean"), n=("y", "size"))
+        table = table[table.n >= 200]
+        ax.plot(table.p, table.y, color=color, marker="o", markersize=4, linewidth=1.8, label=f"h = {h}")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("forecast probability")
+    ax.set_ylabel("share of hours with an alert")
+    ax.legend(frameon=False, loc="upper left")
+    ax.set_title("LightGBM calibration, test period")
+    ax.text(0, -0.2, "Bins of 0.1 with at least 200 raion-hours. On the diagonal, forecasts mean what they say.",
+            transform=ax.transAxes, color=INK_2, fontsize=8)
+    save(fig, "calibration.png")
+
+
+def example_forecast(predictions: pd.DataFrame, unit: str = "м. Київ", start="2026-10-04", end="2026-10-08") -> None:
+    """One unit over a few days: the hours with an alert, and LightGBM's forecasts for each hour made 1 and 6 hours
+    before it starts."""
+    start, end = pd.Timestamp(start, tz=KYIV), pd.Timestamp(end, tz=KYIV)
+    part = predictions[(predictions.model == "lightgbm") & (predictions.unit_id == unit)].copy()
+    part["target"] = part.t + (part.horizon - 1) * HOUR  # start of the forecast hour
+    part = part[(part.target >= start) & (part.target < end)]
+    fig, ax = plt.subplots(figsize=(10, 3.4))
+    truth = part[part.horizon == 1]
+    for target in truth.loc[truth.y == 1, "target"]:
+        ax.axvspan(target.tz_convert(KYIV), (target + HOUR).tz_convert(KYIV), color="#e8e7e3", linewidth=0)
+    for h, color, label in ((6, LIGHT_BLUE, "forecast made 6 h before the hour"), (1, BLUE, "forecast made 1 h before the hour")):
+        line = part[part.horizon == h].sort_values("target")
+        ax.step(line.target.dt.tz_convert(KYIV), line.p, where="post", color=color, linewidth=1.6, label=label)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel("probability of an alert")
+    ax.set_xlim(start, end)
+    ax.xaxis.set_major_locator(matplotlib.dates.DayLocator(tz=KYIV))
+    ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%d %b", tz=KYIV))
+    ax.xaxis.set_minor_locator(matplotlib.dates.HourLocator(byhour=[6, 12, 18], tz=KYIV))
+    ax.legend(frameon=False, ncol=2, loc="upper left", bbox_to_anchor=(0, 1.13))
+    ax.set_title(f"Example: Kyiv city, {start:%-d} to {end - HOUR:%-d %B %Y}", pad=26)
+    ax.text(0, -0.2, "Grey: hours with any alert (some lasted only about 5 minutes). Each forecast is drawn over the hour "
+            "it is for. Kyiv time; test period.",
+            transform=ax.transAxes, color=INK_2, fontsize=8)
+    save(fig, "example_forecast_kyiv.png")
+
+
+def results() -> None:
+    metrics = pd.read_csv(ROOT / "reports" / "test" / "metrics.csv")
+    predictions = pd.read_parquet(ROOT / "data" / "results" / "test_predictions.parquet")
+    print(f"Writing {OUT.relative_to(ROOT)}/ (test-period results)")
+    brier_by_horizon(metrics)
+    calibration(predictions)
+    example_forecast(predictions)
+
+
+def explore() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     periods = pd.read_parquet(INTERIM_DIR / "UkraineAlarmSignal_label_periods.parquet")
     alerts = pd.read_parquet(INTERIM_DIR / "UkraineAlarmSignal_alerts.parquet")
@@ -183,5 +289,13 @@ def main() -> None:
     levels_by_day(alerts)
 
 
+def main(which: str = "both") -> None:
+    OUT.mkdir(parents=True, exist_ok=True)
+    if which in ("explore", "both"):
+        explore()
+    if which in ("results", "both"):
+        results()
+
+
 if __name__ == "__main__":
-    main()
+    main(*sys.argv[1:2])
