@@ -26,6 +26,7 @@ def main() -> None:
     experiment.add_argument("--assume-e2", choices=["shared", "per unit"],
                             help="start E3 while E2 is still running, assuming its LightGBM choice (checked afterwards)")
     commands.add_parser("test-run", help="the single test run with the configuration chosen on validation")
+    commands.add_parser("test-report", help="intervals for model differences and weekly scores, from the saved test predictions")
     args = parser.parse_args()
 
     if args.command == "telegram-login":
@@ -44,6 +45,8 @@ def main() -> None:
             experiments.EXPERIMENTS[args.name]()
     elif args.command == "test-run":
         final.main()
+    elif args.command == "test-report":
+        final.report()
     elif args.command == "backtest":
         backtest.main(args.period, args.models)
     elif args.command == "build-labels":

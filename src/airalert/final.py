@@ -3,11 +3,13 @@
 The configuration is read from the experiments' decisions (reports/validation/experiments/decisions.json): training
 start (E1), shared or per unit (E2), LightGBM settings (E3), Telegram or not (E4, E5). Each model also runs with the
 targeted Telegram set, the ablation fixed in E5's protocol, and both baselines run alongside. The run refuses to
-start if the test report already exists: the test period is used once.
+start if the test report already exists: the test period is used once. `report` adds day-resampled intervals for
+the differences between models and a per-week table, from the saved predictions (no model is run again).
 """
 
 import json
 
+import numpy as np
 import pandas as pd
 
 from airalert import backtest
@@ -65,3 +67,46 @@ def main() -> None:
     table = summary(metrics)
     table.to_csv(REPORT / "summary.csv")
     print(f"\nChosen on validation: {', '.join(chosen.values())}\nMean over the six horizons:\n{table.round(5).to_string()}")
+
+
+def comparisons(models: list[str], chosen: dict) -> list[tuple[str, str]]:
+    """Each model against the chosen LightGBM, and each other Telegram variant against its model without Telegram."""
+    main = chosen["lightgbm"]
+    pairs = [(m, main) for m in models if m != main]
+    return pairs + [(m, m.split(" + ")[0]) for m in models if " + Telegram" in m and m.split(" + ")[0] != main]
+
+
+def differences(predictions: pd.DataFrame, pairs: list[tuple[str, str]], n: int = 5000, seed: int = 0) -> pd.DataFrame:
+    """Mean Brier over the six horizons of model a minus model b (> 0: b is better), with a 95% interval from
+    resampling whole days (Kyiv time). Neighbouring days are not independent, so the interval is a rough guide."""
+    day = predictions.t.dt.tz_convert(KYIV).dt.date
+    daily = (predictions.assign(day=day, se=(predictions.p - predictions.y) ** 2)
+             .groupby(["model", "horizon", "day"]).se.agg(["sum", "count"]))
+    days = sorted(day.unique())
+    samples = np.random.default_rng(seed).integers(len(days), size=(n, len(days)))
+    everything = np.arange(len(days))[None]
+
+    def score(model, sample):
+        wide = daily.loc[model].unstack("horizon").reindex(days)
+        totals, counts = wide["sum"].to_numpy()[sample].sum(axis=1), wide["count"].to_numpy()[sample].sum(axis=1)
+        return (totals / counts).mean(axis=1)
+
+    rows = []
+    for a, b in pairs:
+        resampled = score(a, samples) - score(b, samples)
+        rows.append({"a": a, "b": b, "difference": (score(a, everything) - score(b, everything))[0],
+                     "low": np.percentile(resampled, 2.5), "high": np.percentile(resampled, 97.5),
+                     "share_b_better": (resampled > 0).mean()})
+    return pd.DataFrame(rows)
+
+
+def report() -> None:
+    predictions = pd.read_parquet(ROOT / "data" / "results" / "test_predictions.parquet")
+    config = json.loads((REPORT / "configuration.json").read_text())
+    table = differences(predictions, comparisons(config["models"], config["chosen"]))
+    table.to_csv(REPORT / "differences.csv", index=False)
+    weekly = (predictions.assign(se=(predictions.p - predictions.y) ** 2).groupby(["week", "model"]).se.mean()
+              .unstack("model")[config["models"]])
+    weekly.to_csv(REPORT / "weekly.csv")
+    print(f"Mean Brier differences, a − b (> 0: b is better), 95% day-resampled interval:\n{table.round(5).to_string()}")
+    print(f"\nBrier by week (all horizons pooled):\n{weekly.round(4).to_string()}")

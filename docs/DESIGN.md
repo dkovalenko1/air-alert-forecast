@@ -153,6 +153,10 @@ Decision log (smaller choices that are easy to reverse):
   - **E4, all Telegram features:** left out of both models. Logistic gains 0.00032 (0.11013 → 0.10981), below the 0.0005 threshold; LightGBM gets worse (0.10881 → 0.10910).
   - **E5, targeted Telegram set (7 features):** left out of both models. Logistic gains 0.00037 (0.11013 → 0.10976), below the threshold; LightGBM gets worse (0.10881 → 0.10948), at every horizon. Telegram threat posts add little beyond the alert history of the unit and its neighbours at hourly resolution. Per E5's protocol, no further Telegram variants are tried on validation.
   - **Configuration for the test run:** training from 2025-11-01, one shared model, LightGBM without unit identity, alert-history features only; logistic regression and both baselines alongside; each model also with the targeted Telegram set (ablation).
+- **Test run, results** (2026-09-14 → 2026-10-12, run once on 2026-10-13; `reports/test/`; mean Brier over the six horizons, 95% intervals from resampling days): *(2026-10-13)*
+  - **LightGBM 0.1180**, logistic 0.1217, Historical rate 0.1576, Persistence 0.2148. LightGBM beats logistic by 0.0037 (0.0023 … 0.0054) and Historical rate by 0.0396 (0.0350 … 0.0440): 25% better than Historical rate (29% on validation).
+  - **The validation ranking holds** in every week of the test period. Scores are higher than on validation (0.1088) partly because the test period had more alerts (42% of hours vs 38%).
+  - **Telegram ablation:** the targeted set changes LightGBM by +0.0004 (−0.0002 … +0.0011) and logistic by −0.0002 (−0.0012 … +0.0006). Both intervals include zero, as on validation.
 
 ## 5. Data sources (checked 2026-10-12)
 
@@ -473,12 +477,12 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | code done (`official_channel.py`); full run after the download |
 | 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | done: **fails** (33 of 176 rows below 98%); causes handled and reported in the README (decided 2026-10-13) |
 | 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | done: all rows pass (98.4–99.96%); 99.8% hour-level agreement |
-| 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | blocked |
+| 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | not done before the test run: city zones other than Kyiv are folded into their raions (the Q16 fallback); left as future work |
 | 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | done (`reference/neighbours.csv`, 612 pairs) |
 | 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | done (`features.py`, leakage tests) |
 | 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | main spec done (`features.py`: raion × 1 h × Active, h = 1–24); other specs (e.g. the daily Minutes spec) planned; real run after the download |
 | 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | code done (`backtest.py`, `models.py`); results blocked |
 | 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | done: E1–E3 (section 3); chosen: training from 2025-11-01, one shared model, LightGBM without unit identity |
 | 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | done (`places.py`, `threats.py`, `telegram_features.py`): 99% of `@kpszsu` and 93% of `@deraketaua` posts typed |
-| 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | E4, E5 done (Telegram not kept); test run open |
+| 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | done: E4, E5 (Telegram not kept); test run 2026-10-13 (`reports/test/`) |
 | 16 | **Final run:** `update-data`, pinned test period, figures, README, notebook, AI conversation export | everything | blocked |

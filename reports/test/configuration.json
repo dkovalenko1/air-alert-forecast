@@ -1,0 +1,42 @@
+{
+  "period": [
+    "2026-09-14",
+    "2026-10-12"
+  ],
+  "train_start": "2025-11-01",
+  "models": [
+    "persistence",
+    "historical_rate",
+    "logistic",
+    "logistic + Telegram (targeted)",
+    "lightgbm",
+    "lightgbm + Telegram (targeted)"
+  ],
+  "chosen": {
+    "logistic": "logistic",
+    "lightgbm": "lightgbm"
+  },
+  "decisions": {
+    "e1_training_start": {
+      "logistic": "2025-11-01",
+      "lightgbm": "2025-11-01"
+    },
+    "e2_shared_or_per_unit": {
+      "logistic": "shared",
+      "lightgbm": "shared"
+    },
+    "e3_lightgbm_settings": {
+      "lightgbm": "no unit identity",
+      "e2_mode": "shared",
+      "e2_assumed": true
+    },
+    "e4_telegram": {
+      "logistic": "without",
+      "lightgbm": "without"
+    },
+    "e5_telegram_targeted": {
+      "logistic": "without",
+      "lightgbm": "without"
+    }
+  }
+}

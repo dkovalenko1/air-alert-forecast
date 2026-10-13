@@ -1,9 +1,10 @@
 """The test run takes its configuration from the validation decisions only."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from airalert.final import configuration
+from airalert.final import comparisons, configuration, differences
 from airalert.models import LightGBM, Logistic
 
 DECISIONS = {
@@ -38,3 +39,21 @@ def test_different_training_starts_are_refused():
     decisions = {**DECISIONS, "e1_training_start": {"logistic": "2025-08-01", "lightgbm": "2025-11-01"}}
     with pytest.raises(SystemExit):
         configuration(decisions)
+
+
+def test_comparisons_pair_each_model_with_the_chosen_lightgbm_and_each_telegram_variant_with_its_model():
+    _, factories, chosen = configuration(DECISIONS)
+    pairs = comparisons(list(factories), chosen)
+    assert ("persistence", "lightgbm") in pairs and ("lightgbm + Telegram (targeted)", "lightgbm") in pairs
+    assert ("logistic + Telegram (targeted)", "logistic") in pairs and len(pairs) == len(factories)
+
+
+def test_differences_of_a_perfect_and_a_coin_flip_model():
+    t = pd.date_range("2026-09-14", periods=24 * 10, freq="h", tz="Europe/Kyiv")
+    y = np.random.default_rng(0).integers(2, size=len(t))
+    rows = [pd.DataFrame({"model": m, "horizon": h, "t": t, "y": y, "p": p})
+            for m, p in (("perfect", y.astype(float)), ("coin", np.full(len(t), 0.5))) for h in (1, 2)]
+    table = differences(pd.concat(rows), [("coin", "perfect"), ("perfect", "perfect")], n=200)
+    coin, same = table.iloc[0], table.iloc[1]
+    assert coin.difference == pytest.approx(0.25) and coin.low == pytest.approx(0.25) and coin.share_b_better == 1
+    assert same.difference == 0 and same.low == same.high == 0
