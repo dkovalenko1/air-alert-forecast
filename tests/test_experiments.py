@@ -1,6 +1,8 @@
 import pandas as pd
 
-from airalert.experiments import MIN_GAIN, choose
+import pytest
+
+from airalert.experiments import MIN_GAIN, choose, lightgbm_mode
 
 
 def metrics(briers: dict) -> pd.DataFrame:
@@ -23,3 +25,13 @@ def test_only_all_rows_and_all_units_decide():
     m = metrics({"default": 0.120, "other": 0.125})
     m.loc[m.subset == "calm at t", "brier"] = m.loc[m.subset == "calm at t", "variant"].map({"default": 0.2, "other": 0.01})
     assert choose(m, "default")[0] == "default"
+
+
+def test_e3_uses_e2s_decision_or_an_explicit_assumption():
+    decided = {"e2_shared_or_per_unit": {"lightgbm": "shared"}}
+    assert lightgbm_mode(decided, None) == "shared" == lightgbm_mode(decided, "shared")
+    assert lightgbm_mode({}, "per unit") == "per unit"  # E2 still running
+    with pytest.raises(SystemExit):
+        lightgbm_mode(decided, "per unit")  # contradicts E2
+    with pytest.raises(SystemExit):
+        lightgbm_mode({}, None)  # neither decided nor assumed

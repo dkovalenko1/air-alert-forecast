@@ -104,24 +104,50 @@ def shared_or_per_unit() -> dict:
     return {m: w for m, (w, _) in chosen.items()}
 
 
-def lightgbm_settings() -> dict:
-    """E3: which LightGBM settings? Uses the E1 training start and the E2 choice for LightGBM."""
+def lightgbm_mode(decisions: dict, assume: str | None) -> str:
+    """'shared' or 'per unit' for E3: E2's decision, or an assumption made while E2 is still running.
+
+    An assumption that contradicts E2's decision is refused: E3 would then have tested the wrong setup.
+    """
+    decided = decisions.get("e2_shared_or_per_unit", {}).get("lightgbm")
+    if assume and decided and assume != decided:
+        raise SystemExit(f"E2 chose '{decided}' for LightGBM; E3 cannot assume '{assume}'.")
+    if not (assume or decided):
+        raise SystemExit("E2 has not decided yet: run it first, or start E3 early with --assume-e2 shared|'per unit'.")
+    return decided or assume
+
+
+def lightgbm_settings(assume_e2: str | None = None) -> dict:
+    """E3: which LightGBM settings? Uses the E1 training start and the E2 choice for LightGBM.
+
+    `assume_e2` lets E3 start while E2 is still running; the assumption is saved with the result and checked
+    against E2's decision (`check_e3_assumption`) before E3's winner is used.
+    """
     decisions = json.loads((OUT / "decisions.json").read_text())
+    mode = lightgbm_mode(decisions, assume_e2)
     train_start = _start("lightgbm")
-    per_unit = decisions["e2_shared_or_per_unit"]["lightgbm"] == "per unit"
     grid = load_grid("validation", train_start)
     parts = []
     for label, params in LIGHTGBM_SETTINGS.items():
         factory = functools.partial(LightGBM, **params)
-        if per_unit:
+        if mode == "per unit":
             factory = functools.partial(PerUnit, factory)
-        parts.append(_evaluate(grid, {"lightgbm": factory}, train_start).assign(variant=label))
+        parts.append(_evaluate(grid, {"lightgbm": factory}, train_start).assign(variant=label, e2_mode=mode))
         print(f"E3 {label}: done", flush=True)
     metrics = pd.concat(parts, ignore_index=True)
     winner, summary = choose(metrics, "default")
-    _report("E3 LightGBM settings", {"lightgbm": (winner, summary)})
-    _save("e3_lightgbm_settings", metrics, {"lightgbm": winner})
-    return {"lightgbm": winner}
+    _report(f"E3 LightGBM settings ({mode})", {"lightgbm": (winner, summary)})
+    result = {"lightgbm": winner, "e2_mode": mode, "e2_assumed": assume_e2 is not None and "e2_shared_or_per_unit" not in decisions}
+    _save("e3_lightgbm_settings", metrics, result)
+    return result
+
+
+def check_e3_assumption() -> None:
+    """After E2 has decided: does the E3 result rest on the right setup?"""
+    decisions = json.loads((OUT / "decisions.json").read_text())
+    e2, e3 = decisions["e2_shared_or_per_unit"]["lightgbm"], decisions["e3_lightgbm_settings"]
+    status = "valid" if e3["e2_mode"] == e2 else "INVALID: rerun E3"
+    print(f"E2 chose '{e2}' for LightGBM; E3 was run as '{e3['e2_mode']}': {status}")
 
 
 EXPERIMENTS = {"training-start": training_start, "per-unit": shared_or_per_unit, "lightgbm": lightgbm_settings}
