@@ -2,7 +2,7 @@
 
 import argparse
 
-from airalert import backtest, experiments, labels, telegram, validation
+from airalert import backtest, experiments, labels, telegram, threats, validation
 from airalert.models import MODELS
 
 
@@ -20,6 +20,7 @@ def main() -> None:
     bt.add_argument("period", choices=list(backtest.PERIODS))
     bt.add_argument("--models", nargs="+", default=list(MODELS), choices=list(MODELS))
     commands.add_parser("check-labels", help="compare labels with the official channel (Q20) and alerts.in.ua (Q2)")
+    commands.add_parser("build-telegram", help="turn @kpszsu and @deraketaua posts into dated threat events (Q12)")
     experiment = commands.add_parser("experiment", help="validation experiments E1-E3 (DESIGN.md section 3)")
     experiment.add_argument("name", choices=list(experiments.EXPERIMENTS))
     experiment.add_argument("--assume-e2", choices=["shared", "per unit"],
@@ -33,6 +34,8 @@ def main() -> None:
             telegram.download(channel)
     elif args.command == "check-labels":
         validation.main()
+    elif args.command == "build-telegram":
+        threats.build()
     elif args.command == "experiment":
         if args.name == "lightgbm":
             experiments.lightgbm_settings(args.assume_e2)
