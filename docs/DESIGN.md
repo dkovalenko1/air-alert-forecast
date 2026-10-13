@@ -100,6 +100,22 @@ All three run on the validation period only (2026-08-17 → 2026-09-13), with th
 - **Selection rule:** the same as E1–E3. Telegram stays in a model only if it lowers that model's Brier score, averaged over the six horizons, by at least 0.0005.
 - **Reported in addition:** per horizon and for units calm at t, where the gain is expected (short horizons, alert starts).
 
+**E5. A small, targeted Telegram set (Q12)** (protocol fixed 2026-10-13, after E4's result and before E5 ran):
+
+- **Why:** E4's 47 Telegram features did not pass the threshold (logistic −0.00032, LightGBM worse). E5 tests whether a few features, each chosen for a stated reason, do better. E5 was designed after seeing E4, and it is the second Telegram try on the same validation weeks, so a pass is weaker evidence than E1–E4. Both results are reported.
+- **Features (7):**
+  - posts naming the unit itself, any threat, last 60 min (a threat heading for this raion);
+  - posts naming the unit's whole oblast, any threat, last 60 min;
+  - posts naming a neighbouring unit, any threat, last 60 min (as in E4);
+  - minutes since the last post naming the unit (as in E4);
+  - nationwide drone posts, last 3 h (how big the current drone wave is);
+  - nationwide missile and ballistic posts, last 3 h;
+  - nationwide aviation posts, last 6 h (strategic bombers and MiG-31 often take off hours before a missile strike, which matters for the longer horizons).
+- **Variants:** each model as chosen by E1–E3, without (default) and with these 7 features. Same grid, weeks and training rows.
+- **Selection rule:** the same as E4. The targeted set stays in a model only if it lowers that model's mean Brier score by at least 0.0005.
+- **No further Telegram variants** are tried on validation after E5, whatever it shows.
+- **Test run:** each model is reported on the test period with and without the targeted set (the ablation above). The variant chosen here is the main result, so the test shows Telegram's effect whichever way E5 goes.
+
 ## 4. Decisions
 
 Hard-to-reverse decisions (ADRs):
