@@ -8,6 +8,7 @@
     "persistence",
     "historical_rate",
     "recent_rate",
+    "recent_rate_by_state",
     "logistic",
     "logistic + Telegram (targeted)",
     "lightgbm",
