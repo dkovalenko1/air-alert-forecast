@@ -152,4 +152,43 @@ def check_e3_assumption() -> None:
     print(f"E2 chose '{e2}' for LightGBM; E3 was run as '{e3['e2_mode']}': {status}")
 
 
-EXPERIMENTS = {"training-start": training_start, "per-unit": shared_or_per_unit, "lightgbm": lightgbm_settings}
+def require_valid_e3(decisions: dict) -> dict:
+    """E3's result, refused if E3 ran on a different shared/per-unit setup than E2 chose."""
+    e2, e3 = decisions["e2_shared_or_per_unit"]["lightgbm"], decisions["e3_lightgbm_settings"]
+    if e3["e2_mode"] != e2:
+        raise SystemExit(f"E3 ran as '{e3['e2_mode']}' but E2 chose '{e2}' for LightGBM: rerun E3 first.")
+    return e3
+
+
+def telegram_comparison() -> dict:
+    """E4 (Q12): each model as chosen by E1-E3, without (default) and with the Telegram threat-post features."""
+    decisions = json.loads((OUT / "decisions.json").read_text())
+    e2, e3 = decisions["e2_shared_or_per_unit"], require_valid_e3(decisions)
+    parts, chosen = [], {}
+    for model in ("logistic", "lightgbm"):
+        train_start, per_unit = _start(model), e2[model] == "per unit"
+        grid = load_grid("validation", train_start, telegram=True)
+
+        def factory(telegram: bool):
+            if model == "logistic":
+                base = functools.partial(Logistic, telegram=telegram)
+            else:
+                params = {**LIGHTGBM_SETTINGS[e3["lightgbm"]], **({"n_jobs": 1} if per_unit else {})}
+                base = functools.partial(LightGBM, telegram=telegram, **params)
+            return functools.partial(PerUnit, base) if per_unit else base
+
+        metrics = pd.concat([_evaluate(grid, {model: factory(telegram)}, train_start).assign(variant=label)
+                             for label, telegram in (("without", False), ("with Telegram", True))])
+        parts.append(metrics)
+        chosen[model] = choose(metrics, "without")
+        del grid
+    _report("E4 with or without Telegram", chosen)
+    metrics = pd.concat(parts, ignore_index=True)
+    _save("e4_telegram", metrics, {m: w for m, (w, _) in chosen.items()})
+    main = metrics[(metrics.units == "all") & (metrics.subset.isin(["all", "calm at t"]))]
+    print(main.pivot_table(index=["model", "subset", "horizon"], columns="variant", values="brier").round(4).to_string())
+    return {m: w for m, (w, _) in chosen.items()}
+
+
+EXPERIMENTS = {"training-start": training_start, "per-unit": shared_or_per_unit, "lightgbm": lightgbm_settings,
+               "telegram": telegram_comparison}

@@ -2,7 +2,7 @@ import pandas as pd
 
 import pytest
 
-from airalert.experiments import MIN_GAIN, choose, lightgbm_mode
+from airalert.experiments import MIN_GAIN, choose, lightgbm_mode, require_valid_e3
 
 
 def metrics(briers: dict) -> pd.DataFrame:
@@ -35,3 +35,11 @@ def test_e3_uses_e2s_decision_or_an_explicit_assumption():
         lightgbm_mode(decided, "per unit")  # contradicts E2
     with pytest.raises(SystemExit):
         lightgbm_mode({}, None)  # neither decided nor assumed
+
+
+def test_e4_refuses_an_e3_run_on_the_wrong_setup():
+    ok = {"e2_shared_or_per_unit": {"lightgbm": "shared"}, "e3_lightgbm_settings": {"lightgbm": "default", "e2_mode": "shared"}}
+    assert require_valid_e3(ok)["lightgbm"] == "default"
+    wrong = {**ok, "e2_shared_or_per_unit": {"lightgbm": "per unit"}}
+    with pytest.raises(SystemExit):
+        require_valid_e3(wrong)
