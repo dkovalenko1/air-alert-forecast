@@ -16,7 +16,7 @@ from sklearn.metrics import average_precision_score, brier_score_loss, log_loss,
 
 from airalert.features import HORIZONS, HOUR, KYIV
 from airalert.models import MODELS, feature_columns
-from airalert.telegram_features import TELEGRAM_FEATURES
+from airalert.telegram_features import ALL_TELEGRAM_FEATURES
 
 # Pinned dates (Q4, Q9), Kyiv time.
 TRAIN_START = pd.Timestamp("2025-08-01", tz=KYIV)
@@ -33,7 +33,7 @@ def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
         f"target_active_day_ago_h{h}": "target_active_day_ago", f"target_active_week_ago_h{h}": "target_active_week_ago",
         f"label_h{h}": "label", f"published_label_h{h}": "published_label", f"label_corrected_at_h{h}": "label_corrected_at",
     })
-    telegram = [c for c in TELEGRAM_FEATURES if c in grid.columns]
+    telegram = [c for c in ALL_TELEGRAM_FEATURES if c in grid.columns]
     return renamed[["t", "label", "published_label", "label_corrected_at", *feature_columns(), *telegram]]
 
 

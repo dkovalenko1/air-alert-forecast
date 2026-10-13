@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from airalert.features import UNIT_FEATURES
-from airalert.telegram_features import TELEGRAM_FEATURES
+from airalert.telegram_features import TELEGRAM_SETS
 
 NUMERIC = UNIT_FEATURES + [
     "national_on_alert_share", "national_starts_last_1h", "oblast_on_alert_share",
@@ -60,12 +60,12 @@ class HistoricalRate:
 
 
 class Logistic:
-    """`telegram=True` adds the Telegram threat-post features (Q12)."""
+    """`telegram="all"` or `"targeted"` adds that set of Telegram threat-post features (Q12, experiments E4, E5)."""
 
     name = "logistic"
 
-    def __init__(self, telegram: bool = False):
-        self.numeric = NUMERIC + (TELEGRAM_FEATURES if telegram else [])
+    def __init__(self, telegram: str | None = None):
+        self.numeric = NUMERIC + (TELEGRAM_SETS[telegram] if telegram else [])
 
     def fit(self, frame, y):
         from sklearn.compose import ColumnTransformer
@@ -91,17 +91,18 @@ class LightGBM:
     `early_stopping_days`: choose the number of trees on the last N days of the *training* rows (trees are added
     until the log loss there stops improving for 100 rounds), then refit on all training rows with that number.
     Validation data never sets it. `use_unit=False` leaves out the raion and oblast identity, so the model can
-    only use what is happening around the unit. `telegram=True` adds the Telegram threat-post features (Q12).
+    only use what is happening around the unit. `telegram="all"` or `"targeted"` adds that set of Telegram threat-post
+    features (Q12, experiments E4, E5).
     """
 
     name = "lightgbm"
 
-    def __init__(self, early_stopping_days: int | None = None, use_unit: bool = True, telegram: bool = False, **params):
+    def __init__(self, early_stopping_days: int | None = None, use_unit: bool = True, telegram: str | None = None, **params):
         self.early_stopping_days, self.use_unit = early_stopping_days, use_unit
         self.params = {"n_estimators": 300, "learning_rate": 0.05, "num_leaves": 63, "min_child_samples": 100,
                        "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8, "verbose": -1, **params}
         self.columns = feature_columns() if use_unit else [c for c in feature_columns() if c not in CATEGORICAL]
-        self.columns += TELEGRAM_FEATURES if telegram else []
+        self.columns += TELEGRAM_SETS[telegram] if telegram else []
         self.categorical = [c for c in CATEGORICAL if c in self.columns]
 
     def fit(self, frame, y):

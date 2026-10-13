@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from airalert.features import build_grid
-from airalert.telegram_features import TELEGRAM_FEATURES, add_telegram_features, reference_counts
+from airalert.telegram_features import ALL_TELEGRAM_FEATURES, add_telegram_features, reference_counts
 
 START, END = pd.Timestamp("2026-08-01", tz="UTC"), pd.Timestamp("2026-08-04", tz="UTC")
 DATA_END = pd.Timestamp("2026-08-06", tz="UTC")
@@ -52,6 +52,7 @@ def test_counts_use_only_posts_before_t_and_group_types():
     assert (row.tg_local_drones_15m, row.tg_local_drones_60m, row.tg_local_drones_180m) == (0, 1, 1)
     assert row.tg_national_drones_60m == 1 and row.tg_minutes_since_local_threat == 50
     assert row.tg_neighbour_threat_60m == 0
+    assert row.tg_local_threat_60m == 1  # post 1: jet drone and recon, one post
     assert at(add_telegram_features(grid(), events), BORYSPIL, "2026-08-02 10:00").tg_neighbour_threat_60m == 1  # Kyiv borders Boryspil
 
 
@@ -62,7 +63,9 @@ def test_fast_counts_match_the_naive_computation(seed):
     rng = np.random.default_rng(seed)
     for i in rng.choice(len(frame), size=40, replace=False):
         row = frame.iloc[i]
-        for scope, group, w in (("local", "drones", 60), ("oblast", "missiles", 180), ("local", "clear", 15)):
+        for scope, group, w in (("local", "drones", 60), ("oblast", "missiles", 180), ("local", "clear", 15),
+                                ("local", "threat", 60), ("oblast", "threat", 60), ("national", "drones", 180),
+                                ("national", "aviation", 360)):
             assert row[f"tg_{scope}_{group}_{w}m"] == reference_counts(events, row.unit_id, row.t, scope, group, w)
 
 
@@ -74,7 +77,8 @@ def test_posts_after_t_never_change_features_at_t(seed):
         available_at=lambda e: cutoff + (e.available_at - e.available_at.min()), post_id=lambda e: e.post_id + 10_000)])
     a, b = add_telegram_features(grid(), events), add_telegram_features(grid(), rewritten)
     known = a.t <= cutoff
-    pd.testing.assert_frame_equal(a.loc[known, TELEGRAM_FEATURES].reset_index(drop=True), b.loc[known, TELEGRAM_FEATURES].reset_index(drop=True))
+    pd.testing.assert_frame_equal(a.loc[known, ALL_TELEGRAM_FEATURES].reset_index(drop=True),
+                                  b.loc[known, ALL_TELEGRAM_FEATURES].reset_index(drop=True))
 
 
 def test_a_post_edited_after_t_is_not_seen_before_its_edit():

@@ -21,7 +21,7 @@ def main() -> None:
     bt.add_argument("--models", nargs="+", default=list(MODELS), choices=list(MODELS))
     commands.add_parser("check-labels", help="compare labels with the official channel (Q20) and alerts.in.ua (Q2)")
     commands.add_parser("build-telegram", help="turn @kpszsu and @deraketaua posts into dated threat events (Q12)")
-    experiment = commands.add_parser("experiment", help="validation experiments E1-E3 (DESIGN.md section 3)")
+    experiment = commands.add_parser("experiment", help="validation experiments E1-E5 (DESIGN.md section 3)")
     experiment.add_argument("name", choices=list(experiments.EXPERIMENTS))
     experiment.add_argument("--assume-e2", choices=["shared", "per unit"],
                             help="start E3 while E2 is still running, assuming its LightGBM choice (checked afterwards)")

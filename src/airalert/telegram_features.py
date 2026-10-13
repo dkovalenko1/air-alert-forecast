@@ -9,6 +9,11 @@ t and within a look-back window:
 - national: all posts, by threat group, last 60 min, and any threat in the last 15 min;
 - minutes since the last post naming the unit (capped at a week).
 
+TELEGRAM_FEATURES is the full set (experiment E4). TARGETED_FEATURES is a small set chosen for stated reasons
+(experiment E5, DESIGN.md section 3): any threat naming the unit, its oblast or a neighbour in the last hour, minutes
+since the unit was last named, and the nationwide drone and missile posts of the last 3 h and aviation posts of the
+last 6 h.
+
 Threat groups: drones (incl. jet and reconnaissance drones), missiles (incl. ballistic), guided bombs, aviation,
 intercepts, all-clear. A post counts once per group, however many of its types fall in it.
 `reference_counts` recomputes one count naively; tests check both agree and that later posts never change a feature.
@@ -36,6 +41,13 @@ TELEGRAM_FEATURES = (
     + [f"tg_neighbour_threat_{w}m" for w in NEIGHBOUR_WINDOWS_MIN]
     + [f"tg_national_{group}_60m" for group in GROUPS] + ["tg_national_threat_15m", "tg_minutes_since_local_threat"]
 )
+NATIONAL_LONG = {"drones": 180, "missiles": 180, "aviation": 360}  # group: window in minutes (E5)
+TARGETED_FEATURES = (
+    ["tg_local_threat_60m", "tg_oblast_threat_60m", "tg_neighbour_threat_60m", "tg_minutes_since_local_threat"]
+    + [f"tg_national_{group}_{w}m" for group, w in NATIONAL_LONG.items()]
+)
+ALL_TELEGRAM_FEATURES = TELEGRAM_FEATURES + [c for c in TARGETED_FEATURES if c not in TELEGRAM_FEATURES]
+TELEGRAM_SETS = {"all": TELEGRAM_FEATURES, "targeted": TARGETED_FEATURES}
 
 
 def _grouped(events: pd.DataFrame) -> pd.DataFrame:
@@ -75,7 +87,10 @@ def add_telegram_features(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFr
             for w in WINDOWS_MIN:
                 columns[f"tg_{scope}_{group}_{w}m"] = per_unit(selected, w * 60)[t_idx, u_idx]
 
-    local_threats = events[(events.scope == "local") & (events.group != "clear")].drop_duplicates(["post_id", "unit_id"])
+    threats = events[events.group != "clear"].drop_duplicates(["post_id", "scope", "unit_id"])  # once per post
+    local_threats = threats[threats.scope == "local"]
+    for scope in ("local", "oblast"):
+        columns[f"tg_{scope}_threat_60m"] = per_unit(threats[threats.scope == scope], 3600)[t_idx, u_idx]
     pairs = pd.read_csv(NEIGHBOURS)
     pairs = pairs[pairs.unit_id.isin(units) & pairs.neighbour_id.isin(units)]
     adjacency = np.zeros((len(units), len(units)), dtype=np.float32)
@@ -87,6 +102,9 @@ def add_telegram_features(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFr
     for group in GROUPS:
         times = np.sort(_seconds(national.loc[national.group == group, "available_at"]))
         columns[f"tg_national_{group}_60m"] = _counts(times, t, 3600).astype(np.float32)[t_idx]
+    for group, w in NATIONAL_LONG.items():
+        times = np.sort(_seconds(national.loc[national.group == group, "available_at"]))
+        columns[f"tg_national_{group}_{w}m"] = _counts(times, t, w * 60).astype(np.float32)[t_idx]
     threat_posts = np.sort(_seconds(national[national.group != "clear"].drop_duplicates("post_id")["available_at"]))
     columns["tg_national_threat_15m"] = _counts(threat_posts, t, 900).astype(np.float32)[t_idx]
 
@@ -101,8 +119,11 @@ def add_telegram_features(grid: pd.DataFrame, events: pd.DataFrame) -> pd.DataFr
 
 
 def reference_counts(events: pd.DataFrame, unit_id: str, t: pd.Timestamp, scope: str, group: str, window_min: int) -> int:
-    """One local/oblast count, computed naively from the events available before t."""
+    """One count, computed naively from the events available before t. `group="threat"`: any group but clear;
+    `scope="national"` ignores the unit."""
     e = _grouped(events)
-    known = e[(e.scope == scope) & (e.group == group) & (e.unit_id == unit_id)
+    in_group = e.group != "clear" if group == "threat" else e.group == group
+    at_unit = True if scope == "national" else e.unit_id == unit_id
+    known = e[(e.scope == scope) & in_group & at_unit
               & (e.available_at < t) & (e.available_at >= t - pd.Timedelta(minutes=window_min))]
     return int(known.post_id.nunique())

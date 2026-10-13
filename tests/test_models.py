@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from airalert.models import CATEGORICAL, NUMERIC, LightGBM, Logistic, PerUnit
 
@@ -48,12 +49,13 @@ def test_per_unit_trains_one_model_per_unit_and_handles_one_class_units():
     np.testing.assert_allclose(model.predict(unseen), y.mean())
 
 
-def test_telegram_option_adds_exactly_the_telegram_columns():
-    from airalert.telegram_features import TELEGRAM_FEATURES
+@pytest.mark.parametrize("feature_set", ["all", "targeted"])
+def test_telegram_option_adds_exactly_that_set_of_columns(feature_set):
+    from airalert.telegram_features import ALL_TELEGRAM_FEATURES, TELEGRAM_SETS
 
     data, y = frame()
-    data = data.assign(**{c: np.random.default_rng(1).random(len(data)) for c in TELEGRAM_FEATURES})
-    with_tg, without = LightGBM(telegram=True, n_estimators=10), LightGBM(n_estimators=10)
-    assert set(with_tg.columns) - set(without.columns) == set(TELEGRAM_FEATURES)
+    data = data.assign(**{c: np.random.default_rng(1).random(len(data)) for c in ALL_TELEGRAM_FEATURES})
+    with_tg, without = LightGBM(telegram=feature_set, n_estimators=10), LightGBM(n_estimators=10)
+    assert set(with_tg.columns) - set(without.columns) == set(TELEGRAM_SETS[feature_set])
     assert len(with_tg.fit(data, y).predict(data)) == len(data)
-    assert len(Logistic(telegram=True).fit(data, y).predict(data)) == len(data)
+    assert len(Logistic(telegram=feature_set).fit(data, y).predict(data)) == len(data)

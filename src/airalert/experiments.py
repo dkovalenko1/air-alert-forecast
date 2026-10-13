@@ -1,4 +1,4 @@
-"""Validation experiments E1–E3 (DESIGN.md section 3, protocol fixed before they ran).
+"""Validation experiments E1–E5 (DESIGN.md section 3, each protocol fixed before it ran).
 
 Each experiment runs the weekly walk-forward backtest on the validation period for a set of variants, writes every
 variant's metrics to reports/validation/experiments/<experiment>.csv, and applies the selection rule: the lowest
@@ -160,8 +160,8 @@ def require_valid_e3(decisions: dict) -> dict:
     return e3
 
 
-def telegram_comparison() -> dict:
-    """E4 (Q12): each model as chosen by E1-E3, without (default) and with the Telegram threat-post features."""
+def _without_or_with(name: str, title: str, feature_set: str, label: str) -> dict:
+    """Each model as chosen by E1-E3, without (default) and with one set of Telegram features (E4, E5)."""
     decisions = json.loads((OUT / "decisions.json").read_text())
     e2, e3 = decisions["e2_shared_or_per_unit"], require_valid_e3(decisions)
     parts, chosen = [], {}
@@ -169,7 +169,7 @@ def telegram_comparison() -> dict:
         train_start, per_unit = _start(model), e2[model] == "per unit"
         grid = load_grid("validation", train_start, telegram=True)
 
-        def factory(telegram: bool):
+        def factory(telegram: str | None):
             if model == "logistic":
                 base = functools.partial(Logistic, telegram=telegram)
             else:
@@ -177,18 +177,29 @@ def telegram_comparison() -> dict:
                 base = functools.partial(LightGBM, telegram=telegram, **params)
             return functools.partial(PerUnit, base) if per_unit else base
 
-        metrics = pd.concat([_evaluate(grid, {model: factory(telegram)}, train_start).assign(variant=label)
-                             for label, telegram in (("without", False), ("with Telegram", True))])
+        metrics = pd.concat([_evaluate(grid, {model: factory(telegram)}, train_start).assign(variant=variant)
+                             for variant, telegram in (("without", None), (label, feature_set))])
         parts.append(metrics)
         chosen[model] = choose(metrics, "without")
         del grid
-    _report("E4 with or without Telegram", chosen)
+    _report(title, chosen)
     metrics = pd.concat(parts, ignore_index=True)
-    _save("e4_telegram", metrics, {m: w for m, (w, _) in chosen.items()})
+    _save(name, metrics, {m: w for m, (w, _) in chosen.items()})
     main = metrics[(metrics.units == "all") & (metrics.subset.isin(["all", "calm at t"]))]
     print(main.pivot_table(index=["model", "subset", "horizon"], columns="variant", values="brier").round(4).to_string())
     return {m: w for m, (w, _) in chosen.items()}
 
 
+def telegram_comparison() -> dict:
+    """E4 (Q12): without (default) and with all the Telegram threat-post features."""
+    return _without_or_with("e4_telegram", "E4 with or without Telegram", "all", "with Telegram")
+
+
+def telegram_targeted() -> dict:
+    """E5 (Q12): without (default) and with the small targeted set of Telegram features."""
+    return _without_or_with("e5_telegram_targeted", "E5 with or without the targeted Telegram set", "targeted",
+                            "targeted Telegram")
+
+
 EXPERIMENTS = {"training-start": training_start, "per-unit": shared_or_per_unit, "lightgbm": lightgbm_settings,
-               "telegram": telegram_comparison}
+               "telegram": telegram_comparison, "telegram-targeted": telegram_targeted}
