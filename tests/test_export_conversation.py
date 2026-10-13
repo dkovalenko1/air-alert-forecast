@@ -147,3 +147,24 @@ def test_short_named_secret_is_redacted_but_short_other_settings_are_not(tmp_pat
 def test_accounts_are_named_by_their_config_folder(tmp_path):
     assert export.account_of(tmp_path / ".claude" / "projects" / "-x") == "first"
     assert export.account_of(tmp_path / ".claude-second" / "projects" / "-x") == "second"
+
+
+def test_compaction_shows_the_command_and_a_note_not_the_summary():
+    """The user's /compact: the command stays as their message; Claude Code's caveat, output and summary of the
+    earlier conversation become one note (the summary is not the user's words)."""
+    rows = [
+        record("assistant", [{"type": "text", "text": "Should we accept E4?"}], 1),
+        record("user", "<local-command-caveat>The command below was run directly in Claude Code…</local-command-caveat>", 2,
+               isMeta=True),
+        record("user", "<command-name>/compact</command-name>\n  <command-message>compact</command-message>\n"
+                       "  <command-args></command-args>", 2),
+        record("user", "This session is being continued from a previous conversation… Summary: secret plans", 4,
+               isCompactSummary=True),
+        record("user", "<local-command-stdout>Compacted </local-command-stdout>", 4),
+        record("user", "I would say let's try b)", 5),
+    ]
+    document, counts = export.render(rows)
+    text = body(document)
+    assert "## User (2026-10-12 20:02:00 UTC)\n\n/compact\n" in text and "let's try b)" in text and counts["user"] == 2
+    assert text.count("**Context compaction**") == 1 and "secret plans" not in text and "Summary:" not in text
+    assert "Compacted" not in text and "local-command" not in text and "skill instructions" not in text

@@ -3632,3 +3632,679 @@ All 12 export tests pass. Next I'm running it on the real logs and checking the 
 - Tool call: Bash
 - Tool call: Bash
 - Tool call: Bash
+
+### Assistant (2026-10-13 00:12:32 UTC)
+
+All three handoffs are now described correctly (lines 1796, 2439, 3471). Here is how that stretch reads now:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:13:36 UTC)
+
+The export fix is committed (`57cf529`), with 115 tests passing. E2 is about halfway: both logistic variants are done, and LightGBM shared is running, with LightGBM per-raion still to come. I'll report the E2 results when it finishes.
+
+What changed in the export (`docs/ai-conversation.md`):
+- **Tool calls are one line each:**
+  ```
+  - Tool call: Bash
+  - Tool call: Read
+  ```
+  Their inputs and outputs are gone, which takes the file from **1.25 MB to 0.21 MB**.
+- **All three handoffs are described correctly:**
+  - 19:39, a failed send that T3 Code re-delivered;
+  - 20:58, the chat moved to the second account with a summary;
+  - 23:46, the chat moved **back to the first account**. This one was mislabelled before.
+- **Background-task notifications are one line with their real status**, e.g. "background task **stopped**: …", instead of always "finished".
+- **The usage-limit note now names the account,** and appears once per episode.
+- **Loaded skill instructions shrink to a one-line note.**
+
+There's also a 13th test covering the exact ordering that tripped the first fix: the task notification is its own record, already on the new account, a few milliseconds before the handoff.
+
+**One limitation:** the export can only contain what the session log stores. Some of my short in-between status lines from this session aren't in the log, so they're missing from the export. All your messages and my final replies are there.
+
+---
+
+## User (2026-10-13 00:14:48 UTC)
+
+How is the E2 run going?
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:15:08 UTC)
+
+E2 started at 03:10 and has been running for about 4 minutes. Three of its four variants are done:
+
+| Variant | Status |
+|---|---|
+| Logistic regression, one shared model | ✅ done (24 fits) |
+| Logistic regression, one model per raion | ✅ done (24 fits) |
+| LightGBM, one shared model | ✅ done (24 fits) |
+| LightGBM, one model per raion | ⏳ running: no progress line yet |
+
+The last variant is by far the slowest: each of its 24 fits trains **119 small models**, one per raion. It's using about 4 CPU cores. My rough estimate is **15–20 more minutes**. I'll know better once it prints its first time estimate.
+
+The results for the finished variants aren't readable yet, because the script writes all of E2's metrics and applies the selection rule at the end. I'll report the full comparison as soon as it finishes.
+
+---
+
+## User (2026-10-13 00:17:40 UTC)
+
+Can we run the other models while this one is in progress?
+
+### Assistant (2026-10-13 00:18:01 UTC)
+
+Yes, with one caveat. The protocol says **E3 (LightGBM settings) uses E2's answer** on whether LightGBM is one shared model or one per raion, and E2 hasn't decided yet. So E3 started now has to **assume an answer**. Shared is the natural assumption: it's the default, and per-raion only wins if it beats shared by the margin we fixed in advance.
+
+- **If E2 picks shared**, the early E3 results count as they are.
+- **If E2 picks per-raion**, E3 has to be rerun in that mode. That's slower, about 6× the per-raion cost.
+
+To keep that honest, the assumption is recorded in E3's output, and the code refuses to report E3 as final if the assumption turns out wrong. There's enough capacity: 12 cores and 26 GB, with E2 using about 4 cores and 1.4 GB. Adding that option now; the running E2 process is unaffected, because it has already loaded its code.
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:18:25 UTC)
+
+The tests pass. Committing, then starting E3 in parallel, assuming shared:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:18:36 UTC)
+
+Yes, both are running now (E3 committed as `3988c77`):
+
+| Experiment | Status |
+|---|---|
+| **E2** (shared vs per raion) | Last variant, LightGBM per raion, still running: about 4 cores, 0.9 GB |
+| **E3** (6 LightGBM settings) | Just started, building its grid: 1 core, 1.5 GB |
+
+That's well within the machine's 12 cores and 26 GB. They'll slow each other a little, but it's much faster overall than running them one after the other.
+
+**How the early start stays honest:**
+- E3 runs with the **assumption that E2 picks "shared"** for LightGBM, and that assumption is **saved with E3's result**.
+- When E2 finishes, I check it against E2's actual decision. A small check command reports "valid" or "INVALID: rerun E3".
+- An assumption that contradicts a finished E2 is refused outright. That's tested.
+- **If E2 picks per-raion**, E3 has to be rerun in that mode, which is slow. Shared is the more likely outcome, since it's the default and per-raion only wins if it beats shared by at least 0.0005.
+
+I'll report both results as they finish.
+
+---
+
+## User (2026-10-13 00:19:44 UTC)
+
+What about the Telegram layer, do we have it implemented already?
+
+### Assistant (2026-10-13 00:19:49 UTC)
+
+Checking the code itself rather than going from memory:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:20:21 UTC)
+
+**Partly.** The data and place matching are in place; the part that turns posts into model features isn't built yet.
+
+## Done
+
+1. **Download:** both feature channels are fully downloaded up to 12 October, with edit times:
+
+   | Channel | Messages |
+   |---|---|
+   | `@kpszsu` (Air Force) | 85,427 |
+   | `@deraketaua` | 60,451 |
+2. **Place matching** (`places.py`): it finds cities (404), settlements (638), raions and oblasts in any grammatical case and maps them to raions. It handles region names ("на Полтавщину") and renamed places. It was also hardened after the code review: exact names win over similar stems, and "КР" (cruise missiles) is no longer read as Kryvyi Rih. It's covered by tests.
+
+## Not built yet
+
+3. **Threat type per post:**
+   - drones, including jet drones;
+   - cruise missiles;
+   - ballistic missiles;
+   - guided bombs;
+   - aircraft take-offs (MiG-31K, Tu-95);
+   - shoot-down reports, which are not a threat;
+   - maps and summaries, which carry no information.
+4. **From post to event:** each post becomes "threat type X mentioned for raion Y, known from time Z", where Z follows the agreed edit rule.
+5. **Features in the hourly grid,** using only posts known before *t*:
+   - threat posts mentioning each raion, its neighbours, its oblast and the whole country, over the last 15, 60 and 180 minutes, by type;
+   - time since the last mention.
+
+   Plus the same no-leakage tests as the alert features.
+6. **The comparison with and without Telegram** on validation, then the single test run.
+
+## The edit-time check just now
+
+Every post in both channels has an edit time, but **it's almost always seconds after posting**: median 6–12 seconds, and 90–96% within 10 minutes. There are no bulk-edit days like the label channel had. So the agreed rule, that a post counts from its edit time, costs only seconds for nearly all posts. About 1% were edited more than a day later and effectively drop out; that's the safe direction.
+
+## Timing
+
+Steps 3–5 are a few hours of work, and the comparison then takes about 15 minutes to run. They don't conflict with E2 and E3, which have already loaded their code. The Telegram model would then use whichever LightGBM settings E3 picks. Should I start on it now, while the experiments run?
+
+---
+
+## User (2026-10-13 00:22:05 UTC)
+
+Start working on it now; we will check the final results after E2/3 runs and the Telegram code is ready.
+
+### Assistant (2026-10-13 00:22:12 UTC)
+
+Starting with a survey of how the two channels phrase their posts in the training window (Nov 2025 onward), so the threat-type rules come from real data rather than guesses.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Write
+- Tool call: Write
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:23:47 UTC)
+
+All 5 pass. Adding a `build-telegram` command and running it on the real posts to check coverage:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:24:35 UTC)
+
+Coverage is now **99%** (`@kpszsu`) and **93%** (`@deraketaua`), and all 7 tests pass. Committing this part, then checking the experiments:
+
+- Tool call: Bash
+- Tool call: TaskStop
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:25:36 UTC)
+
+Tests pass, and the old E2 process is gone. Committing, then restarting E2:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:25:43 UTC)
+
+E2 is running again. While it runs, the next Telegram piece: features in the hourly grid. Reading the current feature code to plug into it:
+
+- Tool call: Bash
+- Tool call: Write
+- Tool call: Write
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:26:43 UTC)
+
+All 7 pass on the first run, so, as with the alert features, I'll plant two leaks to make sure the tests bite: counting a post dated exactly at *t*, and counting posts up to 15 minutes after *t*.
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:28:34 UTC)
+
+The Telegram layer is ready. Everything is committed, and all tests pass.
+
+| Piece | What it does | Commit |
+|---|---|---|
+| **Threat types** (`threats.py`) | Reads each `@kpszsu` / `@deraketaua` post as drones, jet drones, reconnaissance, missiles, ballistic, guided bombs, aviation, intercepts or all-clear. Words come first, Air Force emoji are the fallback. A follow-up that only names a place inherits the previous post's type, if that post is at most 30 minutes older. **99% / 93% of posts get a type.** | `2f3fcb1` |
+| **Features** (`telegram_features.py`) | Threat posts known **strictly before *t***, counted for the raion, its oblast, its neighbours and the whole country over 15 / 60 / 180 minutes, plus time since the last post naming the raion. Posts count from their edit time. | `fd255e9` |
+| **Leakage tests** | The fast counts must match a naive count; rewriting posts after *t* must change nothing at *t*; a post edited later must be invisible before its edit. **Two planted leaks both failed the tests**, as they should. | `fd255e9` |
+| **Models and comparison (E4)** | A Telegram on/off option for both models, and the with/without comparison. Its protocol was **committed before it ran**, with the same 0.0005 rule as E1–E3. | `491c4d5`, `d754f00` |
+
+A first look at the training data suggests real signal. When a raion is calm but a post in the last hour named its oblast or a neighbour, about **24–25%** of such hours have an alert in the next hour, against **about 9%** otherwise. E4 will show whether that adds anything beyond the alert-history features.
+
+**One fix along the way:** E2's per-raion LightGBM was heading for more than 2 hours, past the background-task limit. I changed it to train the 119 raion models in parallel, one core each. The models are the same; it's just faster. Then I restarted E2 (`181df64`).
+
+**Where things stand now:**
+- **E2:** on its last variant, LightGBM per raion; that variant's first fit estimated about 3 minutes for the rest.
+- **E3:** 3 of 6 settings done.
+- **E4:** ready. It needs E2's decision, and checks that E3 was run on the right setup. If E2 picks per-raion, E3 has to be rerun first, and E4 refuses to run until then.
+
+I'll start E4 as soon as both finish, then report E2, E3 and E4 together.
+
+**System notification** (2026-10-13 00:32:39 UTC): background task completed: Background command "Rerun experiment E2 with parallel per-unit training" completed (exit code 0)
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:32:46 UTC)
+
+E2 is done: **one shared model wins for both**, by a clear margin. That means E3's "shared" assumption holds, so its results will count. Committing E2's results:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:32:51 UTC)
+
+E2 is committed (`38e9acb`):
+
+| Model | One shared model | One model per raion |
+|---|---|---|
+| Logistic regression | **0.1101** | 0.1136 |
+| LightGBM | **0.1105** | 0.1221 |
+
+These are Brier scores on validation, averaged over the six horizons; lower is better. Per-raion models lose on every measure. Each raion alone has too little data, especially for LightGBM, while the shared model learns patterns common to all raions.
+
+E3 has finished 3 of its 6 LightGBM settings and is now on the fourth (early stopping). E4 will start as soon as E3 is done.
+
+---
+
+## User (2026-10-13 00:38:50 UTC)
+
+What's the progress?
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:38:56 UTC)
+
+**E3 is 4 of 6 settings done**, after 20 minutes:
+
+| LightGBM setting | Status |
+|---|---|
+| default | ✅ |
+| small trees | ✅ |
+| large trees | ✅ |
+| early stopping | ✅ |
+| slow early stopping | ⏳ 10 of 24 fits, about 4 min left |
+| no raion identity | waiting, about 5 min |
+
+So E3 should finish in roughly **10 minutes**. Then E4 (with vs without Telegram) runs: 2 models × 2 variants × 24 fits, roughly another **10–15 minutes**. I'll report E3 and E4 together when both are done.
+
+**System notification** (2026-10-13 00:45:13 UTC): background task completed: Background command "Run experiment E3 (LightGBM settings) assuming a shared model" completed (exit code 0)
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:45:30 UTC)
+
+E3 is committed (`3674255`), and **E4 (with vs without Telegram) is now running**.
+
+E3, LightGBM settings on validation (mean Brier over six horizons, lower is better):
+
+| Setting | Brier | Calm at *t* | ROC-AUC |
+|---|---|---|---|
+| **no raion identity** | **0.1088** | **0.1143** | **0.919** |
+| slow early stopping | 0.1101 | 0.1151 | 0.918 |
+| early stopping | 0.1102 | 0.1152 | 0.918 |
+| small trees | 0.1103 | 0.1154 | 0.918 |
+| default | 0.1105 | 0.1154 | 0.917 |
+| large trees | 0.1117 | 0.1165 | 0.915 |
+
+**The interesting result:** the model does better when it **doesn't know which raion it's forecasting**, and relies only on what's happening there and around it: the raion's own alert history, neighbours, oblast, country, time of day. With the raion's name available, the model apparently memorises raion-specific patterns from training that don't carry over to the following weeks. It's also the same pattern as E2, where per-raion models lost clearly.
+
+**So far, the chosen setup is:**
+- training from 1 Nov 2025;
+- one shared model;
+- for LightGBM, no raion identity.
+
+E4 now tests both models with and without the Telegram features. It should take about 10–15 minutes, and I'll report the result when it finishes.
+
+**System notification** (2026-10-13 00:54:16 UTC): background task completed: Background command "Run experiment E4 (with vs without Telegram) on validation" completed (exit code 0)
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 00:54:50 UTC)
+
+The validation experiments are complete (E4 committed as `10cf24d`). Telegram doesn't make it into the final model: under the rule we fixed in advance, it didn't help enough.
+
+## Results
+
+| Experiment | Question | Winner (mean Brier, lower is better) |
+|---|---|---|
+| E1 | Training start | **1 Nov 2025**: 0.1101 / 0.1105, vs about 0.112 for Aug 2025 or 2023 |
+| E2 | One shared model or one per raion | **Shared**: per raion is clearly worse (LightGBM 0.1221) |
+| E3 | LightGBM settings | **No raion identity**: 0.1088, vs 0.1105 default |
+| E4 | With or without Telegram | **Without**: logistic gains 0.0003, below the 0.0005 threshold; LightGBM is slightly worse with it |
+
+The best model on validation is **LightGBM, shared, without raion identity, trained from November 2025, at 0.1088**. Logistic regression is close behind at 0.1101, and both are well ahead of the baselines (Persistence about 0.19, Historical rate about 0.15).
+
+## Why Telegram probably adds so little
+
+These are my readings of the numbers, not tested:
+- **The alert data already carries most of the same information.** When a post names a raion's oblast or neighbours, those places are usually already on alert, and the model already sees that through the neighbour and oblast alert features. The 25%-vs-9% uplift I saw earlier is mostly the same signal arriving by another route.
+- **Hourly forecasts are too coarse for it.** A threat post gives minutes of warning, and the hour starting at *t* is often decided by alerts that are already on. Even for calm raions one hour ahead, there's no gain: 0.0949 with Telegram vs 0.0943 without.
+- **The signal is sparse and the feature set is large.** Posts name the raion's own area in only 0.6% of calm hours, and 47 extra features give LightGBM room to fit noise.
+
+This is still a useful result for the write-up: we built a careful, leakage-safe Telegram layer, and an honest test showed it doesn't improve hourly forecasts beyond the alert history.
+
+## Your decision
+
+**Do we accept E4 as it is?**
+- **(a) Accept (my recommendation).** The final model uses alert history only, and the README reports the Telegram result as a finding. That's the outcome of the protocol we committed in advance.
+- **(b) Try one more Telegram variant**, e.g. a few targeted features instead of 47. It would have to be written down as a new, pre-registered experiment and reported alongside E4. Every extra attempt on the same validation data makes the final choice slightly optimistic, and a reader could fairly call it tuning until something works.
+
+**After that:**
+1. **The single test run** (14 Sep – 11 Oct) with the chosen setup, both baselines and logistic regression, run once and reported as is.
+2. **The final write-up:** README results, plan statuses, and the conversation export.
+
+---
+
+## User (2026-10-13 11:02:52 UTC)
+
+/compact
+
+**Context compaction** (2026-10-13 11:04:20 UTC): after the user's `/compact`, Claude Code replaced the earlier conversation in the model's working context with a summary. The summary is not repeated here: the full conversation is above. The conversation continues below.
+
+---
+
+## User (2026-10-13 11:04:21 UTC)
+
+I would say let's try b) and see the results
+
+### Assistant (2026-10-13 11:04:36 UTC)
+
+Going with (b). I'll write E5 down in DESIGN.md and commit it before running anything, then implement it, run it, and report it next to E4. First, the current experiment code and protocol text:
+
+- Tool call: Read
+- Tool call: Bash
+- Tool call: Read
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:05:23 UTC)
+
+E5 plan: a small set of 7 features, each with a stated reason, and no more Telegram attempts on validation after it. Checking how the tests use the `telegram` option before changing it:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:05:27 UTC)
+
+E4 took about 25 minutes, so E5 should take about the same. Writing the protocol into DESIGN.md first:
+
+- Tool call: Edit
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:05:36 UTC)
+
+I committed the protocol (`0460884`). Now the features:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:05:53 UTC)
+
+Now the models and backtest. The `telegram` option takes a set name ("all" for E4, "targeted" for E5):
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:06:01 UTC)
+
+Updating the model test to cover both sets, and the feature tests to cover the new counts:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:06:23 UTC)
+
+Now the E5 runner. It shares its code with E4, and E4 passes the set name "all", so E4's result is unchanged:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:06:54 UTC)
+
+All 133 tests pass, and the new columns look sensible. Committing, then starting E5 in the background:
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:07:00 UTC)
+
+While E5 runs (about 25 minutes), I'll bring DESIGN.md's plan table and decision log up to date with E1–E4. Those changes stay uncommitted until E5 reports.
+
+- Tool call: Bash
+- Tool call: Read
+- Tool call: Edit
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:07:19 UTC)
+
+Rewording the explanations: I wrote "four weeks of history" for E2, but per-raion models train on about ten months. I'm also marking all three explanations as likely rather than certain:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:07:28 UTC)
+
+E5 is running; the log shows the first model fits (about 25 minutes in total, like E4). Here's where things stand:
+
+- **E5 protocol committed before the run** (`0460884`): 7 features, the same rule as E4 (keep only if mean Brier improves by ≥ 0.0005), no more Telegram variants on validation afterwards, and both variants reported on the test period whichever way E5 goes.
+- **The 7 features:**
+  - posts naming the raion itself, its whole oblast, or a neighbouring raion, any threat, last hour;
+  - minutes since the raion was last named;
+  - nationwide drone and missile posts, last 3 hours;
+  - nationwide aviation posts, last 6 hours (bomber take-offs often come hours before missile strikes).
+- **Code** (`dfa0441`): the models' Telegram option now takes a set name, "all" for E4 and "targeted" for E5. E4 is unchanged. Tests for the new counts compare them against a simple recount and check that later posts never change them. The full suite passes (133 tests).
+- **DESIGN.md:** while waiting, I recorded the E1–E4 results in the decision log and updated the plan statuses. I'll commit that together with the E5 result.
+
+I'll report when it finishes.
+
+**System notification** (2026-10-13 11:13:43 UTC): background task completed: Background command "Run experiment E5 on the validation period" completed (exit code 0)
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:14:04 UTC)
+
+The smaller Telegram set didn't pass either. Under the rule we fixed before the run, Telegram stays out of both models. The result is committed (`4ce5ea0`).
+
+| Model | Without | 47 features (E4) | 7 features (E5) | Decision |
+|---|---|---|---|---|
+| Logistic | 0.11013 | 0.10981 (−0.00032) | 0.10976 (−0.00037) | without: the gain is below 0.0005 |
+| LightGBM | **0.10881** | 0.10910 (worse) | 0.10948 (worse) | without |
+
+Lower is better (mean Brier over the six horizons).
+
+- **Logistic regression** gains a little from the smaller set, mostly at 3, 6 and 24 hours. It's still below the threshold, and even with Telegram it stays behind LightGBM without it.
+- **LightGBM** is slightly worse with the smaller set at every horizon, including 1 hour ahead for raions that are calm at the time.
+- **Rerun check:** LightGBM without Telegram scored exactly 0.10881 again, the same as in E4.
+
+Two failed attempts make a clear finding for the write-up: Telegram threat posts add almost nothing to hourly raion forecasts beyond what the alert history of the raion and its neighbours already shows. My guess for why LightGBM gets slightly worse is that the channels post more over time, so learned splits on post counts age badly. That's untested.
+
+As agreed in the E5 protocol, we stop trying Telegram variants on validation. I also recorded the E1–E5 results in DESIGN.md's decision log and updated the plan statuses.
+
+The configuration for the test run is now fixed:
+- **Main model:** LightGBM, one shared model without raion identity, trained from November 2025, alert history only.
+- **Also reported:** logistic regression and the Persistence and Historical rate baselines.
+- **Telegram check:** each model also runs with the 7-feature set, so the test period shows whether the Telegram result holds on fresh data.
+
+Should I start the single test run (14 Sep to 11 Oct) now? It runs once, and the results get reported as they come out.
+
+---
+
+## User (2026-10-13 11:37:33 UTC)
+
+Yes, let's do the test run.
+
+- Tool call: Read
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Write
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:39:16 UTC)
+
+The test-run command is written. I'm adding a small test for how it reads the configuration, then I'll start the run.
+
+- Tool call: Write
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:39:37 UTC)
+
+All 136 tests pass. I'm committing the code first so the test result points back to an exact commit, then starting the run:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:39:46 UTC)
+
+The test run is in progress; it should take about 30–40 minutes. It's running from commit `4538a5a` with the configuration taken from the validation decisions, which it saves to `reports/test/configuration.json`:
+- **Period:** 14 Sep – 11 Oct (Kyiv time), trained from 1 Nov 2025 and retrained every week.
+- **Models:** Persistence, Historical rate, logistic regression and LightGBM (without raion identity). Each of the two models also runs with the 7-feature Telegram set as a check.
+- **Run once:** `test-run` refuses to start again once the test results exist, and the `backtest` command now only accepts the validation period. Rerunning on the test period would take a deliberate step.
+
+I'll report the results as they come out when it finishes.
+
+**System notification** (2026-10-13 11:46:32 UTC): background task completed: Background command "Run the single test run on the test period" completed (exit code 0)
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:46:42 UTC)
+
+LightGBM, the model chosen on validation, comes out best on the test period too. Before writing it up I'll check how solid the differences are, from the saved predictions; nothing gets rerun.
+
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:47:09 UTC)
+
+The run finished, and the bootstrap gives the precision I need. Before committing, I'll check what open question Q16 (city units) still asks, so I can describe what's left accurately:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:47:46 UTC)
+
+The numbers match my earlier quick calculation. One cleanup (`ROOT` was imported twice), plus a test for the comparison function:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:48:06 UTC)
+
+All 138 tests pass. Now recording the test result and the Q16 status in DESIGN.md, then committing:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:48:25 UTC)
+
+The test run is done (results committed as `b30da01`). **LightGBM, the model chosen on validation, is also the best on the test period, which it saw only once:**
+
+| Model (14 Sep – 11 Oct) | Mean Brier (lower is better) | vs LightGBM (95% range) |
+|---|---|---|
+| **LightGBM** | **0.1180** | — |
+| LightGBM + Telegram (7 features) | 0.1184 | +0.0004 (−0.0002 … +0.0011) |
+| Logistic + Telegram (7 features) | 0.1215 | +0.0035 |
+| Logistic regression | 0.1217 | +0.0037 (+0.0023 … +0.0054) |
+| Historical rate | 0.1576 | +0.0396 (+0.0350 … +0.0440) |
+| Persistence | 0.2148 | +0.0968 |
+
+The ranges come from resampling whole days. Neighbouring days aren't independent, so treat them as a rough guide.
+
+- **Against the baselines:** LightGBM is about 25% better than Historical rate (29% on validation). One hour ahead it scores 0.076 against 0.122 for Persistence. Twenty-four hours ahead it scores 0.134 against 0.159 for Historical rate.
+- **The ranking holds every week:** LightGBM, then logistic, then Historical rate, then Persistence, in all four test weeks.
+- **Test scores are higher than on validation** (0.1180 vs 0.1088). Part of that is a busier period: alerts were on in 42% of hours, against 38% in validation.
+- **Telegram on the test period** matches the validation finding. Neither model changes beyond noise: LightGBM gets 0.0004 worse, logistic 0.0002 better, and both ranges include zero.
+- **City alert zones (Q16) never got their check.** Kharkiv and Zaporizhzhia city zones were folded into their raions, which is the fallback we agreed. Since the test period has now been used, adding them would be a new spec, so I recorded it in DESIGN.md as future work.
+
+Two smaller additions:
+- A `test-report` command recomputes the ranges and the per-week table from the saved predictions, without rerunning any model.
+- `test-run` refuses to run a second time on the test period.
+
+The only step left is the write-up:
+1. **README results:** the table above, what the forecast is good and bad at, and the E1–E5 findings, including that Telegram didn't help.
+2. **Figures:** Brier by horizon, a calibration plot (DESIGN.md lists it as a metric), and a few example forecasts for one raion. These would go in a notebook or `reports/figures/`.
+3. **A fresh export of this conversation** into `docs/ai-conversation.md`, then a final check that no secrets ended up in the repo.
+
+Should I go ahead with the write-up?
+
+---
+
+## User (2026-10-13 11:52:04 UTC)
+
+Sure, go ahead.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:52:10 UTC)
+
+There's already a `scripts/make_figures.py` and a `docs/figures/` folder. Checking what they contain:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:52:15 UTC)
+
+The design doc says how the write-up should look. Reading the product sections:
+
+- Tool call: Read
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:53:55 UTC)
+
+Now the `train` and `predict` commands themselves:
+
+- Tool call: Write
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:55:36 UTC)
+
+Kyiv city was on alert most of the time in late September, so it makes a poor example. 4–8 October has quiet days and busy days, which shows both cases. Writing the results figures:
+
+- Tool call: Bash
+- Tool call: Read
+- Tool call: Read
+- Tool call: Read
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Read
+- Tool call: Read
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:57:03 UTC)
+
+`train` and `predict` work, and the three result figures are drawn. Now writing the README results section and fixing the stale lines in ADR-0007.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:57:30 UTC)
+
+I have the numbers. For the README usage section I'll take a real excerpt from the forecast I just made, rather than illustrative values:
+
+- Tool call: Bash
+- Tool call: Write
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:59:11 UTC)
+
+Now the design doc. Its status line still says "pre-build", and the command table lists commands that don't exist (`--spec`, `update-data`). Updating both to match what was built:
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:59:37 UTC)
+
+All 142 tests pass. Committing in three steps: the forecast commands, the figures, then the write-up.
+
+- Tool call: Bash
+
+### Assistant (2026-10-13 11:59:42 UTC)
+
+Last step: the conversation export. Checking how the script is run:
+
+- Tool call: Bash
+- Tool call: Bash
+- Tool call: Bash
+
+### Assistant (2026-10-13 12:00:04 UTC)
+
+Four records: the boundary marker, the summary, a caveat line, and the `/compact` command with its output. I'll read the render function to see how each is treated now:
+
+- Tool call: Read
+- Tool call: Bash

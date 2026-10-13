@@ -10,7 +10,8 @@ Every user message and assistant reply is kept, in order. Tool calls are listed 
 their inputs and outputs are left out to keep the record readable. Also left out: the model's internal reasoning
 ("thinking"), the hidden harness context (<system-reminder> blocks) and the text of loaded skill instructions.
 The usage-limit replies, the "Continue where you left off." retries and the summaries T3 Code gives an account at
-a handoff are replaced by short notes saying what happened; background-task notifications become one line.
+a handoff are replaced by short notes saying what happened; background-task notifications become one line. A
+`/compact` the user ran is kept as their message; the summary Claude Code then gave the model becomes a note.
 
 Secrets are replaced with <redacted>: every value in .env, and the project's secret variables
 (SECRET_NAMES) also when they are set only in the environment; the script fails if any remain.
@@ -49,6 +50,9 @@ SWITCH_WITH_DELTA = ("**Context handoff** ({time}): T3 Code moved this chat back
 FAILED_SEND = ("**Context handoff** ({time}): the previous attempt to send the next message failed (background commands "
                "were still running), so T3 Code re-delivered it with a note of the failed attempt. The message follows.\n")
 TASK_NOTE = "**System notification** ({time}): background task {status}: {summary}\n"
+COMPACTED = ("**Context compaction** ({time}): after the user's `/compact`, Claude Code replaced the earlier conversation "
+             "in the model's working context with a summary. The summary is not repeated here: the full conversation is "
+             "above. The conversation continues below.\n")
 
 
 def secrets(env_file: pathlib.Path = ROOT / ".env", environ=os.environ) -> list[str]:
@@ -125,12 +129,18 @@ def render(rows) -> tuple[str, dict]:
             parts = content if isinstance(content, list) else [{"type": "text", "text": content}]
             counts["tool result"] += sum(p.get("type") == "tool_result" for p in parts)
             text = without_harness_context(text_of([p for p in parts if p.get("type") != "tool_result"]))
-            if not text or text == RETRY:
-                continue
+            if not text or text == RETRY or "<local-command-caveat>" in text or "<local-command-stdout>" in text:
+                continue  # Claude Code's own lines around a slash command the user ran
             flush_tools()
+            if r.get("isCompactSummary"):
+                blocks.append(COMPACTED.format(time=time))
+                continue
             if r.get("isMeta"):
                 blocks.append(f"**System** ({time}): skill instructions loaded (not repeated here).\n")
                 continue
+            if command := re.search(r"<command-name>(.*?)</command-name>", text, re.S):  # a slash command the user typed
+                args = re.search(r"<command-args>(.*?)</command-args>", text, re.S)
+                text = f"{command.group(1).strip()} {args.group(1).strip() if args else ''}".strip()
             notification = re.search(r"<task-notification>.*?</task-notification>", text, re.S)
             if notification:
                 blocks.append(task_note(notification.group(0), time))
