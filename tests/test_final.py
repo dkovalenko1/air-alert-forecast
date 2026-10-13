@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from airalert.final import comparisons, configuration, differences
+from airalert.final import comparisons, configuration, differences, differences_by_horizon
 from airalert.models import LightGBM, Logistic
 
 DECISIONS = {
@@ -57,3 +57,17 @@ def test_differences_of_a_perfect_and_a_coin_flip_model():
     coin, same = table.iloc[0], table.iloc[1]
     assert coin.difference == pytest.approx(0.25) and coin.low == pytest.approx(0.25) and coin.share_b_better == 1
     assert same.difference == 0 and same.low == same.high == 0
+
+
+def test_differences_by_horizon_and_for_calm_units():
+    t = pd.date_range("2026-09-14", periods=24 * 10, freq="h", tz="Europe/Kyiv")
+    y = np.random.default_rng(1).integers(2, size=len(t))
+    on_alert = np.arange(len(t)) % 2  # every other row on alert at t
+    rows = [pd.DataFrame({"model": "perfect", "horizon": h, "t": t, "y": y, "p": y.astype(float), "on_alert": on_alert}) for h in (1, 24)]
+    # "late" is perfect 1 h ahead but a coin flip a day ahead, and only on calm rows
+    rows += [pd.DataFrame({"model": "late", "horizon": 1, "t": t, "y": y, "p": y.astype(float), "on_alert": on_alert}),
+             pd.DataFrame({"model": "late", "horizon": 24, "t": t, "y": y, "p": np.where(on_alert == 0, 0.5, y), "on_alert": on_alert})]
+    table = differences_by_horizon(pd.concat(rows), [("late", "perfect")]).set_index(["subset", "horizon"])
+    assert table.loc[("all", 1), "difference"] == 0 and table.loc[("calm at t", 1), "difference"] == 0
+    assert table.loc[("calm at t", 24), "difference"] == pytest.approx(0.25)
+    assert table.loc[("all", 24), "difference"] == pytest.approx(0.125)

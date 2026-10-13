@@ -100,13 +100,27 @@ def differences(predictions: pd.DataFrame, pairs: list[tuple[str, str]], n: int 
     return pd.DataFrame(rows)
 
 
+def differences_by_horizon(predictions: pd.DataFrame, pairs: list[tuple[str, str]]) -> pd.DataFrame:
+    """The same comparison for each horizon on its own, for all rows and for units calm at t."""
+    rows = []
+    for subset, part in (("all", predictions), ("calm at t", predictions[predictions.on_alert == 0])):
+        for h, at_h in part.groupby("horizon"):
+            rows.append(differences(at_h, pairs).assign(subset=subset, horizon=h))
+    return pd.concat(rows, ignore_index=True)[["a", "b", "subset", "horizon", "difference", "low", "high", "share_b_better"]]
+
+
 def report() -> None:
     predictions = pd.read_parquet(ROOT / "data" / "results" / "test_predictions.parquet")
     config = json.loads((REPORT / "configuration.json").read_text())
     table = differences(predictions, comparisons(config["models"], config["chosen"]))
     table.to_csv(REPORT / "differences.csv", index=False)
+    by_horizon = differences_by_horizon(predictions, [(a, b) for a, b in comparisons(config["models"], config["chosen"])
+                                                      if " + Telegram" not in a])
+    by_horizon.to_csv(REPORT / "differences_by_horizon.csv", index=False)
     weekly = (predictions.assign(se=(predictions.p - predictions.y) ** 2).groupby(["week", "model"]).se.mean()
               .unstack("model")[config["models"]])
     weekly.to_csv(REPORT / "weekly.csv")
     print(f"Mean Brier differences, a − b (> 0: b is better), 95% day-resampled interval:\n{table.round(5).to_string()}")
     print(f"\nBrier by week (all horizons pooled):\n{weekly.round(4).to_string()}")
+    recent = by_horizon[by_horizon.a == "recent_rate"]
+    print(f"\nRecent rate − LightGBM by horizon (> 0: LightGBM is better):\n{recent.round(4).to_string(index=False)}")

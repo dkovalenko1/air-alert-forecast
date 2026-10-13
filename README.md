@@ -15,31 +15,43 @@ Terms: [CONTEXT.md](CONTEXT.md). The conversation with the AI assistant that bui
 
 **Test period: 14 September – 11 October 2026** (Kyiv time), the latest four weeks of data. Models were retrained
 every week on everything known at the start of that week. All model and setting choices were made on the
-validation period before it (17 August – 13 September) and the test period was run once, at the end
-([`reports/test/`](reports/test/)).
+validation period before it (17 August – 13 September). The test period was first run once, at the end; after an
+external review found bugs in the Telegram features and two label edge cases (see the Telegram section), it was run
+again with the same configuration ([`reports/test/`](reports/test/); the first run is in the git history,
+commit b30da01). LightGBM's score did not change (0.1180).
 
 | Brier score (lower is better) | h = 1 | 2 | 3 | 6 | 12 | 24 | mean |
 |---|---|---|---|---|---|---|---|
-| Persistence ("same as now") | 0.122 | 0.209 | 0.222 | 0.238 | 0.247 | 0.251 | 0.215 |
+| Persistence ("same as now") | 0.122 | 0.209 | 0.222 | 0.238 | 0.248 | 0.251 | 0.215 |
 | Historical rate (same hour and weekday, last 4 weeks) | 0.157 | 0.157 | 0.157 | 0.157 | 0.158 | 0.159 | 0.158 |
-| Logistic regression | 0.078 | 0.121 | 0.125 | 0.132 | 0.135 | 0.139 | 0.122 |
-| **LightGBM** | **0.076** | **0.117** | **0.122** | **0.128** | **0.132** | **0.134** | **0.118** |
+| Recent rate (the raion's alert share, last 4 weeks) | 0.132 | 0.132 | 0.132 | 0.132 | 0.133 | **0.133** | 0.132 |
+| Logistic regression | 0.078 | 0.121 | 0.125 | 0.132 | 0.136 | 0.139 | 0.122 |
+| **LightGBM** | **0.076** | **0.117** | **0.122** | **0.128** | **0.132** | 0.134 | **0.118** |
 
 ![Forecast error by horizon](docs/figures/brier_by_horizon.png)
 
-- **LightGBM is best at every horizon** and in each of the four test weeks. Its mean Brier score is 25% below the
-  Historical rate baseline. Its lead over logistic regression is 0.0037 (95% interval 0.0023–0.0054, from resampling
-  days, [`differences.csv`](reports/test/differences.csv)).
-- **Alert starts:** for raions calm at t, LightGBM scores 0.108 one hour ahead, against 0.154 for Historical rate.
-  ROC-AUC is 0.955 one hour ahead and 0.890 a day ahead.
+- **LightGBM's lead is short-term.** Against the strongest simple baseline, each raion's recent alert share, it is
+  clearly better 1–6 hours ahead (Brier 0.056 lower one hour ahead, 0.005 lower six hours ahead). 12 and 24 hours
+  ahead the two cannot be told apart: the differences are +0.0004 and −0.0007, with 95% intervals from −0.003 to
+  +0.003 ([`differences_by_horizon.csv`](reports/test/differences_by_horizon.csv); intervals from resampling days).
+  On validation LightGBM was ahead at every horizon (0.123 against 0.129 a day ahead), so this only showed on the
+  test period. In short: the model knows what happens in the next few hours; a day ahead, it knows little more than
+  how often the raion has been on alert lately.
+- **On average over the six horizons** LightGBM is best: 0.1180, against 0.1217 for logistic regression (lead 0.0037,
+  95% interval 0.0023–0.0054), 0.1324 for Recent rate (lead 0.0144, 0.0115–0.0178) and 0.1576 for Historical rate
+  ([`differences.csv`](reports/test/differences.csv)). It has the lowest score in each of the four test weeks among
+  the models in the table.
+- **Alert starts:** for raions calm at t, the onset question, LightGBM scores 0.108 one hour ahead, against 0.128 for
+  Recent rate and 0.154 for Historical rate; ROC-AUC is 0.845 one hour ahead and 0.840 a day ahead. Beyond 3 hours
+  ahead, it is not measurably better than Recent rate for calm raions.
 - **The probabilities mean what they say** (below). One hour ahead, forecasts of 30–40% came true 35% of the time.
   A day ahead, mid-range forecasts run a little low: 30–40% came true 43% of the time, probably because the test
   period had more alerts than the weeks the model learnt from.
 - **The test period was harder than validation** (LightGBM 0.118 against 0.109): alerts were on in 42% of
   raion-hours, against 38%.
 - **17 frontline units** (Donetsk 8, Zaporizhzhia 5, Kharkiv 2, Dnipropetrovsk 1, Sumy 1) were on alert in at least 90% of
-  validation hours. They are easy to forecast. Without
-  them, every score rises (LightGBM 0.134, Historical rate 0.180), and the ranking stays the same.
+  validation hours. They are easy to forecast. Without them, every score rises (LightGBM 0.134, Recent rate 0.151,
+  Historical rate 0.180), and the ranking stays the same.
 
 <p>
   <img src="docs/figures/calibration.png" width="42%" alt="Calibration of LightGBM on the test period">
@@ -59,12 +71,16 @@ threat events, using rules with no language model: drones, missiles, ballistic, 
 intercepts, all-clear; the places named; the time of the post or its last edit. They were tested twice on
 validation, with the rule fixed in advance (keep only if the mean Brier score improves by at least 0.0005):
 
-- **47 features** (E4): logistic regression improved by 0.0003, and LightGBM got worse.
-- **7 targeted features** (E5, designed after E4 failed): logistic regression improved by 0.0004, and LightGBM got
+- **47 features** (E4): no change for logistic regression (0.11013 → 0.11014), and LightGBM got worse.
+- **7 targeted features** (E5, designed after E4 failed): logistic regression improved by 0.0001, and LightGBM got
   worse.
 
-Neither set passed. On the test period, adding the 7 features changed LightGBM by +0.0004 (−0.0002 … +0.0011) and
-logistic regression by −0.0002 (−0.0012 … +0.0006): no effect either way. Our reading, not tested: a post naming a
+An external review of the first version found two leaks and three extraction bugs in these features (e.g. post
+ids clashing between the two channels, and an all-clear for one region erasing the threats listed for others).
+The numbers here are after the fixes. Before them, Telegram looked slightly better, and the decisions were the same.
+
+Neither set passed. On the test period, adding the 7 features changed LightGBM by +0.0005 (−0.0001 … +0.0011) and
+logistic regression by +0.00004 (−0.0010 … +0.0010): no measurable effect either way. Our reading, not tested: a post naming a
 raion mostly arrives when its neighbours are already on alert, which the model already sees. And a post gives
 minutes of warning, while the forecast is by the hour.
 
@@ -80,7 +96,7 @@ Each experiment's protocol was written down and committed before it ran
 | E2. One shared model or one per raion | shared (0.1105) | per raion 0.1221 |
 | E3. LightGBM settings | without raion identity (0.1088) | default 0.1105; four others 0.1101–0.1117 |
 | E4. All Telegram features | without (0.1088) | with 0.1091 |
-| E5. Targeted Telegram features | without (0.1088) | with 0.1095 |
+| E5. Targeted Telegram features | without (0.1088) | with 0.1097 |
 
 The scores are LightGBM's. Logistic regression made the same choices in E1, E2, E4 and E5 (E3 was for LightGBM only).
 
@@ -126,11 +142,11 @@ Forecast time: 2026-10-13 00:00 Kyiv (data up to 2026-10-13 00:50); model: light
 Probability of an alert in the hour starting h - 1 hours from now:
 
                                        unit  on alert  h=1  h=2  h=3  h=6  h=12  h=24
-                                    м. Київ      True 1.00 0.73 0.61 0.64  0.68  0.74
-       Харківська область/Харківський район      True 1.00 0.88 0.86 0.85  0.91  0.90
-Дніпропетровська область/Дніпровський район     False 0.62 0.62 0.62 0.62  0.70  0.67
-             Одеська область/Одеський район     False 0.42 0.36 0.41 0.42  0.47  0.52
-         Львівська область/Львівський район     False 0.01 0.02 0.01 0.01  0.03  0.05
+                                    м. Київ      True 1.00 0.71 0.58 0.63  0.68  0.76
+       Харківська область/Харківський район      True 1.00 0.88 0.84 0.85  0.90  0.90
+Дніпропетровська область/Дніпровський район     False 0.61 0.60 0.61 0.62  0.72  0.66
+             Одеська область/Одеський район     False 0.44 0.40 0.40 0.42  0.48  0.56
+         Львівська область/Львівський район     False 0.01 0.02 0.01 0.01  0.02  0.09
 ```
 
 `predict` refuses a forecast time earlier than the saved model's training cutoff, so a forecast never uses a model
@@ -208,6 +224,8 @@ is checked against alerts.in.ua instead: every month passes (98.4–99.96%), wit
 
 ## Limitations
 
+- **Little skill a day ahead.** 12–24 hours ahead, the model is not measurably better than each raion's alert share
+  over the last four weeks (Results). Its value is in the next few hours.
 - **One forecast spec.** Only raion × hour × "any alert in the hour" is built. Other specs (oblasts, minutes on alert
   per day) are designed for but not implemented ([ADR-0002](docs/adr/0002-one-main-spec.md)).
 - **City alert zones other than Kyiv** (Kharkiv, Zaporizhzhia, Nikopol, Marhanets, Kramatorsk, Kryvyi Rih) are folded
