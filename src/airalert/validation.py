@@ -200,3 +200,15 @@ def main() -> None:
     report.to_csv(out / "alerts_in_ua_test_period.csv", index=False)
     print("Q2 (test period, vs alerts.in.ua):")
     print(report.to_string(index=False))
+    from airalert.labels import merge_per_unit
+
+    merged = pd.read_parquet(INTERIM_DIR / "UkraineAlarmSignal_merged.parquet")
+    data_end = merged.data_end.iloc[0]
+    reference = merge_per_unit(alerts_in_ua_alerts(), data_end)
+    hourly = hourly_agreement(merged, pd.read_parquet(INTERIM_DIR / "UkraineAlarmSignal_label_periods.parquet"),
+                              pd.read_parquet(INTERIM_DIR / "UkraineAlarmSignal_corrections.parquet"), reference, start, end, data_end)
+    hourly.to_csv(out / "alerts_in_ua_test_period_hourly.csv", index=False)
+    known = hourly.raion_hours * (1 - hourly.unknown_share)
+    print(f"Q2 hour level (what the model uses): agreement on known raion-hours "
+          f"{(hourly.agree * known).sum() / known.sum():.2%} over the test period (months {hourly.agree.min():.2%} to "
+          f"{hourly.agree.max():.2%}); unknown {(hourly.unknown_share * hourly.raion_hours).sum() / hourly.raion_hours.sum():.1%}")

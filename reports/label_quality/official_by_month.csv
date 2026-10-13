@@ -79,7 +79,7 @@ month,kind,direction,events,found,passes
 2026-03,end,reference found in labels,8930,0.9802911534154535,True
 2026-04,start,reference found in labels,7924,0.9854871277132762,True
 2026-04,end,reference found in labels,7940,0.9911838790931989,True
-2026-05,start,reference found in labels,9436,0.9779567613395507,False
+2026-05,start,reference found in labels,9436,0.9780627384484951,False
 2026-05,end,reference found in labels,9439,0.9823074478228626,True
 2026-06,start,reference found in labels,9347,0.9801005670268536,True
 2026-06,end,reference found in labels,9338,0.9765474405654315,False
@@ -166,9 +166,9 @@ month,kind,direction,events,found,passes
 2026-03,start,labels found in reference,8746,0.9994283100846101,True
 2026-03,end,labels found in reference,8767,0.998517166647656,True
 2026-04,start,labels found in reference,7803,1.0,True
-2026-04,end,labels found in reference,7863,1.0,True
-2026-05,start,labels found in reference,9224,1.0,True
-2026-05,end,labels found in reference,9265,1.0,True
+2026-04,end,labels found in reference,7870,0.9991105463786532,True
+2026-05,start,labels found in reference,9225,1.0,True
+2026-05,end,labels found in reference,9266,0.9998920785668034,True
 2026-06,start,labels found in reference,9157,1.0,True
 2026-06,end,labels found in reference,9155,0.9958492626979792,True
 2026-07,start,labels found in reference,10415,0.9931829092654825,True
