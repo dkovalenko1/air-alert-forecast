@@ -94,7 +94,9 @@ def shared_or_per_unit() -> dict:
     for model, base in (("logistic", Logistic), ("lightgbm", LightGBM)):
         train_start = _start(model)
         grid = load_grid("validation", train_start)
-        factories = {"shared": base, "per unit": functools.partial(PerUnit, base)}
+        # per unit: 119 small models trained side by side, one thread each (same models, only faster)
+        one_thread = functools.partial(LightGBM, n_jobs=1) if base is LightGBM else base
+        factories = {"shared": base, "per unit": functools.partial(PerUnit, one_thread)}
         metrics = pd.concat([_evaluate(grid, {k: v}, train_start).assign(variant=k, model=model) for k, v in factories.items()])
         parts.append(metrics)
         chosen[model] = choose(metrics, "shared")
@@ -131,7 +133,7 @@ def lightgbm_settings(assume_e2: str | None = None) -> dict:
     for label, params in LIGHTGBM_SETTINGS.items():
         factory = functools.partial(LightGBM, **params)
         if mode == "per unit":
-            factory = functools.partial(PerUnit, factory)
+            factory = functools.partial(PerUnit, functools.partial(LightGBM, n_jobs=1, **params))
         parts.append(_evaluate(grid, {"lightgbm": factory}, train_start).assign(variant=label, e2_mode=mode))
         print(f"E3 {label}: done", flush=True)
     metrics = pd.concat(parts, ignore_index=True)

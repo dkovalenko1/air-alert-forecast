@@ -120,19 +120,29 @@ class LightGBM:
 
 class PerUnit:
     """One model per unit, each trained only on that unit's rows (Q13). A unit whose training rows are all one
-    class gets that constant; a unit never seen in training gets the overall rate."""
+    class gets that constant; a unit never seen in training gets the overall rate.
 
-    def __init__(self, base_factory):
-        self.base_factory = base_factory
+    The unit models are trained in parallel threads (`n_jobs`); give the base model one thread each (e.g. LightGBM
+    with n_jobs=1), since many threads per small model cost more than they save.
+    """
+
+    def __init__(self, base_factory, n_jobs: int = 8):
+        self.base_factory, self.n_jobs = base_factory, n_jobs
         self.name = f"{getattr(base_factory, 'name', 'model')}_per_unit"
 
     def fit(self, frame, y):
+        from joblib import Parallel, delayed
+
         y = np.asarray(y)
         self.overall = float(y.mean())
-        self.models = {}
-        for unit, idx in frame.groupby("unit_id", observed=True).indices.items():
+        groups = list(frame.groupby("unit_id", observed=True).indices.items())
+
+        def fit_one(idx):
             y_unit = y[idx]
-            self.models[str(unit)] = float(y_unit[0]) if np.all(y_unit == y_unit[0]) else self.base_factory().fit(frame.iloc[idx], y_unit)
+            return float(y_unit[0]) if np.all(y_unit == y_unit[0]) else self.base_factory().fit(frame.iloc[idx], y_unit)
+
+        fitted = Parallel(n_jobs=self.n_jobs, prefer="threads")(delayed(fit_one)(idx) for _, idx in groups)
+        self.models = {str(unit): model for (unit, _), model in zip(groups, fitted)}
         return self
 
     def predict(self, frame):
