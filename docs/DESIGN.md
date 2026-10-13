@@ -93,6 +93,13 @@ All three run on the validation period only (2026-08-17 → 2026-09-13), with th
 - **Reporting:** every variant's metrics are reported (`reports/validation/experiments/`), not only the winner's: Brier, log loss, ROC-AUC, PR-AUC per horizon, for all rows and for units calm at t.
 - **Order:** E1 → E2 → E3, each using the earlier winners.
 
+**E4. With or without Telegram (Q12)** (protocol fixed 2026-10-13, before it ran):
+
+- **Variants:** each model as chosen by E1–E3, without (default) and with the Telegram threat-post features (`telegram_features.py`). Same grid, same weeks, same training rows; the only difference is the feature set.
+- **Models:** logistic regression and LightGBM.
+- **Selection rule:** the same as E1–E3. Telegram stays in a model only if it lowers that model's Brier score, averaged over the six horizons, by at least 0.0005.
+- **Reported in addition:** per horizon and for units calm at t, where the gain is expected (short horizons, alert starts).
+
 ## 4. Decisions
 
 Hard-to-reverse decisions (ADRs):
