@@ -1,6 +1,6 @@
 # Design: air raid alert forecasting
 
-Status: **built and evaluated** (single test run on 2026-10-13; results in the README). Last updated 2026-10-13.
+Status: **built and evaluated** (test period run three times on 2026-10-13, see the decision log; results in the README). Last updated 2026-10-13.
 
 Related documents:
 - Terms used here are defined in [CONTEXT.md](../CONTEXT.md).
@@ -219,7 +219,7 @@ Known facts that shape the design:
 - **Alert volume didn't jump, but missing all-clears rose.**
   - Volunteer data shows no jump in weekly alert counts or alert-hours around the switch: about 900–1,180 alerts and 450–560 alert-hours per week, August–October 2026.
   - The share of volunteer alerts with no end message rose from about 5% before to 7–10% after the switch. This fits "no all-clear between levels".
-- **alerts.in.ua describes levels:** its API docs give an `alert_level` (red or yellow) on active alerts. Whether its history endpoint carries the level too will be checked in the first snapshot.
+- **alerts.in.ua describes levels:** its API docs give an `alert_level` (red or yellow) on active alerts. Its history endpoint carries it too (checked 2026-10-12: every one of 16,812 downloaded records has a level, 6,246 red and 10,566 yellow).
 
 ### The volunteer CSV and its source channel `@UkraineAlarmSignal`
 
@@ -282,7 +282,7 @@ Sample: 2,000 messages from 100 web-preview pages spread evenly over the message
 - **City zone vs raion:** Kharkiv city's own alerts mostly fall inside Kharkivskyi raion alerts. The city is on alert while the raion is not in 0.5% of the time; the raion is on alert while the city is not in 11.7% (June–September 2026).
 - **Telegram volume grows:** posting on `@kpszsu` grew a lot over time, from about 2k posts by October 2022 to about 86k by October 2026, so the meaning of Telegram features changes over time.
 
-## 6. Open questions (to answer before building)
+## 6. Questions and answers (asked before and during the build)
 
 Question numbers are stable IDs, not an order. When a question is answered, it is marked *Decided* and its decision is recorded in the decision log or in an ADR.
 
@@ -484,11 +484,11 @@ Status values: **done**, **running**, **open** (can start now), or **blocked** (
 | 5 | **Parser for `@air_alert_ua`:** the same rules, for validation | step 3; 2,000-message sample | code done (`official_channel.py`); full run after the download |
 | 6 | **Q20 label check:** channel vs official, month by month, against the pass mark | steps 4–5 with full downloads | done: **fails** (33 of 176 rows below 98%); causes handled and reported in the README (decided 2026-10-13) |
 | 7 | **Q2 cross-check:** channel vs alerts.in.ua over the test period | step 4 with full download | done: all rows pass (98.4–99.96%); 99.8% hour-level agreement |
-| 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | not done before the test run: city zones other than Kyiv are folded into their raions (the Q16 fallback); left as future work |
+| 8 | **Q16 city units:** apply the rule (label accuracy, difference from its raion, alerts per month) | steps 6–7 | not completed: city zones other than Kyiv are folded into their raions (the Q16 fallback). Two quick counts put Kharkiv city apart from its raion in about 9% of test hours, above the 5% threshold, so it probably deserves its own unit; future work |
 | 9 | **Neighbour map (Q11):** raion borders from OCHA/HDX, plus a same-oblast table | step 3 | done (`reference/neighbours.csv`, 612 pairs) |
 | 10 | **As-of view and the leakage test (ADR-0001):** features read only data known before t | — (synthetic data) | done (`features.py`, leakage tests) |
-| 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | main spec done (`features.py`: raion × 1 h × Active, h = 1–24); other specs (e.g. the daily Minutes spec) planned; real run after the download |
-| 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | code done (`backtest.py`, `models.py`); results blocked |
+| 11 | **Grid, labels and alert-history features** for any forecast spec, including the label cutoff (t + h ≤ cutoff) | steps 4, 9, 10 | main spec done and run (`features.py`: raion × 1 h × Active, h = 1–24); other specs (e.g. the daily Minutes spec) not implemented |
+| 12 | **Backtest harness:** weekly walk-forward, Persistence and Historical-rate baselines, metrics per horizon, calm/on-alert split, time estimate | step 11 | done: validation and test results (`backtest.py`, `models.py`, `final.py`); four baselines |
 | 13 | **Models:** logistic regression, LightGBM; training-start experiment (Q9) and shared vs per-unit (Q13) on validation | step 12 with real labels | done: E1–E3 (section 3); chosen: training from 2025-11-01, one shared model, LightGBM without unit identity |
 | 14 | **Telegram features (Q12):** place-name list (КАТОТТГ register), threat-type rules, edit rule | place names: open; rules: `@kpszsu`/`@deraketaua` downloads (last in queue) | done (`places.py`, `threats.py`, `telegram_features.py`): 99% of `@kpszsu` and 93% of `@deraketaua` posts typed |
 | 15 | **Telegram ablation** on validation, then the single test run | steps 13–14 | done: E4, E5 (Telegram not kept); test run 2026-10-13 (`reports/test/`) |

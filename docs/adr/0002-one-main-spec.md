@@ -14,7 +14,7 @@ Analysing every combination in depth is not worth it, for three reasons:
 - Compute: each spec is a full backtest.
 - The selection trap: picking the best of many specs by its test-period score quietly tunes to the test data, so the reported score is optimistic.
 
-Proposed main spec: **raion × 1 h × Active, horizons 1–24**, scored separately for units calm at t and on alert at t. It depends on open question Q2 in [DESIGN.md](../DESIGN.md).
+Main spec (built): **raion × 1 h × Active, horizons 1–24**, scored separately for units calm at t and on alert at t. The question it depended on (Q2, the independent label check for the test period) was answered in [DESIGN.md](../DESIGN.md): the cross-check passes.
 
 ## Considered options
 
