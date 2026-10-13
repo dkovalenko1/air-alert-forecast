@@ -11,7 +11,7 @@ Messages are classified by their wording, not their emoji (ADR-0005 rules). Two 
 
 Since July 2026 one message may hold several sections, separated by a blank line, each with its own heading:
 
-    🟡 Відбій червоної тривоги                        red is over, yellow continues
+    🟡 Відбій червоної тривоги                        red is over, yellow continues (a yellow start)
     • Чугуївський район (Харківська обл.)
 
     🟢 Відбій тривоги                                 all-clear
@@ -61,7 +61,9 @@ _APOLOGY_KINDS = [
 _PHRASES = [
     (r"^(повітряна )?тривога\b.*\bпомилков", RETRACT, None),  # "Тривога в області була помилковою…"
     (r"^відбій тривоги", END, None),
-    (r"^відбій червоної тривоги", CONTINUE, None),  # red → yellow: the alert goes on
+    # red → yellow: a yellow alert is on. Read as a yellow start: inside an open alert it is a level change; with none
+    # open (the channel missed the start) it opens one, as alerts.in.ua shows for such cases.
+    (r"^відбій червоної тривоги", START, "yellow"),
     (r"тривог\w* (в місті |в області )?триває", CONTINUE, None),
     (r"^жовтий рівень тривоги", START, "yellow"),
     (r"^червоний рівень тривоги", START, "red"),

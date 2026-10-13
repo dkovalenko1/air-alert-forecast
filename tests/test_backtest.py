@@ -94,7 +94,8 @@ def test_training_labels_are_as_known_at_the_cutoff(monkeypatch):
 
     class Spy(MODELS["historical_rate"]):
         def fit(self, frame, y):
-            fits.append((frame.drop(columns=["label", "published_label", "label_corrected_at"]), np.asarray(y)))
+            fits.append((frame.drop(columns=["label", "published_label", "label_first_corrected_at", "label_corrected_at"]),
+                         np.asarray(y)))
             return super().fit(frame, y)
 
     monkeypatch.setitem(MODELS, "spy", Spy)
@@ -165,3 +166,16 @@ def test_lost_all_clear_hours_are_unknown_and_known_only_after_detection(monkeyp
     before, after = fits
     assert before[lost] == 1  # at 03:00 the alert was still believed on
     assert lost not in after  # by 12:00 the lost all-clear was known: the hour is not trained on
+
+
+def test_a_label_with_only_some_corrections_known_is_not_trained_on():
+    """Two corrections touch one hour: one known before the cutoff, one after. The label as it stood at the cutoff
+    is neither the published nor the final one, so it is left out; with none or all known, those are used."""
+    from airalert.backtest import label_known_at
+
+    cutoff = pd.Timestamp("2026-08-10", tz="UTC")
+    before, after = cutoff - pd.Timedelta(hours=1), cutoff + pd.Timedelta(hours=1)
+    frame = pd.DataFrame({"label": [0.0, 0.0, 0.0, 1.0], "published_label": [1.0, 1.0, 1.0, 1.0],
+                          "label_first_corrected_at": [before, after, before, pd.NaT],
+                          "label_corrected_at": [before, after, after, pd.NaT]})
+    np.testing.assert_array_equal(label_known_at(frame, cutoff), [0.0, 1.0, np.nan, 1.0])

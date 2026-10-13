@@ -32,15 +32,21 @@ def horizon_frame(grid: pd.DataFrame, h: int) -> pd.DataFrame:
         f"target_hour_h{h}": "target_hour", f"target_weekday_h{h}": "target_weekday",
         f"target_active_day_ago_h{h}": "target_active_day_ago", f"target_active_week_ago_h{h}": "target_active_week_ago",
         f"label_h{h}": "label", f"published_label_h{h}": "published_label", f"label_corrected_at_h{h}": "label_corrected_at",
+        f"label_first_corrected_at_h{h}": "label_first_corrected_at",
     })
     telegram = [c for c in ALL_TELEGRAM_FEATURES if c in grid.columns]
-    return renamed[["t", "label", "published_label", "label_corrected_at", *feature_columns(), *telegram]]
+    return renamed[["t", "label", "published_label", "label_first_corrected_at", "label_corrected_at", *feature_columns(), *telegram]]
 
 
 def label_known_at(frame: pd.DataFrame, cutoff: pd.Timestamp) -> np.ndarray:
-    """Labels as known at `cutoff`: corrections that became known after it are not applied yet. NaN: unknown."""
-    later = frame.label_corrected_at.notna() & (frame.label_corrected_at > cutoff)
-    return np.where(later, frame.published_label, frame.label).astype(float)
+    """Labels as known at `cutoff`: the corrected label if every correction touching the hour was known by then, the
+    published one if none was. If only some were, the label as it stood at the cutoff is not stored (only the
+    published and the final versions are), so it is NaN, like an unknown label: the row is not trained on then."""
+    corrected = frame.label_corrected_at.notna()
+    none_known = corrected & (frame.label_first_corrected_at > cutoff)
+    some_known = corrected & (frame.label_first_corrected_at <= cutoff) & (frame.label_corrected_at > cutoff)
+    labels = np.where(none_known, frame.published_label, frame.label).astype(float)
+    return np.where(some_known, np.nan, labels)
 
 
 def training_rows(frame: pd.DataFrame, h: int, train_start, cutoff) -> tuple[pd.DataFrame, np.ndarray]:

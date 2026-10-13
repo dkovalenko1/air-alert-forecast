@@ -82,9 +82,10 @@ class UnitTimeline:
 
 
 def _unit_block(timeline: UnitTimeline, t: np.ndarray, known_active: np.ndarray, label_active: np.ndarray,
-                corrected_at: np.ndarray, k0: int) -> dict:
+                corrected_at: tuple[np.ndarray, np.ndarray], k0: int) -> dict:
     """`known_active` / `label_active`: per grid hour, was the unit on alert, from feature (published) / label
-    (corrected) periods. `corrected_at`: per grid hour, when the last correction changing it was posted (-1: none)."""
+    (corrected) periods. `corrected_at`: per grid hour, when the first and the last correction touching it were
+    posted (-1: none)."""
     on, start, last_end = timeline.state_at(t)
     out = {
         "on_alert": on.astype(np.int8),
@@ -103,8 +104,8 @@ def _unit_block(timeline: UnitTimeline, t: np.ndarray, known_active: np.ndarray,
         clipped = np.minimum(target, len(label_active) - 1)
         out[f"label_h{h}"] = np.where(inside, label_active[clipped], np.nan)
         out[f"published_label_h{h}"] = np.where(inside, known_active[clipped], np.nan)  # as known before any correction
-        out[f"label_corrected_at_h{h}"] = pd.to_datetime(np.where(inside & (corrected_at[clipped] >= 0), corrected_at[clipped], np.nan),
-                                                          unit="s", utc=True)
+        for name, times in (("label_first_corrected_at", corrected_at[0]), ("label_corrected_at", corrected_at[1])):
+            out[f"{name}_h{h}"] = pd.to_datetime(np.where(inside & (times[clipped] >= 0), times[clipped], np.nan), unit="s", utc=True)
         for lag, name in ((24, "day"), (168, "week")):  # was the target hour on alert a day / a week earlier?
             out[f"target_active_{name}_ago_h{h}"] = known_active[target - lag]  # an hour that ended by t
     return out
@@ -119,7 +120,8 @@ def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods
     are the retracted alerts and the unknown stretches after a missing all-clear, each with `corrected_at`, when it
     became known (default: finished_at), and `unknown` (default False). A label is 1 if a label period touches its
     hour, missing if an unknown stretch does, else 0. For each horizon the grid also holds the label as published and
-    when a correction changed it (`published_label_h*`, `label_corrected_at_h*`), so that training at a cutoff can
+    when the first and the last correction touching it became known (`published_label_h*`,
+    `label_first_corrected_at_h*`, `label_corrected_at_h*`), so that training at a cutoff can
     use the label as it was known then (ADR-0007). The unit list is fixed in advance (units.forecast_unit_ids()),
     so a unit's first alert never changes country, oblast or neighbour features before it.
     """
@@ -139,12 +141,12 @@ def build_grid(periods: pd.DataFrame, start, end, data_end, units, label_periods
         return np.where(complete, (np.diff(timeline.alert_seconds_before(edges)) > 0).astype(float), np.nan)
 
     def correction_times(group):
-        """Per grid hour: when the latest correction touching that hour became known (-1: none)."""
-        out = np.full(len(edges) - 1, -1, dtype=np.int64)
+        """Per grid hour: when the first and the latest correction touching that hour became known (-1: none)."""
+        first, last = np.full(len(edges) - 1, np.iinfo(np.int64).max), np.full(len(edges) - 1, -1, dtype=np.int64)
         for s_, e_, c_ in zip(_seconds(group.started_at), _seconds(group.finished_at), _seconds(group.corrected_at)):
             hit = (edges[:-1] < e_) & (edges[1:] > s_)
-            out[hit] = np.maximum(out[hit], c_)
-        return out
+            first[hit], last[hit] = np.minimum(first[hit], c_), np.maximum(last[hit], c_)
+        return np.where(last >= 0, first, -1), last
 
     def unknown_hours(group):
         hit = np.zeros(len(edges) - 1, dtype=bool)

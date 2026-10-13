@@ -102,3 +102,14 @@ def test_missed_start_window_stops_at_the_previous_message_and_repeats_are_ignor
     assert not first.missed_start and missed.started_at == T0 + timedelta(minutes=30)  # calm was known until 00:30
     h = run_missed_start((START, 0), (END, 30), (END, 35))  # the same all-clear posted twice
     assert len(h.alerts) == 1 and h.stats["all-clear with no open alert"] == 1
+
+
+DOWNGRADE = "🟡 Відбій червоної тривоги\n• Синельниківський район (Дніпропетровська обл.)"
+
+
+def test_red_ending_keeps_an_open_alert_and_opens_one_if_the_start_was_missed():
+    h = run((RED, 0), (DOWNGRADE, 20), (END, 50))
+    [a] = h.alerts
+    assert (a.started_at, a.finished_at, a.max_color) == (T0, T0 + timedelta(minutes=50), "red")
+    [missed] = run((DOWNGRADE, 0), (END, 30)).alerts  # the channel never posted this alert's start
+    assert (missed.started_at, missed.finished_at) == (T0, T0 + timedelta(minutes=30))
