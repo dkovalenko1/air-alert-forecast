@@ -2,7 +2,7 @@
 
 import argparse
 
-from airalert import backtest, experiments, final, labels, telegram, threats, validation
+from airalert import backtest, experiments, final, forecast, labels, telegram, threats, validation
 from airalert.models import MODELS
 
 
@@ -27,6 +27,10 @@ def main() -> None:
                             help="start E3 while E2 is still running, assuming its LightGBM choice (checked afterwards)")
     commands.add_parser("test-run", help="the single test run with the configuration chosen on validation")
     commands.add_parser("test-report", help="intervals for model differences and weekly scores, from the saved test predictions")
+    fit = commands.add_parser("train", help="fit the model chosen on validation on everything known at a cutoff, and save it")
+    fit.add_argument("--cutoff", help="Kyiv time, e.g. '2026-10-12 21:00' (default: the last whole hour of the data)")
+    pred = commands.add_parser("predict", help="print each unit's alert probability per horizon, with the saved model")
+    pred.add_argument("--at", help="forecast time, Kyiv time (default: the last whole hour of the data)")
     args = parser.parse_args()
 
     if args.command == "telegram-login":
@@ -47,6 +51,10 @@ def main() -> None:
         final.main()
     elif args.command == "test-report":
         final.report()
+    elif args.command == "train":
+        forecast.train(args.cutoff)
+    elif args.command == "predict":
+        forecast.predict(args.at)
     elif args.command == "backtest":
         backtest.main(args.period, args.models)
     elif args.command == "build-labels":

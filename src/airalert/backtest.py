@@ -43,6 +43,16 @@ def label_known_at(frame: pd.DataFrame, cutoff: pd.Timestamp) -> np.ndarray:
     return np.where(later, frame.published_label, frame.label).astype(float)
 
 
+def training_rows(frame: pd.DataFrame, h: int, train_start, cutoff) -> tuple[pd.DataFrame, np.ndarray]:
+    """Rows a model trained at `cutoff` may use, with their labels as known then: t from the training start, the
+    label hour ended by the cutoff (t + h <= cutoff), the label not unknown."""
+    candidates = frame[(frame.t >= train_start) & (frame.t + h * HOUR <= cutoff)]
+    known = label_known_at(candidates, cutoff)
+    rows = candidates[~np.isnan(known)]
+    assert (rows.t + h * HOUR <= cutoff).all()  # the label cutoff
+    return rows, known[~np.isnan(known)].astype(int)
+
+
 def weeks(start: pd.Timestamp, end: pd.Timestamp) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
     """Weekly retraining windows covering [start, end); the last one is shorter if the period is not whole weeks."""
     edges = list(pd.date_range(start, end, freq="7D"))
@@ -65,11 +75,8 @@ def run(grid: pd.DataFrame, period: str, models, horizons=HORIZONS, train_start=
     for week_start, week_end in week_list:
         for h in horizons:
             frame = horizon_frame(grid, h)
-            candidates = frame[(frame.t >= train_start) & (frame.t + h * HOUR <= week_start)]
-            known = label_known_at(candidates, week_start)
-            train, y_train = candidates[~np.isnan(known)], known[~np.isnan(known)].astype(int)
+            train, y_train = training_rows(frame, h, train_start, week_start)
             test = frame[(frame.t >= week_start) & (frame.t < week_end) & (frame.t + h * HOUR <= end) & frame.label.notna()]
-            assert (train.t + h * HOUR <= week_start).all()  # the label cutoff
             for name, factory in factories.items():
                 model = factory().fit(train, y_train)
                 results.append(pd.DataFrame({
@@ -112,9 +119,10 @@ def score(predictions: pd.DataFrame, exclude_units=frozenset()) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def load_grid(period: str, train_start=TRAIN_START, channel: str = "UkraineAlarmSignal", telegram: bool = False) -> pd.DataFrame:
-    """The hourly grid from the training start up to the end of `period`, built from the label tables, with the
-    Telegram threat-post features (threats.build) if `telegram`."""
+def load_grid(period, train_start=TRAIN_START, channel: str = "UkraineAlarmSignal", telegram: bool = False) -> pd.DataFrame:
+    """The hourly grid from the training start up to the end of `period` (a name from PERIODS, or a timestamp: the
+    grid then ends just before it), built from the label tables, with the Telegram threat-post features
+    (threats.build) if `telegram`."""
     from airalert.features import build_grid
     from airalert.labels import INTERIM_DIR
     from airalert.units import forecast_unit_ids
@@ -123,8 +131,8 @@ def load_grid(period: str, train_start=TRAIN_START, channel: str = "UkraineAlarm
     label_periods = pd.read_parquet(INTERIM_DIR / f"{channel}_label_periods.parquet")
     corrections = pd.read_parquet(INTERIM_DIR / f"{channel}_corrections.parquet")
     data_end = merged.data_end.iloc[0]
-    end = PERIODS[period][1]
-    if data_end < end + 24 * HOUR:
+    end = PERIODS[period][1] if isinstance(period, str) else pd.Timestamp(period)
+    if isinstance(period, str) and data_end < end + 24 * HOUR:
         print(f"Warning: data ends {data_end:%Y-%m-%d %H:%M} UTC, before the {period} period's last labels.")
     grid = build_grid(merged, train_start - 168 * HOUR, end, data_end, forecast_unit_ids(), label_periods, corrections)
     if telegram:
