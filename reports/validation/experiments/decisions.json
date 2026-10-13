@@ -6,5 +6,10 @@
   "e2_shared_or_per_unit": {
     "logistic": "shared",
     "lightgbm": "shared"
+  },
+  "e3_lightgbm_settings": {
+    "lightgbm": "no unit identity",
+    "e2_mode": "shared",
+    "e2_assumed": true
   }
 }
