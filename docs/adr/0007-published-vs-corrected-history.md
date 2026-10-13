@@ -43,6 +43,12 @@ channel (Q20, 98% pass mark both ways; run 2026-10-13, see the README) is an app
 another place or changed its kind would mostly show up as a mismatch, but matching within 5 minutes cannot catch
 every case (two short alerts close together can match one).
 
+**Sensitivity (2026-10-13).** A replay in which every message counts only from its last edit (messages since
+2025-10-01; the channel-wide re-edits are left alone) raises validation Brier by at most 0.0036 on average, 0.0087 at
+one hour ahead and 0.0008 for units calm at t (`scripts/replay_edit_times.py`). This is an upper bound on the harm:
+it also delays every alert start by the edit delay, although the alert was announced when posted. A reviewer's
+version of the replay measured 0.0107 on the mean; the two differ in how outcomes are scored.
+
 For the Telegram feature channels (`@kpszsu`, `@deraketaua`), whose posts are written by people and can change
 meaning, the stricter rule from Q12 applies: a post counts only from its last edit (`threats.py`), so a post edited
 at or after t is not used for forecasts at t.

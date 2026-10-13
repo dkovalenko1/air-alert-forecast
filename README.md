@@ -172,12 +172,15 @@ Reproduce the evaluation:
 
 ```
 uv run python scripts/fetch_alerts_in_ua.py    # alerts.in.ua history, for the test-period label cross-check
+uv run python -m airalert build-labels         # rebuild both label tables first: check-labels reads them
 uv run python -m airalert check-labels         # label quality (below)
 uv run python -m airalert backtest validation  # baselines and models on validation
 uv run python -m airalert experiment training-start   # then per-unit, lightgbm, telegram, telegram-targeted
 uv run python -m airalert test-run --out reports/test-rerun   # reproduce the test run (the committed reports/test is
                                                                # the reported one; test-run refuses to overwrite it)
 uv run python -m airalert test-report          # intervals, weekly and per-raion scores from the saved predictions
+uv run python scripts/replay_edit_times.py     # validation: cost of the pessimistic edited-messages assumption
+uv run python scripts/unknown_hours_check.py   # validation: the model on hours with unknown labels
 uv run python scripts/make_figures.py          # docs/figures/
 uv run pytest                                  # includes the leakage tests
 ```
@@ -212,7 +215,11 @@ The rule: nothing a forecast for time t uses, and nothing its model is trained o
   what the channel said at t cannot be replayed. About 18,000 of 187,000 alert messages since November 2025 were
   edited after the next whole hour, so a forecast could in principle have used a later edit's wording. We found
   no case where an edit changed an alert's kind or place, and the month-by-month comparison with the independent
-  official channel (below) is an approximate cross-check.
+  official channel (below) is an approximate cross-check. **How much it could matter:** in a pessimistic replay where
+  every message counts only from its last edit, validation Brier rises by at most 0.0036 on average (3%): 0.0087 at
+  one hour ahead, 0.0008 for raions calm at t ([`scripts/replay_edit_times.py`](scripts/replay_edit_times.py),
+  [`provenance_replay.csv`](reports/validation/provenance_replay.csv)). That is an upper bound: it also delays every
+  alert start by the edit delay, although the alert was announced when posted.
   Telegram threat posts follow a stricter rule: a post counts only from its last edit, so a post edited at or
   after t is not used at t (ADR-0007).
 
@@ -241,11 +248,12 @@ months, mostly 2023). The causes we found:
   "red alert over, yellow continues" with no alert open; all-clears that start with a time ("15:57 | Відбій тривоги").
 
 Missing messages cannot be recovered, so the message-level check still fails. **At the level the model uses,
-"was this raion on alert in this hour", the labels agree with the official record on 99.5–99.7% of known
-raion-hours per year (2023–2026), and on at least 97.3% in every month** (the lowest is November 2025, the month
+"was this raion on alert in this hour", the labels agree with the official record on 99.7–99.8% of known
+raion-hours per year (2023–2026), and on at least 98.8% in every month** (the lowest is November 2025, the month
 of the official channel's own broken alert). Unknown hours: 0.3% of raion-hours in 2023, 3.6% in 2026; 1.2% of the
 validation period and 0.4% of the test period. After the official channel stopped (2026-09-07), the test period
-is checked against alerts.in.ua instead: every month passes (98.4–99.96%), with 99.8% hour-level agreement.
+is checked against alerts.in.ua instead: every month passes (98.4–99.96%), with 99.84% hour-level agreement
+([`alerts_in_ua_test_period_hourly.csv`](reports/label_quality/alerts_in_ua_test_period_hourly.csv)).
 
 ## Limitations
 
@@ -263,6 +271,12 @@ is checked against alerts.in.ua instead: every month passes (98.4–99.96%), wit
   threshold we set, so it probably deserves its own unit.
 - **Labels come from a volunteer channel.** They miss some messages (above). Hours that can't be known are left
   out, but some errors surely remain.
+- **Scores leave out the hours with unknown labels,** which are the hours after a missed all-clear, when the history
+  itself was wrong. Where the independent official record shows the outcome for such an hour (312 rows per
+  horizon in the validation weeks it covers, 0.4% of the scored rows), the model's Brier score is 0.30 at one hour
+  and 0.24–0.26 at 6–24 hours, against 0.07 and 0.12 on normal rows
+  ([`unknown_hours_check.csv`](reports/validation/unknown_hours_check.csv)). The reported scores hold for hours the
+  history describes correctly, not for source failures.
 - **The test period is four weeks of one season,** shortly after alerts got yellow and red levels (September 2026;
   both count as an alert here). Results in other periods may differ.
 - **Telegram extraction is rule-based, on two channels and at hourly resolution,** and was never checked against a
