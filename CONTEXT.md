@@ -79,10 +79,10 @@ _Avoid_: timestamp
 Everything that was known strictly before a given t. It is the only data a forecast at t may use.
 
 **Calm at t / On alert at t**:
-Whether the unit was under alert at the forecast time. Results are reported separately for the two groups, because the calm group measures how well alert starts are predicted.
+Whether the unit was under alert at the forecast time. Results are reported separately for the two groups: for a calm unit, an alert in the target hour has to start first, so the calm group shows how well the forecast anticipates new alerts. It is not an Onset target: an alert that started before the target hour also counts.
 
 **Baseline**:
-A simple rule that a model must beat. The two baselines are Persistence ("same state as at t") and Historical rate (the share of past slots with an alert at the same hour and weekday).
+A simple rule that a model must beat. Persistence ("same state as at t"); Historical rate (the share of the last 4 weeks' slots with an alert at the same hour and weekday); Recent rate (the unit's share of slots with an alert in the last 4 weeks); Recent rate by state (the same, separately for slots when the unit was calm or on alert at t).
 
 **Backtest**:
 Repeating train-then-forecast over a sequence of training cutoffs, then scoring the forecasts against what actually happened.

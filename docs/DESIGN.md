@@ -22,17 +22,7 @@ Related documents:
 | `predict [--at …]` | Load the saved model and print probabilities per unit × horizon. Takes seconds and does no retraining. Refuses a time before the model's cutoff. |
 | `backtest validation`, `experiment …`, `test-run`, `test-report` | Walk-forward evaluation against the baselines: validation, the experiments of section 3, and the single test run. |
 
-Only the main spec (raion × 1 h × Active) is built; the code is organised by spec, but other specs are not implemented. Backtests print an estimate of the time left after the first fit.
-
-Example of `predict` output (real, abridged):
-
-```
-Forecast time: 2026-10-13 00:00 Kyiv (data up to 2026-10-13 00:50); model: lightgbm, trained at 2026-10-13 00:00 Kyiv
-                                       unit  on alert  h=1  h=2  h=3  h=6  h=12  h=24
-       Харківська область/Харківський район      True 1.00 0.88 0.86 0.85  0.91  0.90
-             Одеська область/Одеський район     False 0.42 0.36 0.41 0.42  0.47  0.52
-         Львівська область/Львівський район     False 0.01 0.02 0.01 0.01  0.03  0.05
-```
+Only the main spec (raion × 1 h × Active) is built; the code is organised by spec, but other specs are not implemented. An example of `predict` output is in the README.
 
 **Task constraints (from the KSE brief):**
 - Use the most recent data, and evaluate on the latest period.
@@ -69,12 +59,12 @@ sources ─► raw layer ─► canonical tables ─► spec builder ─► mode
 - **Periods:** training | validation | test.
   - Model and setting choices are made on validation.
   - The test period is the latest period, and it is used once, for the final report.
-- **Baselines:** Persistence and Historical rate. Every model must be compared against both.
+- **Baselines:** Persistence and Historical rate, fixed in advance. Every model must be compared against both. Two stronger ones were added after the first test run, at reviewers' suggestions: Recent rate and Recent rate by state. Neither was used to choose anything.
 - **Metrics, per horizon:**
   - Brier score (primary);
   - log loss, ROC-AUC, PR-AUC;
   - calibration plot.
-- **Calm at t / On alert at t:** results are reported separately. The calm group measures how well onsets are predicted.
+- **Calm at t / On alert at t:** results are reported separately. For a calm unit an alert has to start before the target hour can be on alert, so the calm group is the closest this spec gets to forecasting new alerts (it is not an Onset target).
 - **Ablation:** compare with and without Telegram features on the same period.
 - **Reporting:** report every spec that was run, not only the best.
 
@@ -154,17 +144,25 @@ Decision log (smaller choices that are easy to reverse):
   - **E4, all Telegram features:** left out of both models. Logistic 0.11013 → 0.11014 (no gain against the 0.0005 threshold); LightGBM worse (0.10881 → 0.10907).
   - **E5, targeted Telegram set (7 features):** left out of both models. Logistic gains 0.00014 (0.11013 → 0.10999), below the threshold; LightGBM worse (0.10881 → 0.10972). Telegram threat posts add little beyond the alert history of the unit and its neighbours at hourly resolution. Per E5's protocol, no further Telegram variants are tried on validation.
   - **E4 and E5 were rerun** after the review fixes below, with the same protocols. Before the fixes (leaky and partly broken features) Telegram looked slightly better: logistic −0.00032 (E4) and −0.00037 (E5), LightGBM worse in both; the decisions were the same.
-  - **Configuration for the test run:** training from 2025-11-01, one shared model, LightGBM without unit identity, alert-history features only; logistic regression and both baselines alongside; each model also with the targeted Telegram set (ablation).
-- **Test run, results** (2026-09-14 → 2026-10-12, run once on 2026-10-13; `reports/test/`; mean Brier over the six horizons, 95% intervals from resampling days): *(2026-10-13)*
-  - **LightGBM 0.1180**, logistic 0.1217, Recent rate 0.1324, Historical rate 0.1576, Persistence 0.2148 (rerun after the review fixes; the first run gave the same LightGBM score). LightGBM beats logistic by 0.0037 (0.0023 … 0.0054), Recent rate by 0.0144 (0.0115 … 0.0178) and Historical rate by 0.0396 (0.0350 … 0.0440).
-  - **The lead over Recent rate is short-term:** clear 1–6 h ahead (0.056 lower Brier at 1 h, 0.005 at 6 h), none measurable at 12 h (+0.0004, −0.0027 … +0.0033) or 24 h (−0.0007, −0.0039 … +0.0022). For units calm at t, clear only up to 3 h. On validation LightGBM led at every horizon (24 h: 0.1234 vs 0.1292). Per-horizon intervals: `reports/test/differences_by_horizon.csv`.
+  - **Configuration for the test run:** training from 2025-11-01, one shared model, LightGBM without unit identity, alert-history features only; logistic regression and the baselines alongside; each model also with the targeted Telegram set (ablation).
+- **Test run, results** (2026-09-14 → 2026-10-12; `reports/test/`; mean Brier over the six horizons, 95% intervals from resampling days): *(2026-10-13)*
+  - **LightGBM 0.1181**, Recent rate by state 0.1213, logistic 0.1217, Recent rate 0.1324, Historical rate 0.1576, Persistence 0.2148. LightGBM leads Recent rate by state by 0.0032 (0.0014 … 0.0049), logistic by 0.0036 (0.0021 … 0.0052), Recent rate by 0.0143 (0.0114 … 0.0178) and Historical rate by 0.0396 (0.0350 … 0.0440).
+  - **The lead is short-term:** against Recent rate by state, clear at 1, 2, 3 and 6 h (0.0044 at 1 h, 0.0032 at 6 h); at 12 h (−0.0009, −0.0041 … +0.0020) and 24 h (−0.0013, −0.0045 … +0.0014) it cannot be told apart. On validation LightGBM led at 24 h (0.1234 vs 0.1293). Per-horizon intervals: `reports/test/differences_by_horizon.csv`.
   - **The validation ranking holds** in every week of the test period among the main models. Scores are higher than on validation (0.1088) partly because the test period had more alerts (42% of hours vs 38%).
-  - **Telegram ablation:** the targeted set changes LightGBM by +0.0005 (−0.0001 … +0.0011) and logistic by +0.00004 (−0.0010 … +0.0010). Both intervals include zero, as on validation.
-- **Review fixes** (an external review, 2026-10-13): *(2026-10-13)*
+  - **Pooled ROC-AUC mostly measures telling raions apart:** for units calm at t it is 0.845 (1 h) and 0.839 (24 h), but averaged within each raion 0.66 and 0.54 (`reports/test/within_units.csv`).
+  - **Telegram ablation:** the targeted set changes LightGBM by +0.0005 (−0.0001 … +0.0011) and logistic by +0.0001 (−0.0009 … +0.0011). Both intervals include zero, as on validation.
+  - **The test period was run three times** (commits b30da01, 2ca5ac6 and the one adding this entry), each time with the configuration read from `decisions.json`: the first was the plan; the second followed the first review's fixes; the third followed a parser fix from the second review. LightGBM scored 0.1180, 0.1180 and 0.1181. No choice depended on test scores. The first two reports are in the git history.
+- **Review fixes, round 1** (an external review, 2026-10-13): *(2026-10-13)*
   - Telegram events: post ids are unique only within a channel, and deduplicating on the id alone let a later post remove an earlier one (a leak); a follow-up line borrowing an earlier post's threat types now counts from that post's last edit too (a leak); posts are read line by line, so an all-clear for one region no longer erases threats for others; "немає", "не спостерігається", "відсутні" mean an all-clear only on short lines; signature lines ("🍑 @deraketaua | Полтава | Київ") no longer tag Kyiv and Poltava; units we do not forecast no longer overwrite the last unit's "minutes since" feature.
   - Labels: an hour whose corrections straddle a training cutoff is left out of training at that cutoff (none at the actual retraining dates); "Відбій червоної тривоги" (red over, yellow continues) opens an alert when none is open. After rebuilding, no label changed in any period; one feature (minutes of the current alert) changed on 11 test-period rows.
-  - A stronger simple baseline, each raion's alert share over the last 4 weeks (recent rate), joins Persistence and Historical rate, whose hour × weekday cells hold only four hours each.
-  - Because of these fixes the test run was repeated, with the same configuration (`reports/test/`); the first run's report is in the git history (commit b30da01).
+  - A stronger simple baseline, Recent rate (each raion's alert share over the last 4 weeks), joins Persistence and Historical rate, whose hour × weekday cells hold only four hours each.
+- **Review fixes, round 2** (a second review, 2026-10-13): *(2026-10-13)*
+  - Wording: "h = 1" forecasts the hour that starts at t, not an alert start, and 30% of its rows are already on alert; the "calm at t" group is reported as the harder part, not as an onset target. The "no leakage" claim now states its one assumption (labels use each message's latest text at its original time) and the evidence: 17,816 of 187,066 alert messages since November 2025 were edited after the next whole hour; no case was found where an edit changed an alert's kind or place.
+  - Recent rate by state (the unit's alert share, separately for slots on alert and calm at t) was added as the strongest simple baseline. It ties LightGBM at 12 and 24 h.
+  - Per-raion metrics (`within_units.csv`): within-raion ROC-AUC and each raion's calibration gap.
+  - Reproduction: `test-run --out <folder>` writes elsewhere instead of refusing; `data_manifest.csv` lists every downloaded file used with its message count and SHA-256.
+  - Parser: all-clears that start with a time ("15:57 | Відбій тривоги") were unrecognised; they change 16 training hours. **Experiments E1–E5 ran before this fix and were not rerun**; the effect on a mean Brier score is about 0.0001 (test run, LightGBM: 0.11801 → 0.11809).
+  - Not fixed, documented as limitations: a Telegram line mixing an all-clear for one region with a threat for another can lose the threat (Telegram is not in the final model; fixing it means rerunning E4 and E5); Kharkiv city differs from its raion in about 9% of test hours (two quick counts: 8.6% and 8.9%), above Q16's 5% threshold, so it probably deserves its own unit.
 - **No separate notebook** (changes Q14): the README carries the narrative, with the figures drawn by `scripts/make_figures.py`, so the results live in one place. *(2026-10-13)*
 
 ## 5. Data sources (checked 2026-10-12)

@@ -15,43 +15,60 @@ Terms: [CONTEXT.md](CONTEXT.md). The conversation with the AI assistant that bui
 
 **Test period: 14 September – 11 October 2026** (Kyiv time), the latest four weeks of data. Models were retrained
 every week on everything known at the start of that week. All model and setting choices were made on the
-validation period before it (17 August – 13 September). The test period was first run once, at the end; after an
-external review found bugs in the Telegram features and two label edge cases (see the Telegram section), it was run
-again with the same configuration ([`reports/test/`](reports/test/); the first run is in the git history,
-commit b30da01). LightGBM's score did not change (0.1180).
+validation period before it (17 August – 13 September), and no choice was changed because of test scores.
 
-| Brier score (lower is better) | h = 1 | 2 | 3 | 6 | 12 | 24 | mean |
+The test period was run three times, and every run is in the git history. The first (commit b30da01) was the plan.
+An external review then found bugs in the Telegram features and two label edge cases, so it was rerun with the same
+configuration (2ca5ac6); a later review found one more parser case (all-clears that start with a time), so it was
+run once more (this version, [`reports/test/`](reports/test/)). The LightGBM score stayed at 0.118 each time. Two
+more baselines were added after the first run, at reviewers' suggestions (Recent rate and Recent rate by state);
+they were not used to choose anything.
+
+Brier score, lower is better (the best model in each column is bold):
+
+| Brier score | h = 1 | 2 | 3 | 6 | 12 | 24 | mean |
 |---|---|---|---|---|---|---|---|
-| Persistence ("same as now") | 0.122 | 0.209 | 0.222 | 0.238 | 0.248 | 0.251 | 0.215 |
+| Persistence ("same as now") | 0.122 | 0.209 | 0.222 | 0.238 | 0.247 | 0.251 | 0.215 |
 | Historical rate (same hour and weekday, last 4 weeks) | 0.157 | 0.157 | 0.157 | 0.157 | 0.158 | 0.159 | 0.158 |
-| Recent rate (the raion's alert share, last 4 weeks) | 0.132 | 0.132 | 0.132 | 0.132 | 0.133 | **0.133** | 0.132 |
-| Logistic regression | 0.078 | 0.121 | 0.125 | 0.132 | 0.136 | 0.139 | 0.122 |
-| **LightGBM** | **0.076** | **0.117** | **0.122** | **0.128** | **0.132** | 0.134 | **0.118** |
+| Recent rate (the raion's alert share, last 4 weeks) | 0.132 | 0.132 | 0.132 | 0.132 | 0.133 | 0.133 | 0.132 |
+| Recent rate by state (the same, separately for raions on alert / calm at t) | 0.080 | 0.124 | 0.128 | 0.131 | **0.132** | **0.133** | 0.121 |
+| Logistic regression | 0.078 | 0.121 | 0.125 | 0.131 | 0.135 | 0.139 | 0.122 |
+| LightGBM | **0.076** | **0.117** | **0.122** | **0.127** | 0.132 | 0.134 | **0.118** |
 
 ![Forecast error by horizon](docs/figures/brier_by_horizon.png)
 
-- **LightGBM's lead is short-term.** Against the strongest simple baseline, each raion's recent alert share, it is
-  clearly better 1–6 hours ahead (Brier 0.056 lower one hour ahead, 0.005 lower six hours ahead). 12 and 24 hours
-  ahead the two cannot be told apart: the differences are +0.0004 and −0.0007, with 95% intervals from −0.003 to
-  +0.003 ([`differences_by_horizon.csv`](reports/test/differences_by_horizon.csv); intervals from resampling days).
-  On validation LightGBM was ahead at every horizon (0.123 against 0.129 a day ahead), so this only showed on the
-  test period. In short: the model knows what happens in the next few hours; a day ahead, it knows little more than
-  how often the raion has been on alert lately.
-- **On average over the six horizons** LightGBM is best: 0.1180, against 0.1217 for logistic regression (lead 0.0037,
-  95% interval 0.0023–0.0054), 0.1324 for Recent rate (lead 0.0144, 0.0115–0.0178) and 0.1576 for Historical rate
-  ([`differences.csv`](reports/test/differences.csv)). It has the lowest score in each of the four test weeks among
-  the models in the table.
-- **Alert starts:** for raions calm at t, the onset question, LightGBM scores 0.108 one hour ahead, against 0.128 for
-  Recent rate and 0.154 for Historical rate; ROC-AUC is 0.845 one hour ahead and 0.840 a day ahead. Beyond 3 hours
-  ahead, it is not measurably better than Recent rate for calm raions.
-- **The probabilities mean what they say** (below). One hour ahead, forecasts of 30–40% came true 35% of the time.
-  A day ahead, mid-range forecasts run a little low: 30–40% came true 43% of the time, probably because the test
-  period had more alerts than the weeks the model learnt from.
+**What a forecast means.** The forecast "h = 1" is for the hour that starts at t, so it is not an alert-start
+forecast: 30% of those rows are already on alert at t, and the model scores almost perfectly on them. The "calm at t"
+rows are the hard part, and the figures and tables below give both.
+
+- **LightGBM is clearly best only in the next few hours.** It beats every other model at 1, 2, 3 and 6 hours. Against
+  the strongest simple baseline, Recent rate by state (two numbers per raion: how often it had an alert in the last
+  four weeks, when it was on alert at t and when it was calm), its lead is 0.0044 at 1 hour (95% interval
+  0.0031–0.0058) and 0.0032 at 6 hours (0.0011–0.0052). At 12 and 24 hours the two cannot be told apart: LightGBM is
+  behind by 0.0009 and 0.0013, with intervals that include zero
+  ([`differences_by_horizon.csv`](reports/test/differences_by_horizon.csv); intervals from resampling days). On
+  validation LightGBM was ahead at 24 hours (0.123 against 0.129), so this showed up only on the test period. In
+  short: the model knows what happens in the next few hours; a day ahead, it knows little more than how often the
+  raion has been on alert lately.
+- **On average over the six horizons** LightGBM is best: 0.1181, against 0.1213 for Recent rate by state (lead
+  0.0032, 95% interval 0.0014–0.0049), 0.1217 for logistic regression (0.0036, 0.0021–0.0052), 0.1324 for Recent rate
+  and 0.1576 for Historical rate ([`differences.csv`](reports/test/differences.csv)). It has the lowest score in each
+  of the four test weeks among the models in the table.
+- **Raions calm at t** (the hard part; an alert in the target hour has to start first, or has started since):
+  LightGBM scores 0.108 one hour ahead, against 0.115 for Recent rate by state, 0.128 for Recent rate and 0.154 for
+  Historical rate. Pooled ROC-AUC is 0.845 one hour ahead and 0.839 a day ahead, but **most of that is telling
+  raions apart**: averaged within each raion, it is 0.66 one hour ahead and 0.54 a day ahead
+  ([`within_units.csv`](reports/test/within_units.csv)). So a day ahead, the model is much better at saying which
+  raions are risky than at saying when.
+- **The probabilities are well calibrated overall** (below). One hour ahead, forecasts of 30–40% came true 35% of the
+  time. A day ahead, mid-range forecasts run a little low: 30–40% came true 43% of the time, probably because the
+  test period had more alerts than the weeks the model learnt from. Per raion, the average forecast is off by 0.04
+  at 24 hours, and by up to 0.16 for a single raion (Mykolaiv raion: forecasts too low).
 - **The test period was harder than validation** (LightGBM 0.118 against 0.109): alerts were on in 42% of
   raion-hours, against 38%.
 - **17 frontline units** (Donetsk 8, Zaporizhzhia 5, Kharkiv 2, Dnipropetrovsk 1, Sumy 1) were on alert in at least 90% of
-  validation hours. They are easy to forecast. Without them, every score rises (LightGBM 0.134, Recent rate 0.151,
-  Historical rate 0.180), and the ranking stays the same.
+  validation hours. They are easy to forecast. Without them, every score rises (LightGBM 0.134, Recent rate by state
+  0.138, Recent rate 0.151, Historical rate 0.180), and the ranking stays the same.
 
 <p>
   <img src="docs/figures/calibration.png" width="42%" alt="Calibration of LightGBM on the test period">
@@ -59,10 +76,9 @@ commit b30da01). LightGBM's score did not change (0.1180).
 
 ![Example forecasts for Kyiv city](docs/figures/example_forecast_kyiv.png)
 
-In the example, the forecast made one hour ahead jumps to 1 when an alert is already on at the time it is made.
+In the example, the forecast made as the hour starts (h = 1) jumps to 1 when an alert is already on at that moment.
 Otherwise, its probability rises and falls with the activity around the city. On the morning of 4 October, several
-Kyiv alerts lasted about five minutes each. Starting from a calm hour, no forecast an hour ahead can tell which
-hours will get one.
+Kyiv alerts lasted about five minutes each. Starting from a calm hour, no forecast can tell which hours will get one.
 
 ### Telegram threat posts did not help
 
@@ -80,7 +96,7 @@ ids clashing between the two channels, and an all-clear for one region erasing t
 The numbers here are after the fixes. Before them, Telegram looked slightly better, and the decisions were the same.
 
 Neither set passed. On the test period, adding the 7 features changed LightGBM by +0.0005 (−0.0001 … +0.0011) and
-logistic regression by +0.00004 (−0.0010 … +0.0010): no measurable effect either way. Our reading, not tested: a post naming a
+logistic regression by +0.0001 (−0.0009 … +0.0011): no measurable effect either way. Our reading, not tested: a post naming a
 raion mostly arrives when its neighbours are already on alert, which the model already sees. And a post gives
 minutes of warning, while the forecast is by the hour.
 
@@ -141,12 +157,12 @@ An excerpt of real output:
 Forecast time: 2026-10-13 00:00 Kyiv (data up to 2026-10-13 00:50); model: lightgbm, trained at 2026-10-13 00:00 Kyiv
 Probability of an alert in the hour starting h - 1 hours from now:
 
-                                       unit  on alert  h=1  h=2  h=3  h=6  h=12  h=24
-                                    м. Київ      True 1.00 0.71 0.58 0.63  0.68  0.76
-       Харківська область/Харківський район      True 1.00 0.88 0.84 0.85  0.90  0.90
-Дніпропетровська область/Дніпровський район     False 0.61 0.60 0.61 0.62  0.72  0.66
-             Одеська область/Одеський район     False 0.44 0.40 0.40 0.42  0.48  0.56
-         Львівська область/Львівський район     False 0.01 0.02 0.01 0.01  0.02  0.09
+                                              unit  on alert  h=1  h=2  h=3  h=6  h=12  h=24
+                                           м. Київ      True 1.00 0.64 0.59 0.62  0.68  0.77
+              Харківська область/Харківський район      True 1.00 0.88 0.83 0.86  0.90  0.92
+       Дніпропетровська область/Дніпровський район     False 0.63 0.62 0.60 0.61  0.71  0.72
+                    Одеська область/Одеський район     False 0.39 0.41 0.41 0.40  0.48  0.57
+                Львівська область/Львівський район     False 0.01 0.02 0.01 0.02  0.03  0.08
 ```
 
 `predict` refuses a forecast time earlier than the saved model's training cutoff, so a forecast never uses a model
@@ -159,18 +175,22 @@ uv run python scripts/fetch_alerts_in_ua.py    # alerts.in.ua history, for the t
 uv run python -m airalert check-labels         # label quality (below)
 uv run python -m airalert backtest validation  # baselines and models on validation
 uv run python -m airalert experiment training-start   # then per-unit, lightgbm, telegram, telegram-targeted
-uv run python -m airalert test-run             # the single test run; refuses to run again once reported
-uv run python -m airalert test-report          # intervals and weekly scores from the saved predictions
+uv run python -m airalert test-run --out reports/test-rerun   # reproduce the test run (the committed reports/test is
+                                                               # the reported one; test-run refuses to overwrite it)
+uv run python -m airalert test-report          # intervals, weekly and per-raion scores from the saved predictions
 uv run python scripts/make_figures.py          # docs/figures/
 uv run pytest                                  # includes the leakage tests
 ```
 
-Raw data goes to `data/` and saved models to `models/`; neither is committed.
+Raw data goes to `data/` and saved models to `models/`; neither is committed. Telegram returns each message's latest
+text, so a later download of the same months can differ (edits, deleted messages).
+[`reports/test/data_manifest.csv`](reports/test/data_manifest.csv) lists every downloaded file used for the test run
+with its message count and SHA-256, to compare against.
 
 ## No leakage
 
-Nothing a forecast for time t uses, and nothing its model is trained on, comes from after t
-([ADR-0001](docs/adr/0001-as-of-data-model.md)). The main rules:
+The rule: nothing a forecast for time t uses, and nothing its model is trained on, comes from after t
+([ADR-0001](docs/adr/0001-as-of-data-model.md)). What was done to hold to it, and the one assumption it rests on:
 
 - **Features use only what was known before t.** An alert still on at t counts as ongoing, however long it later
   lasted. Tests compare the fast feature code with a naive "what was known at t" computation, and check that
@@ -179,7 +199,8 @@ Nothing a forecast for time t uses, and nothing its model is trained on, comes f
   each with its label as known at C (a correction posted later is not applied yet).
 - **Validation never sees the test period:** a forecast is scored only if its target hour lies inside its own period.
 - **Choices are made on validation only,** each by a rule committed before the experiment ran; the test period was
-  run once, with the configuration read from the validation decisions.
+  run with the configuration read from the validation decisions, and no choice was changed because of its scores
+  (it was rerun twice after bug fixes, see Results).
 - **Corrections are not known early.** An alert later retracted as a mistake counts as on alert until the
   retraction was posted; only the labels drop it ([ADR-0007](docs/adr/0007-published-vs-corrected-history.md)).
 - **The unit list is fixed in advance,** so a raion's first alert never changes country or neighbour features before it.
@@ -187,8 +208,11 @@ Nothing a forecast for time t uses, and nothing its model is trained on, comes f
   label channel every message has been edited, mostly in two channel-wide re-edits (2024-01-30 and 2025-06-27)
   and, since July 2025, once more after posting: half within 29 seconds, but 13% more than 5 minutes later and
   2.7% more than an hour later. Sampled late edits keep the channel's fixed wording, so edits are treated as not
-  changing an alert's kind or place. This is an evidence-backed assumption;
-  the month-by-month comparison with the independent official channel (below) is an approximate cross-check.
+  changing an alert's kind or place. **This is an assumption, not a guarantee:** Telegram keeps no edit history, so
+  what the channel said at t cannot be replayed. About 18,000 of 187,000 alert messages since November 2025 were
+  edited after the next whole hour, so a forecast could in principle have used a later edit's wording. We found
+  no case where an edit changed an alert's kind or place, and the month-by-month comparison with the independent
+  official channel (below) is an approximate cross-check.
   Telegram threat posts follow a stricter rule: a post counts only from its last edit, so a post edited at or
   after t is not used at t (ADR-0007).
 
@@ -213,7 +237,8 @@ months, mostly 2023). The causes we found:
   started within that window.
 - **The official record has faults too:** a 4-day outage (2026-08-29 to 09-02, left out of the comparison) and
   some broken alerts of its own (e.g. 135 hours across Lviv and Chernivtsi raions in November 2025).
-- A parser bug (messages with several sections, since July 2026) was found this way and fixed.
+- Three parser cases were found this way (or by review) and fixed: messages with several sections (since July 2026);
+  "red alert over, yellow continues" with no alert open; all-clears that start with a time ("15:57 | Відбій тривоги").
 
 Missing messages cannot be recovered, so the message-level check still fails. **At the level the model uses,
 "was this raion on alert in this hour", the labels agree with the official record on 99.5–99.7% of known
@@ -226,17 +251,25 @@ is checked against alerts.in.ua instead: every month passes (98.4–99.96%), wit
 
 - **Little skill a day ahead.** 12–24 hours ahead, the model is not measurably better than each raion's alert share
   over the last four weeks (Results). Its value is in the next few hours.
+- **The edited-messages assumption** (No leakage): labels use each message's latest text at its original time.
+- **The "h = 1" forecast is for the hour starting at t,** so it is not an alert-start forecast, and 30% of its rows are
+  already on alert. A true alert-start target (a new alert beginning in the next hour) would be a different, harder
+  task, and was not tried.
 - **One forecast spec.** Only raion × hour × "any alert in the hour" is built. Other specs (oblasts, minutes on alert
   per day) are designed for but not implemented ([ADR-0002](docs/adr/0002-one-main-spec.md)).
 - **City alert zones other than Kyiv** (Kharkiv, Zaporizhzhia, Nikopol, Marhanets, Kramatorsk, Kryvyi Rih) are folded
-  into their raions. The check that would have decided whether they deserve their own units (Q16) was not done
-  before the test run.
+  into their raions. The check that would decide whether they deserve their own units (Q16) was not completed.
+  Two quick counts put Kharkiv city's state apart from Kharkivskyi raion's in about 9% of test hours, above the 5%
+  threshold we set, so it probably deserves its own unit.
 - **Labels come from a volunteer channel.** They miss some messages (above). Hours that can't be known are left
   out, but some errors surely remain.
 - **The test period is four weeks of one season,** shortly after alerts got yellow and red levels (September 2026;
   both count as an alert here). Results in other periods may differ.
-- **Telegram extraction is rule-based, on two channels and at hourly resolution.** Other channels, a language model,
-  or forecasts by the minute might find a signal that we didn't.
+- **Telegram extraction is rule-based, on two channels and at hourly resolution,** and was never checked against a
+  hand-labelled sample. Known gap: a line that mixes an all-clear for one region with a threat for another can lose
+  the threat. Other channels, a language model, or forecasts by the minute might find a signal that we didn't.
+- **Ideas not tried:** blending the model with Recent rate by state at 12–24 hours (where they tie); Kharkiv city as
+  its own unit; an alert-start target; a hand-checked sample of the Telegram extraction.
 
 ## Sources and attribution
 
