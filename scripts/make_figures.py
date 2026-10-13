@@ -176,34 +176,21 @@ def levels_by_day(alerts: pd.DataFrame) -> None:
 
 MODELS = {  # name in the test report: (label, colour), baselines first
     "persistence": ("Persistence", NEUTRAL), "historical_rate": ("Historical rate", YELLOW), "recent_rate": ("Recent rate", RED),
+    "recent_rate_by_state": ("Recent rate by state", RED),  # drawn dashed
     "logistic": ("Logistic regression", LIGHT_BLUE), "lightgbm": ("LightGBM", BLUE),
 }
 TEST_NOTE = "Test period 2026-09-14 to 2026-10-11 (Kyiv time), weekly retraining, all raions."
 
 
-def spread(values: dict, gap: float) -> dict:
-    """Label positions at least `gap` apart, each as close to its value as possible (bottom-up)."""
-    out, last = {}, -np.inf
-    for key, value in sorted(values.items(), key=lambda kv: kv[1]):
-        out[key] = last = max(value, last + gap)
-    return out
-
-
 def brier_by_horizon(metrics: pd.DataFrame) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.6), sharey=True)
+    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.9), sharey=True)
     for ax, subset, title in ((axes[0], "all", "All raion-hours"), (axes[1], "calm at t", "Raions calm at t")):
         part = metrics[(metrics.units == "all") & (metrics.subset == subset)]
-        ends = {}
         for model, (label, color) in MODELS.items():
             line = part[part.model == model].sort_values("horizon")
             x = np.arange(len(line))
-            ax.plot(x, line.brier, color=color, linewidth=2.6 if model == "lightgbm" else 1.8, marker="o", markersize=4)
-            ends[model] = line.brier.iloc[-1]
-        if ax is axes[1]:
-            for model, y in spread(ends, gap=0.012).items():
-                label, color = MODELS[model]
-                ax.annotate(label, (x[-1], y), xytext=(8, 0), textcoords="offset points", va="center",
-                            color=color if model != "persistence" else INK_2, fontsize=9)
+            ax.plot(x, line.brier, color=color, linewidth=2.6 if model == "lightgbm" else 1.8, marker="o", markersize=4,
+                    linestyle="--" if model == "recent_rate_by_state" else "-", label=label)
         ax.set_xticks(x, line.horizon.astype(str))
         ax.set_xlabel("horizon h (hours ahead)")
         ax.set_title(title, fontsize=10)
@@ -211,8 +198,10 @@ def brier_by_horizon(metrics: pd.DataFrame) -> None:
         ax.set_axisbelow(True)
     axes[0].set_ylabel("Brier score (lower is better)")
     axes[0].set_ylim(0, None)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=3, frameon=False, fontsize=8.5, bbox_to_anchor=(0.5, -0.17))
     fig.suptitle("Forecast error by horizon, test period", x=0.06, ha="left", fontweight="bold", fontsize=12)
-    fig.text(0.06, -0.04, TEST_NOTE, color=INK_2, fontsize=8)
+    fig.text(0.06, -0.2, TEST_NOTE, color=INK_2, fontsize=8)
     save(fig, "brier_by_horizon.png")
 
 
